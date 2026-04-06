@@ -240,7 +240,7 @@ NgpCraft Engine is still in active development, and community help is very welco
 - Star the repo
 - Share it with the NGPC / retro dev community
 - GitHub Sponsors (optional)
-
+- Ko-fi: https://ko-fi.com/tixu116703
 ---
 
 ## ⏱️ About support
