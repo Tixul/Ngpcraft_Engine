@@ -1,0 +1,35 @@
+/*
+ * ngpc.lcf - NGPC linker configuration (TLCS-900)
+ *
+ * Part of NgpCraft_base_template (MIT License)
+ *
+ * Notes:
+ * - Section names follow cc900 conventions: f_header/f_const/f_code/f_data/f_area.
+ * - f_data is stored in ROM (org=...) and relocated to RAM at runtime (addr=...).
+ */
+
+memory
+{
+    io(RW)  : org=0x000000, len=0x000100
+    ram(RW) : org=0x004000, len=0x002C00
+    rom(RX) : org=0x200000, len=0x1F0000
+}
+
+sections
+{
+    far_area    org=0x004000                                  : {*(f_area)}
+    far_startup org=0x200000                                  : {*(f_header)}
+    far_const   org=org(far_startup)+sizeof(far_startup)      : {*(f_const)}
+    far_code    org=org(far_const)+sizeof(far_const)          : {*(f_code)}
+    far_data    org=org(far_code)+sizeof(far_code)
+                addr=org(far_area)+sizeof(far_area)           : {*(f_data)}
+
+    /* Runtime copy/clear symbols used by ngpc_sys.c bootstrap. */
+    __DataROM_START = org(far_data);
+    __DataROM_END   = org(far_data)+sizeof(far_data);
+    __DataRAM_START = addr(far_data);
+    __Bss_START     = org(far_area);
+    __Bss_END       = org(far_area)+sizeof(far_area);
+
+    __DataRAM = addr(far_data);
+}

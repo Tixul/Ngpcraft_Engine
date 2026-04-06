@@ -1,0 +1,31 @@
+# Internal development notes (not for public release)
+ROADMAP.md
+dev/
+
+# Build outputs
+build/
+bin/
+
+# Root-level link intermediates (tulink/tuconv write to cwd)
+*.abs
+*.map
+*.ngp
+*.s24
+*.rel
+
+# Toolchain binaries (Toshiba cc900 — not redistributable, obtain separately)
+asm900.exe
+thc1.exe
+thc2.exe
+
+# system.lib — proprietary Toshiba file (place at project root, not committed)
+system.lib
+
+# Backup files
+*.bak
+*.bak_*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
