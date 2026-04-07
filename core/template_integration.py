@@ -1641,7 +1641,25 @@ def compute_player_total_slots(players: list, export_dir_abs) -> int:
     """
     from pathlib import Path as _Path
     export_dir_abs = _Path(export_dir_abs)
-    base_slots = len(players) * 4
+    # Compute per-player base slot count from the actual max part count in each
+    # *_mspr.c file.  Single-file dual-layer sprites combine all parts into one
+    # NgpcMetasprite and may need more than 4 OAM slots.  Default to 4 when the
+    # file is not found so the old behaviour is preserved.
+    base_slots = 0
+    for p in players:
+        _n = str(p.get("name") or "")
+        _mspr_c = export_dir_abs / f"{_n}_mspr.c"
+        _sc = 4
+        if _mspr_c.is_file():
+            try:
+                _ct = _mspr_c.read_text(encoding="utf-8")
+                _cnts = [int(_m) for _m in re.findall(
+                    rf"NgpcMetasprite\s+{re.escape(_n)}_frame_\w+\s*=\s*\{{\s*(\d+)u", _ct)]
+                if _cnts:
+                    _sc = max(_cnts)
+            except Exception:
+                pass
+        base_slots += _sc
     l1_extra = 0
     for p in players:
         n = str(p.get("name") or "")
@@ -2439,6 +2457,19 @@ def write_autorun_main_c(
         _p["has_layer1"] = False
         _p["l1_slots"] = 0
         _p["l1_slot_base"] = -1
+        # Detect actual base slot count (single-file dual-layer may need > 4).
+        _mspr_c_base = export_dir_abs / f"{_n}_mspr.c"
+        _base_slot_count = 4
+        if _mspr_c_base.is_file():
+            try:
+                _ct_base = _mspr_c_base.read_text(encoding="utf-8")
+                _base_cnts = [int(_m) for _m in re.findall(
+                    rf"NgpcMetasprite\s+{re.escape(_n)}_frame_\w+\s*=\s*\{{\s*(\d+)u", _ct_base)]
+                if _base_cnts:
+                    _base_slot_count = max(_base_cnts)
+            except Exception:
+                pass
+        _p["slot_count"] = _base_slot_count
         _mspr_h = export_dir_abs / f"{_n}_mspr.h"
         if _mspr_h.is_file():
             try:
@@ -2455,7 +2486,7 @@ def write_autorun_main_c(
                         _p["l1_slots"] = 3
             except Exception:
                 pass
-    _l1_base = len(players) * 4
+    _l1_base = sum(p.get("slot_count", 4) for p in players)
     for _p in players:
         if _p["has_layer1"]:
             _p["l1_slot_base"] = _l1_base
@@ -4960,12 +4991,21 @@ def write_autorun_main_c(
         c.append(f"                u8 player_render_idx;\n")
         c.append(f"                if (player_form < {len(players)}u) player_render_idx = player_form;\n")
         c.append(f"                else player_render_idx = 0u;\n")
+        # Compute cumulative slot offsets so multi-player / large-sprite combos
+        # don't collide. slot_count may be > 4 for single-file dual-layer sprites.
+        _p_slot_offsets: list[int] = []
+        _p_off = 0
+        for _pp in players:
+            _p_slot_offsets.append(_p_off)
+            _p_off += _pp.get("slot_count", 4)
         for idx, p in enumerate(players):
             n = p["name"]
-            slot = f"(u8)({player_spr_base} + {idx * 4}u)"
+            _p_sc = p.get("slot_count", 4)
+            _p_off_v = _p_slot_offsets[idx]
+            slot = f"(u8)({player_spr_base} + {_p_off_v}u)" if _p_off_v else f"(u8){player_spr_base}"
             _spr_pri = "SPR_FRONT" if str((p.get("ctrl") or {}).get("spr_priority", "middle")).lower() == "front" else "SPR_MIDDLE"
-            c.append(f"                if (player_render_idx == {idx}u) ngpng_player_layer_sync({slot}, 4u, (s16)(s_{n}.x + player_render_off_x), (s16)(s_{n}.y + player_render_off_y), s_{n}.frame, {n}_anim, {n}_anim_count, (u8)({_spr_pri} | (s_{n}.face_hflip ? SPR_HFLIP : 0u) | (s_{n}.face_vflip ? SPR_VFLIP : 0u)), &s_{n}_visible, &s_{n}_last_x, &s_{n}_last_y, &s_{n}_last_frame, &s_{n}_last_flags);\n")
-            c.append(f"                else {{ ngpng_sprite_hide_range({slot}, 4u); s_{n}_visible = 0u; }}\n")
+            c.append(f"                if (player_render_idx == {idx}u) ngpng_player_layer_sync({slot}, {_p_sc}u, (s16)(s_{n}.x + player_render_off_x), (s16)(s_{n}.y + player_render_off_y), s_{n}.frame, {n}_anim, {n}_anim_count, (u8)({_spr_pri} | (s_{n}.face_hflip ? SPR_HFLIP : 0u) | (s_{n}.face_vflip ? SPR_VFLIP : 0u)), &s_{n}_visible, &s_{n}_last_x, &s_{n}_last_y, &s_{n}_last_frame, &s_{n}_last_flags);\n")
+            c.append(f"                else {{ ngpng_sprite_hide_range({slot}, {_p_sc}u); s_{n}_visible = 0u; }}\n")
             # Layer1 draw immediately after base draw (correct OAM order)
             if p.get("has_layer1"):
                 l1_slot = f"(u8)({player_spr_base} + {p['l1_slot_base']}u)"
@@ -4975,9 +5015,11 @@ def write_autorun_main_c(
         c.append("            } else {\n")
         for idx, p in enumerate(players):
             n = p["name"]
-            slot = f"(u8)({player_spr_base} + {idx * 4}u)"
+            _p_sc = p.get("slot_count", 4)
+            _p_off_v = _p_slot_offsets[idx]
+            slot = f"(u8)({player_spr_base} + {_p_off_v}u)" if _p_off_v else f"(u8){player_spr_base}"
             _spr_pri = "SPR_FRONT" if str((p.get("ctrl") or {}).get("spr_priority", "middle")).lower() == "front" else "SPR_MIDDLE"
-            c.append(f"                ngpng_player_layer_sync({slot}, 4u, (s16)(s_{n}.x + player_render_off_x), (s16)(s_{n}.y + player_render_off_y), s_{n}.frame, {n}_anim, {n}_anim_count, (u8)({_spr_pri} | (s_{n}.face_hflip ? SPR_HFLIP : 0u) | (s_{n}.face_vflip ? SPR_VFLIP : 0u)), &s_{n}_visible, &s_{n}_last_x, &s_{n}_last_y, &s_{n}_last_frame, &s_{n}_last_flags);\n")
+            c.append(f"                ngpng_player_layer_sync({slot}, {_p_sc}u, (s16)(s_{n}.x + player_render_off_x), (s16)(s_{n}.y + player_render_off_y), s_{n}.frame, {n}_anim, {n}_anim_count, (u8)({_spr_pri} | (s_{n}.face_hflip ? SPR_HFLIP : 0u) | (s_{n}.face_vflip ? SPR_VFLIP : 0u)), &s_{n}_visible, &s_{n}_last_x, &s_{n}_last_y, &s_{n}_last_frame, &s_{n}_last_flags);\n")
         # Layer1 draws in single-form branch
         for idx, p in enumerate(players):
             if p.get("has_layer1"):
@@ -4989,8 +5031,10 @@ def write_autorun_main_c(
         c.append("            }\n")
         c.append("        } else {\n")
         for idx, p in enumerate(players):
-            slot = f"(u8)({player_spr_base} + {idx * 4}u)"
-            c.append(f"            ngpng_sprite_hide_range({slot}, 4u);\n")
+            _p_sc = p.get("slot_count", 4)
+            _p_off_v = _p_slot_offsets[idx]
+            slot = f"(u8)({player_spr_base} + {_p_off_v}u)" if _p_off_v else f"(u8){player_spr_base}"
+            c.append(f"            ngpng_sprite_hide_range({slot}, {_p_sc}u);\n")
             c.append(f"            s_{p['name']}_visible = 0u;\n")
             if p.get("has_layer1"):
                 n = p["name"]
