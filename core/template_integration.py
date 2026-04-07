@@ -904,10 +904,6 @@ def patch_makefile_for_autogen(*, template_root: Path, export_dir_rel: str, enab
         block.append("NGPNG_AUTORUN ?= 1")
         block.append("ifneq ($(strip $(NGPNG_AUTORUN)),0)")
         block.append("OBJS := $(filter-out $(OBJ_DIR)/src/main.rel,$(OBJS))")
-        # Remove legacy static GraphX asset object: assets_autogen.mk now provides
-        # the versioned intro_ngpc_craft_png_map.rel instead, so the old baseline
-        # copy would produce duplicate-symbol linker errors.
-        block.append("OBJS := $(filter-out $(OBJ_DIR)/GraphX/intro_ngpc_craft_png.rel,$(OBJS))")
         # IMPORTANT: place autorun object FIRST so carthdr.h ends up at 0x200000
         # (BIOS entry/header). If appended at the end, the ROM may boot to a white
         # screen on real hardware.

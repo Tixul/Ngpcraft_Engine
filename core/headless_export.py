@@ -701,15 +701,8 @@ def export_scene(
         log(f"  WARN  sprite tile_base bumped {t_cursor} -> {tm_end} (avoid tilemap overlap)")
         t_cursor = int(tm_end)
 
-    # --- Sprites -------------------------------------------------------
-    # Purge stale *_mspr.* files before regenerating so renamed sprites don't
-    # leave orphan files that the Makefile would pick up and cause linker conflicts.
-    if export_dir_abs and export_dir_abs.is_dir():
-        for _stale in list(export_dir_abs.glob("*_mspr.c")) + list(export_dir_abs.glob("*_mspr.h")):
-            try:
-                _stale.unlink()
-            except Exception:
-                pass
+    # NOTE: stale *_mspr.* purge is done once in export_project() before the
+    # scene loop so that multi-scene projects don't erase each other's sprites.
 
     sprites = [spr for spr in (scene_export.get("sprites") or []) if _export_enabled(spr)]
     if sprite_script:
@@ -906,6 +899,16 @@ def export_project(
     if not scenes:
         log("(no scenes to export)")
         return 0
+
+    # Purge stale *_mspr.* files once before exporting any scene so that
+    # renamed sprites don't leave orphan files, and so that scene_2's export
+    # doesn't erase scene_1's freshly generated sprites.
+    if export_dir_abs and export_dir_abs.is_dir():
+        for _stale in list(export_dir_abs.glob("*_mspr.c")) + list(export_dir_abs.glob("*_mspr.h")):
+            try:
+                _stale.unlink()
+            except Exception:
+                pass
 
     total = ExportResult()
     for scene in scenes:
