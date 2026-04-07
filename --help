@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "name": "",
+  "graphx_dir": "GraphX",
+  "bundle": {
+    "tile_base": 256,
+    "pal_base": 0,
+    "entries": []
+  },
+  "export_dir": "GraphX/gen",
+  "scenes": [],
+  "game": {},
+  "save_config": {
+    "save_score": false,
+    "save_lives": false,
+    "save_collectibles": false,
+    "save_player_form": false,
+    "save_hp": false,
+    "save_continues": false,
+    "save_keys": false,
+    "save_bosses": false,
+    "save_stages": false,
+    "save_abilities": false,
+    "save_money": false,
+    "save_ammo": false,
+    "save_player_level": false,
+    "save_experience": false,
+    "save_best_time": false,
+    "custom_fields": []
+  }
+}
