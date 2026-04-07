@@ -66,8 +66,10 @@ New features will come later, once the core is stable.
 One click on **Export (template-ready)** produces a project that compiles and runs.
 
 ---
+<img width="3439" height="1390" alt="ngpcraft_engine" src="https://github.com/user-attachments/assets/74a97ca6-f24b-4f60-a764-24e2672e5cba" />
 
 ## Features at a glance
+
 
 **Asset pipeline**
 - PNG → NGPC sprites and tilemaps with live RGB444 quantization and 3-color-per-tile enforcement
@@ -238,7 +240,7 @@ NgpCraft Engine is still in active development, and community help is very welco
 - Star the repo
 - Share it with the NGPC / retro dev community
 - GitHub Sponsors (optional)
-
+- Ko-fi: https://ko-fi.com/tixu116703
 ---
 
 ## ⏱️ About support
