@@ -136,7 +136,13 @@ def cmd_compile(src: str, obj: str, extra_flags: list[str]) -> int:
         "-I" + os.path.abspath(os.path.join(project_root, d))
         for d in ("src", "src/core", "src/gfx", "src/fx", "src/audio")
     ]
-    cmd = [cc900, "-c", "-O3"] + include_flags + extra_flags + [src_abs, "-o", obj_abs]
+    abs_extra_flags = []
+    for flag in extra_flags:
+        if flag.startswith("-I") and not os.path.isabs(flag[2:]):
+            abs_extra_flags.append("-I" + os.path.abspath(os.path.join(project_root, flag[2:])))
+        else:
+            abs_extra_flags.append(flag)
+    cmd = [cc900, "-c", "-O3"] + include_flags + abs_extra_flags + [src_abs, "-o", obj_abs]
     result = subprocess.run(
         cmd,
         cwd=cc900_dir,

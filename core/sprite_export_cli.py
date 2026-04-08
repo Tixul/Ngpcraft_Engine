@@ -19,6 +19,16 @@ import sys
 from pathlib import Path
 
 
+def _python_cmd(script: "Path | str") -> list:
+    """Return the subprocess argv prefix to run a Python script.
+    In a frozen PyInstaller exe sys.executable is the .exe itself — use
+    the '--run-script' mode so the exe acts as its own Python runner.
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--run-script", str(script)]
+    return [sys.executable, str(script)]
+
+
 def _safe_base_name(name: str, fallback: str) -> str:
     """
     Make a safe base name for output files and --name.
@@ -72,9 +82,7 @@ def run_sprite_export(
     safe_name = _safe_base_name(name, input_png.stem)
     out_c = Path(output_c) if output_c else (out_dir / f"{safe_name}_mspr.c")
 
-    base_cmd = [
-        sys.executable,
-        str(script),
+    base_cmd = _python_cmd(script) + [
         str(input_png),
         "--name",
         safe_name,

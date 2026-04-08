@@ -51,19 +51,34 @@ def find_script(settings_key: str, candidates: list[Path]) -> Path | None:
     """
     Return a valid script path.
 
-    1) If QSettings(settings_key) points to an existing file, use it.
-    2) Else, pick the first existing file from candidates and persist it.
+    When running from a PyInstaller bundle (frozen exe), always prefer the
+    bundled candidate script over any QSettings-cached path.  This guarantees
+    that users upgrading from an older install never keep a stale cached path
+    that points to an outdated script outside the bundle.
+
+    In dev mode (not frozen):
+    1) Pick the first existing file from candidates (local repo scripts take
+       priority over any stale QSettings entry pointing to an old dist/ copy).
+    2) If no candidate exists, fall back to QSettings(settings_key).
     3) Else, return None (caller should prompt the user).
     """
-    settings = QSettings("NGPCraft", "Engine")
-    configured = settings.value(settings_key, "", type=str)
-    if configured and Path(configured).exists():
-        return Path(configured)
+    import sys
 
+    settings = QSettings("NGPCraft", "Engine")
+
+    # Frozen exe OR dev mode: always prefer local candidates so a stale
+    # QSettings path (e.g. pointing to an old dist/_internal copy after a
+    # rebuild) never silently wins over the scripts in the current repo.
     for p in candidates:
         if p.exists():
             settings.setValue(settings_key, str(p))
             return p
+
+    # No local candidate — fall back to user-configured path (manual override).
+    configured = settings.value(settings_key, "", type=str)
+    if configured and Path(configured).exists():
+        return Path(configured)
+
     return None
 
 

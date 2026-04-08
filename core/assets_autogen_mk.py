@@ -114,14 +114,14 @@ def _is_duplicate_map_companion(c_path: Path, export_dir: Path) -> bool:
     candidates = [
         c_path.parent / f"{base}.c",
         c_path.parent / f"{base}.h",
+        export_dir.parent / f"{base}.c",
+        export_dir.parent / f"{base}.h",
     ]
     if c_path.parent != export_dir:
         candidates.extend(
             [
                 export_dir / f"{base}.c",
                 export_dir / f"{base}.h",
-                export_dir.parent / f"{base}.c",
-                export_dir.parent / f"{base}.h",
             ]
         )
     found_c = any(p.name.lower() == f"{base}.c".lower() and p.is_file() for p in candidates)

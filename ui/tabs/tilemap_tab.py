@@ -18,9 +18,20 @@ import importlib.util
 from io import BytesIO
 import json
 import random
-import subprocess 
-import sys as _sys 
-from pathlib import Path 
+import subprocess
+import sys as _sys
+from pathlib import Path
+
+
+def _python_cmd(script: "Path | str") -> list:
+    """Return the subprocess argv prefix to run a Python script.
+
+    In a frozen PyInstaller exe sys.executable is the .exe — using it
+    directly would re-launch the GUI.  Use '--run-script' mode instead.
+    """
+    if getattr(_sys, "frozen", False):
+        return [_sys.executable, "--run-script", str(script)]
+    return [_sys.executable, str(script)]
  
 from PIL import Image 
 from PyQt6.QtCore import Qt, QRect, QSize, QSettings, QFileSystemWatcher, QTimer 
@@ -4390,7 +4401,7 @@ class TilemapTab(ProjectPathMixin, QWidget):
             compress_algo = self._combo_compress.currentData() if do_compress else None
             bin_path = scr1.with_name(out_base + "_tiles.bin") if do_compress else None
 
-            cmd = [_sys.executable, str(script), str(scr1), "-o", str(out_c)]
+            cmd = _python_cmd(script) + [str(scr1), "-o", str(out_c)]
             if out_base:
                 cmd += ["-n", out_base]
             if scr2 is not None and scr2.exists():
@@ -4417,8 +4428,7 @@ class TilemapTab(ProjectPathMixin, QWidget):
                         msg += "  " + tr("tilemap.compress_no_script")
                     else:
                         out_lz = scr1.with_name(out_base + ("_rle" if compress_algo == "rle" else "_lz") + ".c")
-                        cmp_cmd = [
-                            _sys.executable, str(compress_script),
+                        cmp_cmd = _python_cmd(compress_script) + [
                             str(bin_path), "-o", str(out_lz),
                             "-m", str(compress_algo), "--header",
                         ]

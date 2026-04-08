@@ -18,6 +18,16 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
+
+
+def _python_cmd(script: "Path | str") -> list:
+    """Return the subprocess argv prefix to run a Python script.
+    In a frozen PyInstaller exe sys.executable is the .exe itself — use
+    the '--run-script' mode so the exe acts as its own Python runner.
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--run-script", str(script)]
+    return [sys.executable, str(script)]
 from pathlib import Path
 from typing import Callable
 
@@ -579,7 +589,7 @@ def _export_tilemap(
             # If resolve fails for any reason, fall back to normal export.
             pass
 
-        cmd = [sys.executable, str(script), str(scr1), "-o", str(out_c)]
+        cmd = _python_cmd(script) + [str(scr1), "-o", str(out_c)]
         out_name = out_c.stem
         if out_name.lower().endswith("_map"):
             out_name = out_name[:-4]
@@ -701,15 +711,8 @@ def export_scene(
         log(f"  WARN  sprite tile_base bumped {t_cursor} -> {tm_end} (avoid tilemap overlap)")
         t_cursor = int(tm_end)
 
-    # --- Sprites -------------------------------------------------------
-    # Purge stale *_mspr.* files before regenerating so renamed sprites don't
-    # leave orphan files that the Makefile would pick up and cause linker conflicts.
-    if export_dir_abs and export_dir_abs.is_dir():
-        for _stale in list(export_dir_abs.glob("*_mspr.c")) + list(export_dir_abs.glob("*_mspr.h")):
-            try:
-                _stale.unlink()
-            except Exception:
-                pass
+    # NOTE: stale *_mspr.* purge is done once in export_project() before the
+    # scene loop so that multi-scene projects don't erase each other's sprites.
 
     sprites = [spr for spr in (scene_export.get("sprites") or []) if _export_enabled(spr)]
     if sprite_script:
@@ -906,6 +909,16 @@ def export_project(
     if not scenes:
         log("(no scenes to export)")
         return 0
+
+    # Purge stale *_mspr.* files once before exporting any scene so that
+    # renamed sprites don't leave orphan files, and so that scene_2's export
+    # doesn't erase scene_1's freshly generated sprites.
+    if export_dir_abs and export_dir_abs.is_dir():
+        for _stale in list(export_dir_abs.glob("*_mspr.c")) + list(export_dir_abs.glob("*_mspr.h")):
+            try:
+                _stale.unlink()
+            except Exception:
+                pass
 
     total = ExportResult()
     for scene in scenes:

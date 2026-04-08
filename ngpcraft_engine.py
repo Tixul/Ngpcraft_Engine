@@ -160,6 +160,27 @@ def main() -> int:
     use from CI/build scripts without a display server.
     """
     # ------------------------------------------------------------------
+    # Script runner mode — used by the frozen exe to run bundled Python
+    # tool scripts (ngpc_tilemap.py, ngpc_sprite_export.py …) without
+    # needing a separate python.exe on the user's machine.
+    # Usage: NgpCraftEngine.exe --run-script path/to/script.py [args…]
+    # ------------------------------------------------------------------
+    if "--run-script" in sys.argv:
+        idx = sys.argv.index("--run-script")
+        if idx + 1 >= len(sys.argv):
+            print("Usage: --run-script <script.py> [args…]", file=sys.stderr)
+            return 1
+        script = sys.argv[idx + 1]
+        # Replace argv so the script sees its own arguments
+        sys.argv = [script] + sys.argv[idx + 2:]
+        import runpy
+        try:
+            runpy.run_path(script, run_name="__main__")
+        except SystemExit as exc:
+            return exc.code if isinstance(exc.code, int) else 0
+        return 0
+
+    # ------------------------------------------------------------------
     # Headless mode — no QApplication, no display required
     # ------------------------------------------------------------------
     if "--export" in sys.argv:
@@ -220,4 +241,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     sys.exit(main())

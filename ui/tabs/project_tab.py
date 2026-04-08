@@ -14,6 +14,19 @@ import re
 import subprocess
 import sys as _sys
 import tempfile
+
+
+def _python_cmd(script: "Path | str") -> list:
+    """Return the subprocess argv prefix to run a Python script.
+
+    In a frozen PyInstaller exe sys.executable is the .exe itself —
+    using it directly would re-launch the GUI instead of running the
+    script.  We intercept that via the '--run-script' mode added to
+    ngpcraft_engine.py so the exe can act as its own Python runner.
+    """
+    if getattr(_sys, "frozen", False):
+        return [_sys.executable, "--run-script", str(script)]
+    return [_sys.executable, str(script)]
 import uuid
 import shutil
 from pathlib import Path
@@ -3671,7 +3684,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
                         except Exception:
                             pass
                     scr1, scr2, out_c = self._tilemap_export_paths(path, export_dir=exp_dir)
-                    cmd = [_sys.executable, str(tm_script), str(scr1), "-o", str(out_c)]
+                    cmd = _python_cmd(tm_script) + [str(scr1), "-o", str(out_c)]
                     out_name = out_c.stem
                     if out_name.lower().endswith("_map"):
                         out_name = out_name[:-4]
@@ -3885,7 +3898,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
                             except Exception:
                                 pass
                         scr1, scr2, out_c = self._tilemap_export_paths(path, export_dir=exp_dir)
-                        cmd = [_sys.executable, str(tm_script), str(scr1), "-o", str(out_c)]
+                        cmd = _python_cmd(tm_script) + [str(scr1), "-o", str(out_c)]
                         out_name = out_c.stem
                         if out_name.lower().endswith("_map"):
                             out_name = out_name[:-4]
@@ -4119,7 +4132,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
                         except Exception:
                             pass
                     scr1, scr2, out_c = self._tilemap_export_paths(path, export_dir=exp_dir)
-                    cmd = [_sys.executable, str(tm_script), str(scr1), "-o", str(out_c)]
+                    cmd = _python_cmd(tm_script) + [str(scr1), "-o", str(out_c)]
                     out_name = out_c.stem
                     if out_name.lower().endswith("_map"):
                         out_name = out_name[:-4]
@@ -4511,7 +4524,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
                     except Exception:
                         pass
                 scr1, scr2, out_c = self._tilemap_export_paths(path, export_dir=exp_dir)
-                cmd = [_sys.executable, str(script), str(scr1), "-o", str(out_c)]
+                cmd = _python_cmd(script) + [str(scr1), "-o", str(out_c)]
                 out_name = out_c.stem
                 if out_name.lower().endswith("_map"):
                     out_name = out_name[:-4]

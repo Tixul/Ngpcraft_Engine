@@ -29,6 +29,7 @@ PROJET.md
 GENERATOR_REFACTOR_ROADMAP.md
 REFACTOR_EXPORT_PLAN.md
 roadmap_perf_opt.md
+DEVLOG.md
 
 # Dev/test sandbox — temporary verification fixtures
 _tmp_verify/
@@ -42,4 +43,21 @@ regen_autorun.py
 
 # User project files (not part of the tool itself)
 *.ngpc
+*.ngpcraft
 *.log
+
+# Backup / archive files
+*.rar
+*.zip
+*.7z
+*.bak
+*.backup
+
+# PyInstaller leftovers not caught by build/ dist/
+*.pkg
+*.toc
+*.manifest
+
+# Crash / debug dumps
+*.dmp
+ngpcraft_open_error.txt
