@@ -132,6 +132,16 @@ $(OBJ_DIR)/%.rel: %.c
 $(OBJ_DIR)/%.rel: %.asm
 	$(PYTHON) tools/build_utils.py asm $< $@
 
+# ---- Generated scene header dependencies ----
+# cc900 does not emit .d dependency files, so make cannot auto-detect header
+# changes.  List GraphX/gen/*.h explicitly: when any generated scene header
+# changes, the files that include them are rebuilt.
+_GEN_HEADERS := $(wildcard GraphX/gen/*.h)
+ifneq ($(_GEN_HEADERS),)
+$(OBJ_DIR)/src/main.rel: $(_GEN_HEADERS)
+$(OBJ_DIR)/src/ngpng_autorun_main.rel: $(_GEN_HEADERS)
+endif
+
 $(TARGET_NGP): makefile ngpc.lcf $(OBJS)
 	$(PYTHON) tools/build_utils.py link $(TARGET_ABS) ngpc.lcf $(OBJS) $(LINK_LIBS)
 	$(PYTHON) tools/build_utils.py s242ngp $(TARGET_S24)
