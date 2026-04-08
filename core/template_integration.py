@@ -5654,7 +5654,7 @@ def write_autorun_main_c(
             c.append("            if (t->action == TRIG_ACT_FLIP_SPRITE_V) {\n")
             c.append(f"                s_{n}.face_vflip ^= 1u;\n")
             c.append("            }\n")
-    c.append("        }\n")
+        c.append("        }\n")
     c.append("        if (!scene_changed && requested_scene < (u8)NGP_SCENE_COUNT && requested_scene != cur_scene) {\n")
     if has_dialogues:
         c.append("            ngpng_dialog_abort(&dialog_runner, &dialog_scene);\n")
