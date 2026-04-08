@@ -396,6 +396,9 @@ def format_c_header(name: str, frame_count: int, has_layer1: bool = False) -> st
     lines.append("extern const u8 %s_anim_count;" % name)
     if has_layer1:
         lines.append("")
+        lines.append("/* Dual-layer auto-split: draw %s_layer1_anim at the same position after %s_anim */" % (name, name))
+        lines.append("#define %s_HAS_LAYER1 1" % name.upper())
+        lines.append("")
         for fi in range(frame_count):
             lines.append("extern const NgpcMetasprite %s_layer1_frame_%d;" % (name, fi))
         lines.append("")

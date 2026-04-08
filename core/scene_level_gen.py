@@ -2348,8 +2348,8 @@ def make_scene_level_h(
                 f"/* PERF-PAR-1: map_h={int(map_h)} tiles (>{int(map_h)*8} px). "
                 f"At 100% parallax s16 overflow starts at cam_py>327 px (41 tiles). "
                 f"ngpng_scale_pct() handles this safely — no action needed. */",
-                f"#warning PERF-PAR-1 {sym_use}: map_h={int(map_h)} tiles with non-identity Y parallax."
-                f" ngpng_scale_pct avoids overflow; verify template version >= 2026-03-18.",
+                f"/* WARNING PERF-PAR-1 {sym_use}: map_h={int(map_h)} tiles with non-identity Y parallax."
+                f" ngpng_scale_pct avoids overflow; verify template version >= 2026-03-18. */",
             ] if (
                 int(map_h) > 41
                 and (scr1_py not in (0, 100) or scr2_py not in (0, 100))

@@ -1869,11 +1869,13 @@ def write_autorun_main_c(
 
         # ---- CTRL_INIT ---------------------------------------------------
         td_init_lines = []
-        if move_type != 2:
-            # Reset top-down facing globals on respawn/scene-enter
+        if move_type != 2 or _has_mixed_td_relative or _has_mixed_td_vehicle:
+            # Reset top-down facing globals on respawn/scene-enter (also for
+            # mixed projects where the primary player is a platformer but at
+            # least one scene uses vehicle/relative top-down control).
             td_init_lines.append(f"    s_td_angle = 0u; \\\n")
             td_init_lines.append(f"    s_td_turn_cd = 0u; \\\n")
-            if has_topdown_vehicle or has_topdown_advance:
+            if has_topdown_vehicle or has_topdown_advance or _has_mixed_td_vehicle:
                 td_init_lines.append(f"    s_td_speed = 0; \\\n")
                 td_init_lines.append(f"    s_td_decel_cd = 0u; \\\n")
         lines += [
@@ -2439,6 +2441,57 @@ def write_autorun_main_c(
         dict(p, name=re.sub(r"[^a-zA-Z0-9_]+", "_", str(p["name"])).strip("_"))
         for p in (player_sprites or []) if p.get("name")
     ]
+    # Mixed-project TD detection: compute BEFORE _emit_player_ctrl_macros is called.
+    # True when a platformer project has at least one top-down scene whose player form
+    # uses vehicle or relative control — controls & statics are shared across scenes.
+    _has_mixed_td_vehicle  = False
+    _has_mixed_td_relative = False
+    _mixed_td_speed_max    = 48
+    _mixed_td_speed_max_r  = 48
+    _mixed_td_accel        = 4
+    _mixed_td_brake        = 6
+    _mixed_td_friction     = 2
+    _mixed_td_turn_rate    = 4
+    _mixed_td_decel_rate   = 1
+    if len(players) > 1 and has_platform_physics:
+        _pmix_idx = {p["name"]: i for i, p in enumerate(players)}
+        for _sc_mix in ((project_data or {}).get("scenes") or []):
+            _fi_mix = 0
+            for _sp_mix in (_sc_mix.get("sprites") or []):
+                _rl_mix = str(_sp_mix.get("gameplay_role") or "").strip().lower()
+                if _rl_mix != "player":
+                    _rl_mix = str((_sp_mix.get("ctrl") or {}).get("role") or "").strip().lower()
+                if _rl_mix != "player":
+                    continue
+                _nm_mix = str(_sp_mix.get("name") or "").strip()
+                if not _nm_mix:
+                    _nm_mix = os.path.splitext(os.path.basename(str(_sp_mix.get("file") or "")))[0]
+                _sn_mix = re.sub(r"[^a-zA-Z0-9_]+", "_", _nm_mix).strip("_")
+                if _sn_mix and _sn_mix[0].isdigit():
+                    _sn_mix = "_" + _sn_mix
+                if _sn_mix in _pmix_idx:
+                    _fi_mix = _pmix_idx[_sn_mix]
+            _pf_mix = players[_fi_mix]
+            _mv_mix = int((_pf_mix.get("props") or {}).get("move_type", 0) or 0)
+            if _mv_mix != 2:  # top-down scene
+                _pr_mix = _pf_mix.get("props") or {}
+                _rc_mix = _pr_mix.get("td_control", "absolute")
+                _rm_mix = _pr_mix.get("td_move", "direct")
+                _cs_mix = ("absolute", "relative")[min(int(_rc_mix), 1)] if isinstance(_rc_mix, int) else str(_rc_mix or "absolute").lower().strip()
+                _ms_mix = ("direct", "advance", "vehicle")[min(int(_rm_mix), 2)] if isinstance(_rm_mix, int) else str(_rm_mix or "direct").lower().strip()
+                if _cs_mix not in ("absolute", "relative"): _cs_mix = "absolute"
+                if _ms_mix not in ("direct", "advance", "vehicle"): _ms_mix = "direct"
+                if _cs_mix == "relative":
+                    _has_mixed_td_relative = True
+                if _ms_mix == "vehicle":
+                    _has_mixed_td_vehicle  = True
+                    _mixed_td_speed_max    = int(_pr_mix.get("td_speed_max",   48) or 48)
+                    _mixed_td_speed_max_r  = int(_pr_mix.get("td_speed_max_reverse", _mixed_td_speed_max) or _mixed_td_speed_max)
+                    _mixed_td_accel        = int(_pr_mix.get("td_accel",        4) or 4)
+                    _mixed_td_brake        = int(_pr_mix.get("td_brake",        6) or 6)
+                    _mixed_td_friction     = int(_pr_mix.get("td_friction",     2) or 2)
+                    _mixed_td_turn_rate    = max(1, int(_pr_mix.get("td_turn_rate",  4) or 4))
+                    _mixed_td_decel_rate   = max(1, int(_pr_mix.get("td_decel_rate", 1) or 1))
     player_hspeed_cap = 4
     player_jump_up_cap = 16
     if players:
@@ -3781,7 +3834,7 @@ def write_autorun_main_c(
                     c.append(f"static u8 s_{n}_l1_visible = 0u;\n")
         c.append("\n")
 
-    if has_topdown_facing:
+    if has_topdown_facing or _has_mixed_td_relative or _has_mixed_td_vehicle:
         c.append("/* ---- Top-down directional facing ---- */\n")
         c.append("/* N=0 NE=1 E=2 SE=3 S=4 SW=5 W=6 NW=7  (values x16 fixed-point) */\n")
         c.append("static const s8 ngpng_td_sin8[8] = { 0, 11, 16, 11,  0, -11, -16, -11 };\n")
@@ -3791,31 +3844,38 @@ def write_autorun_main_c(
         c.append("static const u8 ngpng_td_angle_fliph[8] = { 0, 0, 0, 0, 0, 1, 1, 1 };\n")
         c.append("static u8 s_td_angle = 0u; /* current facing: 0=N..7=NW */\n")
         c.append("static u8 s_td_turn_cd = 0u; /* turn rate cooldown */\n")
-        if has_topdown_vehicle or has_topdown_advance:
+        if has_topdown_vehicle or has_topdown_advance or _has_mixed_td_vehicle:
             c.append("static s16 s_td_speed = 0;  /* scalar speed x16 */\n")
             c.append("static u8 s_td_decel_cd = 0u; /* decel rate cooldown */\n")
-        if has_topdown_vehicle:
+        if has_topdown_vehicle or _has_mixed_td_vehicle:
             c.append("#ifndef TD_SPEED_MAX\n")
-            c.append("#define TD_SPEED_MAX  48  /* max speed x16 (~3 px/frame) */\n")
+            _spd_max = _mixed_td_speed_max if (not has_topdown_vehicle) else 48
+            c.append(f"#define TD_SPEED_MAX  {_spd_max}  /* max speed x16 */\n")
             c.append("#endif\n")
             c.append("#ifndef TD_SPEED_MAX_REVERSE\n")
-            c.append("#define TD_SPEED_MAX_REVERSE  TD_SPEED_MAX  /* reverse speed cap (default = forward) */\n")
+            _spd_maxr = _mixed_td_speed_max_r if (not has_topdown_vehicle) else 48
+            c.append(f"#define TD_SPEED_MAX_REVERSE  {_spd_maxr}  /* reverse speed cap */\n")
             c.append("#endif\n")
             c.append("#ifndef TD_ACCEL\n")
-            c.append("#define TD_ACCEL       4  /* acceleration per frame x16 */\n")
+            _accel = _mixed_td_accel if (not has_topdown_vehicle) else 4
+            c.append(f"#define TD_ACCEL       {_accel}  /* acceleration per frame x16 */\n")
             c.append("#endif\n")
             c.append("#ifndef TD_BRAKE\n")
-            c.append("#define TD_BRAKE       6  /* braking per frame x16 */\n")
+            _brake = _mixed_td_brake if (not has_topdown_vehicle) else 6
+            c.append(f"#define TD_BRAKE       {_brake}  /* braking per frame x16 */\n")
             c.append("#endif\n")
             c.append("#ifndef TD_FRICTION\n")
-            c.append("#define TD_FRICTION    2  /* passive friction per frame x16 */\n")
+            _fric = _mixed_td_friction if (not has_topdown_vehicle) else 2
+            c.append(f"#define TD_FRICTION    {_fric}  /* passive friction per frame x16 */\n")
             c.append("#endif\n")
         c.append("#ifndef TD_TURN_RATE\n")
-        c.append("#define TD_TURN_RATE   4  /* frames between angle steps (1=max speed) */\n")
+        _tr = _mixed_td_turn_rate if (not has_topdown_facing) else 4
+        c.append(f"#define TD_TURN_RATE   {_tr}  /* frames between angle steps */\n")
         c.append("#endif\n")
-        if has_topdown_vehicle or has_topdown_advance:
+        if has_topdown_vehicle or has_topdown_advance or _has_mixed_td_vehicle:
             c.append("#ifndef TD_DECEL_RATE\n")
-            c.append("#define TD_DECEL_RATE  1  /* frames between friction ticks (1=every frame, >1=more inertia) */\n")
+            _dr = _mixed_td_decel_rate if (not has_topdown_vehicle and not has_topdown_advance) else 1
+            c.append(f"#define TD_DECEL_RATE  {_dr}  /* frames between friction ticks */\n")
             c.append("#endif\n")
         c.append("\n")
 
@@ -4613,7 +4673,9 @@ def write_autorun_main_c(
         # Build list of scene IDX conditions where a topdown player form is active.
         # Used to generate a per-scene topdown-override instead of calling CTRL_UPDATE
         # (which uses platform physics when the project has mixed platform+topdown forms).
+        # Also captures per-scene td_control / td_move so vehicle scenes get proper code.
         _td_scene_conds: list[str] = []
+        _td_scene_ctrl_infos: list[dict] = []  # parallel: td_control, td_move per cond
         if len(players) > 1 and has_platform_physics:
             _player_idx_map2 = {p["name"]: i for i, p in enumerate(players)}
             for _sc2 in ((project_data or {}).get("scenes") or []):
@@ -4639,7 +4701,16 @@ def write_autorun_main_c(
                 _pf2 = players[_form_idx2]
                 _mv2 = int((_pf2.get("props") or {}).get("move_type", 0) or 0)
                 if _mv2 != 2:  # not platform → topdown scene
-                    _td_scene_conds.append(f"cur_scene == (u8)NGP_SCENE_{_sc2_safe.upper()}_IDX")
+                    _cond2 = f"cur_scene == (u8)NGP_SCENE_{_sc2_safe.upper()}_IDX"
+                    _td_scene_conds.append(_cond2)
+                    _pr2 = _pf2.get("props") or {}
+                    _rc2 = _pr2.get("td_control", "absolute")
+                    _rm2 = _pr2.get("td_move", "direct")
+                    _cs2 = ("absolute", "relative")[min(int(_rc2), 1)] if isinstance(_rc2, int) else str(_rc2 or "absolute").lower().strip()
+                    _ms2 = ("direct", "advance", "vehicle")[min(int(_rm2), 2)] if isinstance(_rm2, int) else str(_rm2 or "direct").lower().strip()
+                    if _cs2 not in ("absolute", "relative"): _cs2 = "absolute"
+                    if _ms2 not in ("direct", "advance", "vehicle"): _ms2 = "direct"
+                    _td_scene_ctrl_infos.append({"td_control": _cs2, "td_move": _ms2})
         c.append("            s16 prev_player_world_x;\n")
         c.append("            s16 prev_player_world_y;\n")
         c.append(f"            s8 prev_player_vy;\n")
@@ -4651,8 +4722,9 @@ def write_autorun_main_c(
         if has_topdown_physics and (has_topdown_vehicle or has_topdown_advance):
             c.append(f"            s8 _td_vx_pre;\n")
             c.append(f"            s8 _td_vy_pre;\n")
-        # cc900-safe: hoist _td_spd declaration for per-scene topdown override
-        if _td_scene_conds:
+        # cc900-safe: hoist _td_spd declaration for per-scene topdown override (4-dir only)
+        _td_has_fourdir = any(i.get("td_move") not in ("vehicle",) or i.get("td_control") != "relative" for i in _td_scene_ctrl_infos)
+        if _td_scene_conds and _td_has_fourdir:
             c.append(f"            s8 _td_spd;\n")
         c.append(f"            prev_player_world_x = (s16)(cam_px + s_{n}.x);\n")
         c.append(f"            prev_player_world_y = (s16)(cam_py + s_{n}.y);\n")
@@ -4668,17 +4740,61 @@ def write_autorun_main_c(
         if has_ice:
             c.append(f"            _ice_prev_vx = s_{n}.vx;\n")
         if _td_scene_conds:
-            _td_cond_str = " || ".join(f"({cond})" for cond in _td_scene_conds)
-            c.append(f"            _td_spd = 2;\n")
-            c.append(f"            if ({_td_cond_str}) {{\n")
-            c.append(f"                /* Top-down 4-dir override: set vx/vy then let clamp apply+correct */\n")
-            c.append(f"                s_{n}.vx = 0; s_{n}.vy = 0;\n")
-            c.append(f"                if (ngpc_pad_held & PAD_RIGHT) {{ s_{n}.vx = _td_spd; s_{n}.face_hflip = 0u; }}\n")
-            c.append(f"                else if (ngpc_pad_held & PAD_LEFT) {{ s_{n}.vx = (s8)(0 - _td_spd); s_{n}.face_hflip = 1u; }}\n")
-            c.append(f"                if (ngpc_pad_held & PAD_DOWN) s_{n}.vy = _td_spd;\n")
-            c.append(f"                else if (ngpc_pad_held & PAD_UP) s_{n}.vy = (s8)(0 - _td_spd);\n")
-            c.append(f"                s_{n}.on_ground = 1u;\n")
-            c.append(f"                ngpng_player_clamp_tilecol_topdown(_sc_tilecol, _sc_map_w, _sc_map_h, cam_px, cam_py, &s_{n}.x, &s_{n}.y, &s_{n}.vx, &s_{n}.vy, player_body_x, player_body_y, player_body_w, player_body_h);\n")
+            # Separate scenes by control type: vehicle (relative+vehicle) vs 4-dir
+            _td_vehicle_conds = [
+                cond for cond, info in zip(_td_scene_conds, _td_scene_ctrl_infos)
+                if info.get("td_control") == "relative" and info.get("td_move") == "vehicle"
+            ]
+            _td_fourdir_conds = [
+                cond for cond, info in zip(_td_scene_conds, _td_scene_ctrl_infos)
+                if not (info.get("td_control") == "relative" and info.get("td_move") == "vehicle")
+            ]
+            _first_branch = True
+            _clamp_call = (f"ngpng_player_clamp_tilecol_topdown(_sc_tilecol, _sc_map_w, _sc_map_h,"
+                           f" cam_px, cam_py, &s_{n}.x, &s_{n}.y, &s_{n}.vx, &s_{n}.vy,"
+                           f" player_body_x, player_body_y, player_body_w, player_body_h)")
+            if _td_vehicle_conds:
+                _veh_cond_str = " || ".join(f"({c2})" for c2 in _td_vehicle_conds)
+                c.append(f"            if ({_veh_cond_str}) {{\n")
+                c.append(f"                /* Top-down vehicle ctrl: L/R=turn, A=accel, B=brake, friction */\n")
+                c.append(f"                if (s_td_turn_cd > 0u) s_td_turn_cd = (u8)(s_td_turn_cd - 1u);\n")
+                c.append(f"                else if (ngpc_pad_held & PAD_RIGHT) {{ s_td_angle = (u8)((s_td_angle + 1u) & 7u); s_td_turn_cd = (u8)(TD_TURN_RATE - 1u); }}\n")
+                c.append(f"                else if (ngpc_pad_held & PAD_LEFT)  {{ s_td_angle = (u8)((s_td_angle + 7u) & 7u); s_td_turn_cd = (u8)(TD_TURN_RATE - 1u); }}\n")
+                c.append(f"                if (ngpc_pad_held & PAD_A) {{\n")
+                c.append(f"                    s_td_decel_cd = 0u;\n")
+                c.append(f"                    if (s_td_speed < (s16)TD_SPEED_MAX) s_td_speed = (s16)(s_td_speed + (s16)TD_ACCEL);\n")
+                c.append(f"                }} else if (ngpc_pad_held & PAD_B) {{\n")
+                c.append(f"                    s_td_decel_cd = 0u;\n")
+                c.append(f"                    if (s_td_speed > (s16)(-(s16)TD_SPEED_MAX_REVERSE)) s_td_speed = (s16)(s_td_speed - (s16)TD_BRAKE);\n")
+                c.append(f"                }} else if (s_td_decel_cd > 0u) {{\n")
+                c.append(f"                    s_td_decel_cd = (u8)(s_td_decel_cd - 1u);\n")
+                c.append(f"                }} else {{\n")
+                c.append(f"                    if (s_td_speed > 0) {{ s_td_speed = (s16)(s_td_speed > (s16)TD_FRICTION ? s_td_speed - (s16)TD_FRICTION : 0); s_td_decel_cd = (u8)(TD_DECEL_RATE - 1u); }}\n")
+                c.append(f"                    else if (s_td_speed < 0) {{ s_td_speed = (s16)(s_td_speed < (s16)(-(s16)TD_FRICTION) ? s_td_speed + (s16)TD_FRICTION : 0); s_td_decel_cd = (u8)(TD_DECEL_RATE - 1u); }}\n")
+                c.append(f"                }}\n")
+                c.append(f"                s_{n}.vx = (s8)((s16)((s16)ngpng_td_sin8[s_td_angle] * (s16)(s_td_speed)) >> 4);\n")
+                c.append(f"                s_{n}.vy = (s8)((s16)((s16)ngpng_td_cos8[s_td_angle] * (s16)(s_td_speed)) >> 4);\n")
+                c.append(f"                s_{n}.frame      = ngpng_td_angle_frame[s_td_angle];\n")
+                c.append(f"                s_{n}.face_hflip = ngpng_td_angle_fliph[s_td_angle];\n")
+                c.append(f"                s_{n}.on_ground = 1u;\n")
+                c.append(f"                {_clamp_call};\n")
+                c.append(f"                /* reset speed if we hit a wall */\n")
+                c.append(f"                if (s_{n}.vx == 0 && s_{n}.vy == 0) s_td_speed = 0;\n")
+                _first_branch = False
+            if _td_fourdir_conds:
+                _fd_cond_str = " || ".join(f"({c2})" for c2 in _td_fourdir_conds)
+                _kw = "} else if" if not _first_branch else "if"
+                c.append(f"            {_kw} ({_fd_cond_str}) {{\n")
+                c.append(f"                /* Top-down 4-dir override: set vx/vy then let clamp apply+correct */\n")
+                c.append(f"                _td_spd = 2;\n")
+                c.append(f"                s_{n}.vx = 0; s_{n}.vy = 0;\n")
+                c.append(f"                if (ngpc_pad_held & PAD_RIGHT) {{ s_{n}.vx = _td_spd; s_{n}.face_hflip = 0u; }}\n")
+                c.append(f"                else if (ngpc_pad_held & PAD_LEFT) {{ s_{n}.vx = (s8)(0 - _td_spd); s_{n}.face_hflip = 1u; }}\n")
+                c.append(f"                if (ngpc_pad_held & PAD_DOWN) s_{n}.vy = _td_spd;\n")
+                c.append(f"                else if (ngpc_pad_held & PAD_UP) s_{n}.vy = (s8)(0 - _td_spd);\n")
+                c.append(f"                s_{n}.on_ground = 1u;\n")
+                c.append(f"                {_clamp_call};\n")
+                _first_branch = False
             c.append(f"            }} else {{\n")
             c.append(f"                {VAR}_CTRL_UPDATE(s_{n});\n")
             c.append(f"            }}\n")
