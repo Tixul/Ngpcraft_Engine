@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# ASM900 assembler requires CRLF line endings — always keep CRLF
+*.asm text eol=crlf
