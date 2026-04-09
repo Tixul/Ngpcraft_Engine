@@ -1162,6 +1162,19 @@ def write_scene_loader_h(
     lines.append("}\n\n")
 
     # ---- Entity preview draw helpers --------------------------------
+    # SPR_MIDDLE = between planes. Use it only when SCR2 is the front plane so
+    # sprites sit between SCR1 (back, game map) and SCR2 (front).
+    # When SCR1 is the front plane (the common topdown/platformer case), sprites
+    # must use SPR_FRONT or they end up hidden behind the map.
+    # Dialog priority switching is handled separately by g_ngpng_entity_prio in
+    # the template integration — not here.
+    _bg_front_raw = (
+        str(scene.get("level_bg_front") or "")
+        or str((scene.get("level_layers") or {}).get("bg_front") or "")
+        or "scr1"
+    ).strip().lower()
+    _spr_draw_prio = "SPR_MIDDLE" if _bg_front_raw == "scr2" else "SPR_FRONT"
+
     lines.append(f"static u8 scene_{safe}_draw_entity_anim(u8 spr_start, u8 type, u8 anim_frame, s16 sx, s16 sy)\n{{\n")
     if not ent_draw_types:
         lines.append("    (void)spr_start; (void)type; (void)anim_frame; (void)sx; (void)sy;\n")
@@ -1183,9 +1196,9 @@ def write_scene_loader_h(
             lines.append("    }\n")
         lines.append("    if (!anim || count == 0u) return 0;\n")
         lines.append("    frame_idx = (u8)(anim_frame % count);\n")
-        lines.append("    used = ngpc_mspr_draw(spr_start, sx, sy, anim[frame_idx].frame, (u8)SPR_MIDDLE);\n")
+        lines.append(f"    used = ngpc_mspr_draw(spr_start, sx, sy, anim[frame_idx].frame, (u8){_spr_draw_prio});\n")
         lines.append("    if (anim_l1) {\n")
-        lines.append("        used = (u8)(used + ngpc_mspr_draw((u8)(spr_start + used), sx, sy, anim_l1[frame_idx].frame, (u8)SPR_MIDDLE));\n")
+        lines.append(f"        used = (u8)(used + ngpc_mspr_draw((u8)(spr_start + used), sx, sy, anim_l1[frame_idx].frame, (u8){_spr_draw_prio}));\n")
         lines.append("    }\n")
         lines.append("    return (u8)(spr_start + used);\n")
     lines.append("}\n\n")

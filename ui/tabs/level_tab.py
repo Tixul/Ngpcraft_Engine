@@ -469,6 +469,10 @@ _TCOL_SPRING      = 15  # launch / rebound tile
 _TCOL_ICE         = 16  # slippery floor (no deceleration while sliding)
 _TCOL_CONVEYOR_L  = 17  # conveyor belt pushing left
 _TCOL_CONVEYOR_R  = 18  # conveyor belt pushing right
+_TCOL_CORNER_NE   = 19  # wall corner open to North + East  (inner NE angle)
+_TCOL_CORNER_NW   = 20  # wall corner open to North + West  (inner NW angle)
+_TCOL_CORNER_SE   = 21  # wall corner open to South + East  (inner SE angle)
+_TCOL_CORNER_SW   = 22  # wall corner open to South + West  (inner SW angle)
 
 _ENT_FLAG_CLAMP_MAP = 1
 _ENT_FLAG_ALLOW_LEDGE_FALL = 2
@@ -523,7 +527,11 @@ _MAP_MODE_ROLES: dict[str, list[tuple[str, int, str]]] = {
         ("wall_n",   _TCOL_WALL_N,  "level.tile_role.topdown.wall_n"),
         ("wall_s",   _TCOL_WALL_S,  "level.tile_role.topdown.wall_s"),
         ("wall_e",   _TCOL_WALL_E,  "level.tile_role.topdown.wall_e"),
-        ("wall_w",   _TCOL_WALL_W,  "level.tile_role.topdown.wall_w"),
+        ("wall_w",   _TCOL_WALL_W,    "level.tile_role.topdown.wall_w"),
+        ("corner_ne",_TCOL_CORNER_NE,"level.tile_role.topdown.corner_ne"),
+        ("corner_nw",_TCOL_CORNER_NW,"level.tile_role.topdown.corner_nw"),
+        ("corner_se",_TCOL_CORNER_SE,"level.tile_role.topdown.corner_se"),
+        ("corner_sw",_TCOL_CORNER_SW,"level.tile_role.topdown.corner_sw"),
         ("damage",   _TCOL_DAMAGE,  "level.tile_role.topdown.damage"),
         ("water",    _TCOL_WATER,   "level.tile_role.topdown.water"),
         ("fire",     _TCOL_FIRE,    "level.tile_role.topdown.fire"),
@@ -882,7 +890,7 @@ def _tile_id_variants(value: object, default: int) -> list[int]:
     seen: set[int] = set()
     norm: list[int] = []
     for v in out:
-        v = max(0, min(255, int(v)))
+        v = max(0, int(v))
         if v in seen:
             continue
         seen.add(v)
@@ -2378,6 +2386,7 @@ class _ProcgenTilePickerDialog(QDialog):
         self._list.setMovement(QListView.Movement.Static)
         self._list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
         self._list.setIconSize(QSize(32, 32))
+        self._list.setGridSize(QSize(40, 52))
         self._list.setSpacing(4)
         root.addWidget(self._list, 1)
 
@@ -3407,6 +3416,8 @@ class LevelTab(QWidget):
         self._btn_redo.setEnabled(False)
         self._btn_redo.clicked.connect(self._redo)
         zoom_row.addWidget(self._btn_redo)
+        QShortcut(QKeySequence("Ctrl+Z"), self, self._undo)
+        QShortcut(QKeySequence("Ctrl+Y"), self, self._redo)
         view_group_l.addLayout(zoom_row)
         cv.addWidget(view_group)
 
@@ -5321,12 +5332,133 @@ class LevelTab(QWidget):
         self._open_density_widget.setVisible(False)
         ptv.addWidget(self._open_density_widget)
 
+        # ---- Top-down generation mode (scatter / BSP) ----
+        self._td_mode_widget = QWidget()
+        tm_row = QHBoxLayout(self._td_mode_widget)
+        tm_row.setContentsMargins(0, 0, 0, 0)
+        tm_row.addWidget(QLabel(tr("level.procgen_td_gen_mode")))
+        self._combo_td_gen_mode = QComboBox()
+        self._combo_td_gen_mode.addItem(tr("level.procgen_td_mode_scatter"), "scatter")
+        self._combo_td_gen_mode.addItem(tr("level.procgen_td_mode_bsp"),     "bsp")
+        tm_row.addWidget(self._combo_td_gen_mode, 1)
+        self._td_mode_widget.setVisible(False)
+        ptv.addWidget(self._td_mode_widget)
+
+        # CA smoothing (scatter only)
+        self._chk_td_ca = QCheckBox(tr("level.procgen_td_ca"))
+        self._chk_td_ca.setToolTip(tr("level.procgen_td_ca_tt"))
+        self._chk_td_ca.setChecked(True)
+        self._chk_td_ca.setVisible(False)
+        ptv.addWidget(self._chk_td_ca)
+
+        # BSP depth / loop / output-size (BSP only)
+        self._td_bsp_widget = QWidget()
+        bsp_v = QVBoxLayout(self._td_bsp_widget)
+        bsp_v.setContentsMargins(0, 0, 0, 0)
+        bsp_v.setSpacing(2)
+        bsp_row = QHBoxLayout()
+        bsp_row.setContentsMargins(0, 0, 0, 0)
+        bsp_row.addWidget(QLabel(tr("level.procgen_td_bsp_depth")))
+        self._spin_td_bsp_depth = QSpinBox()
+        self._spin_td_bsp_depth.setRange(2, 7)
+        self._spin_td_bsp_depth.setValue(4)
+        self._spin_td_bsp_depth.setToolTip(tr("level.procgen_td_bsp_depth_tt"))
+        bsp_row.addWidget(self._spin_td_bsp_depth)
+        bsp_row.addWidget(QLabel(tr("level.procgen_td_bsp_loop")))
+        self._spin_td_loop_pct = QSpinBox()
+        self._spin_td_loop_pct.setRange(0, 50)
+        self._spin_td_loop_pct.setValue(15)
+        self._spin_td_loop_pct.setSuffix("%")
+        self._spin_td_loop_pct.setToolTip(tr("level.procgen_td_bsp_loop_tt"))
+        bsp_row.addWidget(self._spin_td_loop_pct)
+        bsp_v.addLayout(bsp_row)
+        bsp_sz_row = QHBoxLayout()
+        bsp_sz_row.setContentsMargins(0, 0, 0, 0)
+        bsp_sz_row.addWidget(QLabel(tr("level.procgen_td_bsp_out_size") + ":"))
+        self._spin_td_bsp_out_w = QSpinBox()
+        self._spin_td_bsp_out_w.setRange(0, 200)
+        self._spin_td_bsp_out_w.setValue(0)
+        self._spin_td_bsp_out_w.setSpecialValueText("auto")
+        self._spin_td_bsp_out_w.setToolTip(tr("level.procgen_td_bsp_out_size_tt"))
+        self._spin_td_bsp_out_w.setPrefix("W ")
+        bsp_sz_row.addWidget(self._spin_td_bsp_out_w)
+        self._spin_td_bsp_out_h = QSpinBox()
+        self._spin_td_bsp_out_h.setRange(0, 200)
+        self._spin_td_bsp_out_h.setValue(0)
+        self._spin_td_bsp_out_h.setSpecialValueText("auto")
+        self._spin_td_bsp_out_h.setToolTip(tr("level.procgen_td_bsp_out_size_tt"))
+        self._spin_td_bsp_out_h.setPrefix("H ")
+        bsp_sz_row.addWidget(self._spin_td_bsp_out_h)
+        bsp_sz_row.addStretch()
+        bsp_v.addLayout(bsp_sz_row)
+        bsp_spr_row = QHBoxLayout()
+        bsp_spr_row.setContentsMargins(0, 0, 0, 0)
+        bsp_spr_row.addWidget(QLabel(tr("level.procgen_td_bsp_sprite_sz") + ":"))
+        self._spin_td_bsp_sprite = QSpinBox()
+        self._spin_td_bsp_sprite.setRange(1, 6)
+        self._spin_td_bsp_sprite.setValue(1)
+        self._spin_td_bsp_sprite.setToolTip(tr("level.procgen_td_bsp_sprite_sz_tt"))
+        bsp_spr_row.addWidget(self._spin_td_bsp_sprite)
+        bsp_spr_row.addStretch()
+        bsp_v.addLayout(bsp_spr_row)
+        self._td_bsp_widget.setVisible(False)
+        ptv.addWidget(self._td_bsp_widget)
+
+        self._combo_td_gen_mode.currentIndexChanged.connect(self._on_td_gen_mode_changed)
+
         # ---- Top-down directional walls option ----
         self._chk_dir_walls = QCheckBox(tr("level.procgen_dir_walls"))
         self._chk_dir_walls.setToolTip(tr("level.procgen_dir_walls_tt"))
         self._chk_dir_walls.setChecked(True)
         self._chk_dir_walls.setVisible(False)
         ptv.addWidget(self._chk_dir_walls)
+
+        # ---- Top-down feature toggles (what to include in generation) ----
+        self._topdown_features_widget = QWidget()
+        tf_v = QVBoxLayout(self._topdown_features_widget)
+        tf_v.setContentsMargins(0, 0, 0, 0)
+        tf_v.setSpacing(2)
+        tf_v.addWidget(QLabel(tr("level.procgen_td_include")))
+        self._chk_td_int_walls = QCheckBox(tr("level.procgen_td_int_walls"))
+        self._chk_td_int_walls.setChecked(True)
+        tf_v.addWidget(self._chk_td_int_walls)
+        self._chk_td_water = QCheckBox(tr("level.procgen_td_water"))
+        self._chk_td_water.setChecked(True)
+        tf_v.addWidget(self._chk_td_water)
+        border_lbl = QLabel(tr("level.procgen_td_borders"))
+        border_lbl.setStyleSheet("font-size: 10px; color: #aaa;")
+        tf_v.addWidget(border_lbl)
+        tf_borders = QHBoxLayout()
+        tf_borders.setContentsMargins(0, 0, 0, 0)
+        self._chk_td_border_n = QCheckBox("N")
+        self._chk_td_border_n.setChecked(True)
+        self._chk_td_border_s = QCheckBox("S")
+        self._chk_td_border_s.setChecked(True)
+        self._chk_td_border_e = QCheckBox("E")
+        self._chk_td_border_e.setChecked(True)
+        self._chk_td_border_w = QCheckBox("W")
+        self._chk_td_border_w.setChecked(True)
+        for _c in (self._chk_td_border_n, self._chk_td_border_s,
+                   self._chk_td_border_e, self._chk_td_border_w):
+            tf_borders.addWidget(_c)
+        tf_borders.addStretch()
+        tf_v.addLayout(tf_borders)
+        self._topdown_features_widget.setVisible(False)
+        ptv.addWidget(self._topdown_features_widget)
+
+        # ---- Top-down interior wall density ----
+        self._wall_dens_widget = QWidget()
+        wd_row = QHBoxLayout(self._wall_dens_widget)
+        wd_row.setContentsMargins(0, 0, 0, 0)
+        wd_row.addWidget(QLabel(tr("level.procgen_wall_density")))
+        self._spin_wall_dens = QSpinBox()
+        self._spin_wall_dens.setRange(1, 80)
+        self._spin_wall_dens.setValue(20)
+        self._spin_wall_dens.setSuffix("%")
+        self._spin_wall_dens.setToolTip(tr("level.procgen_wall_density_tt"))
+        wd_row.addWidget(self._spin_wall_dens)
+        self._wall_dens_widget.setVisible(False)
+        ptv.addWidget(self._wall_dens_widget)
 
         # ---- Tile role → visual tile index (dynamic per mode) ----
         ptv.addWidget(QLabel(tr("level.procgen_tile_roles")))
@@ -5405,7 +5537,7 @@ class LevelTab(QWidget):
         out_row.addWidget(self._chk_gen_scr1)
         self._chk_gen_scr2 = QCheckBox("SCR2")
         self._chk_gen_scr2.setToolTip(tr("level.procgen_tile_out_scr2_tt"))
-        self._chk_gen_scr2.setChecked(True)
+        self._chk_gen_scr2.setChecked(False)
         out_row.addWidget(self._chk_gen_scr2)
         out_row.addStretch()
         pbv.addLayout(out_row)
@@ -6451,7 +6583,12 @@ class LevelTab(QWidget):
             self._combo_map_mode.setCurrentIndex(idx_none)
         self._combo_map_mode.blockSignals(False)
         self._open_density_widget.setVisible(False)
+        self._td_mode_widget.setVisible(False)
+        self._chk_td_ca.setVisible(False)
+        self._td_bsp_widget.setVisible(False)
         self._chk_dir_walls.setVisible(False)
+        self._topdown_features_widget.setVisible(False)
+        self._wall_dens_widget.setVisible(False)
         self._tile_role_scroll.setVisible(False)
 
         if scene is None:
@@ -8824,13 +8961,28 @@ class LevelTab(QWidget):
         mode = self._combo_map_mode.currentData()
         self._map_mode = mode
         self._open_density_widget.setVisible(mode == "open")
-        self._chk_dir_walls.setVisible(mode == "topdown")
+        is_td = (mode == "topdown")
+        self._td_mode_widget.setVisible(is_td)
+        self._chk_dir_walls.setVisible(is_td)
+        self._topdown_features_widget.setVisible(is_td)
+        if is_td:
+            self._on_td_gen_mode_changed()
+        else:
+            self._chk_td_ca.setVisible(False)
+            self._td_bsp_widget.setVisible(False)
+            self._wall_dens_widget.setVisible(False)
         has_roles = mode in _MAP_MODE_ROLES
         self._tile_role_scroll.setVisible(has_roles)
         if has_roles:
             self._rebuild_tile_role_ui(mode)
         self._refresh_collision_brush_ui()
         self._update_diagnostics()
+
+    def _on_td_gen_mode_changed(self, _idx: int = 0) -> None:
+        is_bsp = self._combo_td_gen_mode.currentData() == "bsp"
+        self._chk_td_ca.setVisible(not is_bsp)
+        self._td_bsp_widget.setVisible(is_bsp)
+        self._wall_dens_widget.setVisible(not is_bsp)
 
     def _rebuild_tile_role_ui(self, mode: str) -> None:
         """Repopulate the visual tile-role mapping UI for the given mode."""
@@ -8882,8 +9034,8 @@ class LevelTab(QWidget):
             edit.setText(_tile_id_text(entry, tcol))
             edit.setToolTip(role_tip + "\n\n" + tr("level.tile_role_list_tt"))
 
-            def _update_thumb(v: object, _lbl=thumb) -> None:
-                ids = _tile_id_variants(v, tcol)
+            def _update_thumb(v: object, _lbl=thumb, _tcol=tcol) -> None:
+                ids = _tile_id_variants(v, _tcol)
                 pm, tip = self._tile_thumb(int(ids[0]))
                 if pm is not None:
                     _lbl.setPixmap(pm)
@@ -8900,20 +9052,20 @@ class LevelTab(QWidget):
                     )
                 _lbl.setToolTip(tip)
 
-            def _apply_ids(ids_value: object, _m=mode, _k=role_key, _e=edit) -> None:
-                ids = _tile_id_variants(ids_value, tcol)
+            def _apply_ids(ids_value: object, _m=mode, _k=role_key, _e=edit, _upd=_update_thumb, _tcol=tcol) -> None:
+                ids = _tile_id_variants(ids_value, _tcol)
                 text = ",".join(str(v) for v in ids)
                 if _e.text().strip() != text:
                     _e.blockSignals(True)
                     _e.setText(text)
                     _e.blockSignals(False)
                 self._on_tile_role_id_changed(_m, _k, ids if len(ids) > 1 else ids[0])
-                _update_thumb(ids)
+                _upd(ids)
 
             def _commit_ids(_e=edit) -> None:
                 _apply_ids(_e.text())
 
-            def _pick_ids(_default=tcol, _e=edit) -> None:
+            def _pick_ids(_default=tcol, _e=edit, _app=_apply_ids) -> None:
                 current_ids = _tile_id_variants(_e.text(), _default)
                 pm_src, src_name = self._role_preview_source()
                 dlg = _ProcgenTilePickerDialog(
@@ -8925,7 +9077,7 @@ class LevelTab(QWidget):
                 )
                 if dlg.exec() != int(QDialog.DialogCode.Accepted):
                     return
-                _apply_ids(dlg.selected_ids())
+                _app(dlg.selected_ids())
 
             _update_thumb(entry)
             edit.editingFinished.connect(_commit_ids)
@@ -8963,16 +9115,27 @@ class LevelTab(QWidget):
                 s_free = (cy < gh-1)  and col[cy+1][cx] == _TCOL_PASS
                 w_free = (cx > 0)     and col[cy][cx-1] == _TCOL_PASS
                 e_free = (cx < gw-1)  and col[cy][cx+1] == _TCOL_PASS
-                if sum([n_free, s_free, w_free, e_free]) == 1:
-                    # One open face → this tile is a directional wall facing that side
+                open_count = sum([n_free, s_free, w_free, e_free])
+                if open_count == 1:
+                    # One open face → directional wall
                     if s_free:
-                        col[cy][cx] = _TCOL_WALL_N   # open to south → wall face north
+                        col[cy][cx] = _TCOL_WALL_N
                     elif n_free:
                         col[cy][cx] = _TCOL_WALL_S
                     elif e_free:
-                        col[cy][cx] = _TCOL_WALL_W   # open to east → wall face west
+                        col[cy][cx] = _TCOL_WALL_W
                     elif w_free:
                         col[cy][cx] = _TCOL_WALL_E
+                elif open_count == 2 and not (n_free and s_free) and not (e_free and w_free):
+                    # Two perpendicular open faces → corner tile
+                    if n_free and e_free:
+                        col[cy][cx] = _TCOL_CORNER_NE
+                    elif n_free and w_free:
+                        col[cy][cx] = _TCOL_CORNER_NW
+                    elif s_free and e_free:
+                        col[cy][cx] = _TCOL_CORNER_SE
+                    elif s_free and w_free:
+                        col[cy][cx] = _TCOL_CORNER_SW
 
     def _gen_platformer(self, rng: random.Random, gw: int, gh: int) -> list[list[int]]:
         col = [[_TCOL_PASS] * gw for _ in range(gh)]
@@ -9010,35 +9173,412 @@ class LevelTab(QWidget):
                 col[gh-2][x] = _TCOL_DAMAGE
         return col
 
-    def _gen_topdown(self, rng: random.Random, gw: int, gh: int,
-                     dir_walls: bool) -> list[list[int]]:
+    def _gen_topdown(
+        self, rng: random.Random, gw: int, gh: int,
+        dir_walls: bool, wall_dens: float = 0.20,
+        gen_int_walls: bool = True, gen_water: bool = True,
+        border_n: bool = True, border_s: bool = True,
+        border_e: bool = True, border_w: bool = True,
+    ) -> list[list[int]]:
         col = [[_TCOL_PASS] * gw for _ in range(gh)]
-        # Border walls
-        for x in range(gw):
-            col[0][x]    = _TCOL_SOLID
-            col[gh-1][x] = _TCOL_SOLID
-        for y in range(gh):
-            col[y][0]    = _TCOL_SOLID
-            col[y][gw-1] = _TCOL_SOLID
-        # Interior wall clusters
-        for _ in range(max(3, (gw * gh) // 15)):
-            wx = rng.randint(2, gw - 3)
-            wy = rng.randint(2, gh - 3)
-            cw = rng.randint(1, 3)
-            ch = rng.randint(1, 3)
-            for dy in range(ch):
-                for dx in range(cw):
-                    nx, ny = wx + dx, wy + dy
-                    if 1 <= nx < gw-1 and 1 <= ny < gh-1:
-                        col[ny][nx] = _TCOL_SOLID
-        # Damage tiles (water / pit)
-        for _ in range(max(1, (gw * gh) // 30)):
-            dx = rng.randint(2, gw - 2)
-            dy = rng.randint(2, gh - 2)
-            if col[dy][dx] == _TCOL_PASS:
-                col[dy][dx] = _TCOL_DAMAGE
+        # Border walls (per-side optional)
+        if border_n:
+            for x in range(gw): col[0][x]      = _TCOL_SOLID
+        if border_s:
+            for x in range(gw): col[gh-1][x]   = _TCOL_SOLID
+        if border_w:
+            for y in range(gh): col[y][0]       = _TCOL_SOLID
+        if border_e:
+            for y in range(gh): col[y][gw-1]    = _TCOL_SOLID
+        # Interior wall clusters (density-driven)
+        if gen_int_walls:
+            n_clusters = max(1, int(gw * gh * wall_dens / 4))
+            for _ in range(n_clusters):
+                wx = rng.randint(2, gw - 3)
+                wy = rng.randint(2, gh - 3)
+                cw = rng.randint(1, 3)
+                ch = rng.randint(1, 3)
+                for dy in range(ch):
+                    for dx in range(cw):
+                        nx, ny = wx + dx, wy + dy
+                        if 1 <= nx < gw-1 and 1 <= ny < gh-1:
+                            col[ny][nx] = _TCOL_SOLID
+        # Water bodies: connected blobs (pond) or random-walk rivers
+        if gen_water:
+            n_bodies = max(1, (gw * gh) // 200)
+            for _ in range(n_bodies):
+                sx = rng.randint(2, gw - 3)
+                sy = rng.randint(2, gh - 3)
+                if col[sy][sx] != _TCOL_PASS:
+                    continue
+                if rng.random() < 0.5:
+                    # River: random walk
+                    river_len = rng.randint(max(3, (gw + gh) // 8), max(4, (gw + gh) // 5))
+                    rx, ry = sx, sy
+                    dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+                    last_d = rng.choice(dirs)
+                    for _s in range(river_len):
+                        if col[ry][rx] == _TCOL_PASS:
+                            col[ry][rx] = _TCOL_DAMAGE
+                        if rng.random() < 0.7:
+                            d = last_d
+                        else:
+                            d = rng.choice(dirs)
+                        nx2, ny2 = rx + d[0], ry + d[1]
+                        if 1 <= nx2 < gw - 1 and 1 <= ny2 < gh - 1:
+                            rx, ry = nx2, ny2
+                            last_d = d
+                else:
+                    # Pond: BFS blob
+                    blob_size = rng.randint(3, max(4, (gw * gh) // 80))
+                    queue = [(sx, sy)]
+                    visited: set[tuple[int, int]] = {(sx, sy)}
+                    placed = 0
+                    while queue and placed < blob_size:
+                        bx, by = queue.pop(rng.randint(0, len(queue) - 1))
+                        if col[by][bx] == _TCOL_PASS:
+                            col[by][bx] = _TCOL_DAMAGE
+                            placed += 1
+                        for ddx, ddy in [(0,1),(0,-1),(1,0),(-1,0)]:
+                            nx2, ny2 = bx + ddx, by + ddy
+                            if (1 <= nx2 < gw - 1 and 1 <= ny2 < gh - 1
+                                    and (nx2, ny2) not in visited
+                                    and col[ny2][nx2] == _TCOL_PASS):
+                                visited.add((nx2, ny2))
+                                queue.append((nx2, ny2))
         if dir_walls:
             self._apply_dir_walls(col, gw, gh)
+            _dw = {_TCOL_WALL_N, _TCOL_WALL_S, _TCOL_WALL_E, _TCOL_WALL_W,
+                   _TCOL_CORNER_NE, _TCOL_CORNER_NW, _TCOL_CORNER_SE, _TCOL_CORNER_SW}
+            if border_n and border_w and col[0][1] in _dw and col[1][0] in _dw:
+                col[0][0] = _TCOL_CORNER_SE
+            if border_n and border_e and col[0][gw-2] in _dw and col[1][gw-1] in _dw:
+                col[0][gw-1] = _TCOL_CORNER_SW
+            if border_s and border_w and col[gh-1][1] in _dw and col[gh-2][0] in _dw:
+                col[gh-1][0] = _TCOL_CORNER_NE
+            if border_s and border_e and col[gh-1][gw-2] in _dw and col[gh-2][gw-1] in _dw:
+                col[gh-1][gw-1] = _TCOL_CORNER_NW
+        return col
+
+    # ------------------------------------------------------------------
+    # Topdown shared helpers
+    # ------------------------------------------------------------------
+
+    def _td_carve_tunnel(
+        self,
+        col: list[list[int]],
+        gw: int, gh: int,
+        p1: tuple[int, int],
+        p2: tuple[int, int],
+        rng: random.Random,
+        corridor_w: int = 1,
+    ) -> None:
+        """L-shaped tunnel between p1 and p2, corridor_w tiles wide."""
+        x1, y1 = p1
+        x2, y2 = p2
+        half = corridor_w // 2
+        offsets = range(-half, corridor_w - half)
+        if rng.random() < 0.5:
+            # Horizontal first, then vertical
+            for x in range(min(x1, x2), max(x1, x2) + 1):
+                for dw in offsets:
+                    ny = y1 + dw
+                    if 0 <= x < gw and 0 <= ny < gh:
+                        col[ny][x] = _TCOL_PASS
+            for y in range(min(y1, y2), max(y1, y2) + 1):
+                for dw in offsets:
+                    nx = x2 + dw
+                    if 0 <= nx < gw and 0 <= y < gh:
+                        col[y][nx] = _TCOL_PASS
+        else:
+            # Vertical first, then horizontal
+            for y in range(min(y1, y2), max(y1, y2) + 1):
+                for dw in offsets:
+                    nx = x1 + dw
+                    if 0 <= nx < gw and 0 <= y < gh:
+                        col[y][nx] = _TCOL_PASS
+            for x in range(min(x1, x2), max(x1, x2) + 1):
+                for dw in offsets:
+                    ny = y2 + dw
+                    if 0 <= x < gw and 0 <= ny < gh:
+                        col[ny][x] = _TCOL_PASS
+
+    def _td_cellular_smooth(
+        self,
+        col: list[list[int]],
+        gw: int, gh: int,
+        iterations: int = 3,
+    ) -> None:
+        """
+        B5/S3 CA smoothing on interior wall tiles.
+        - SOLID survives if >= 3 SOLID neighbours (8-dir).
+        - PASS becomes SOLID if >= 5 SOLID neighbours.
+        - Special tiles (water, damage…) are preserved unchanged.
+        - OOB cells count as SOLID (reinforces the border).
+        """
+        _PRESERVE = {
+            _TCOL_DAMAGE, _TCOL_WATER, _TCOL_FIRE, _TCOL_VOID,
+            _TCOL_DOOR, _TCOL_LADDER,
+        }
+        for _ in range(iterations):
+            new_col = [row[:] for row in col]
+            for cy in range(1, gh - 1):
+                for cx in range(1, gw - 1):
+                    if col[cy][cx] in _PRESERVE:
+                        continue
+                    walls = 0
+                    for dy in range(-1, 2):
+                        for dx in range(-1, 2):
+                            if dx == 0 and dy == 0:
+                                continue
+                            ny2, nx2 = cy + dy, cx + dx
+                            if ny2 < 0 or ny2 >= gh or nx2 < 0 or nx2 >= gw:
+                                walls += 1
+                            elif col[ny2][nx2] == _TCOL_SOLID:
+                                walls += 1
+                    if col[cy][cx] == _TCOL_SOLID:
+                        new_col[cy][cx] = _TCOL_SOLID if walls >= 3 else _TCOL_PASS
+                    else:
+                        new_col[cy][cx] = _TCOL_SOLID if walls >= 5 else _TCOL_PASS
+            col[:] = new_col
+
+    def _td_flood_fix(
+        self,
+        col: list[list[int]],
+        gw: int, gh: int,
+        rng: random.Random,
+        min_region: int = 8,
+        corridor_w: int = 1,
+    ) -> None:
+        """
+        Connectivity repair:
+        - Finds all walkable (PASS + special) regions by BFS.
+        - Tiny regions (< min_region) are filled with SOLID.
+        - Larger isolated regions are connected to the main one via L-tunnel.
+        """
+        from collections import deque
+        _WALKABLE = {
+            _TCOL_PASS, _TCOL_DAMAGE, _TCOL_WATER, _TCOL_FIRE,
+            _TCOL_LADDER, _TCOL_DOOR,
+        }
+
+        def bfs(sx: int, sy: int) -> set[tuple[int, int]]:
+            q: deque[tuple[int, int]] = deque([(sx, sy)])
+            vis: set[tuple[int, int]] = {(sx, sy)}
+            while q:
+                cx, cy = q.popleft()
+                for ddx, ddy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    nx2, ny2 = cx + ddx, cy + ddy
+                    if (0 <= nx2 < gw and 0 <= ny2 < gh
+                            and (nx2, ny2) not in vis
+                            and col[ny2][nx2] in _WALKABLE):
+                        vis.add((nx2, ny2))
+                        q.append((nx2, ny2))
+            return vis
+
+        all_w = {(x, y) for y in range(gh) for x in range(gw) if col[y][x] in _WALKABLE}
+        seen: set[tuple[int, int]] = set()
+        regions: list[set[tuple[int, int]]] = []
+        for pos in all_w:
+            if pos in seen:
+                continue
+            r = bfs(*pos)
+            regions.append(r)
+            seen |= r
+
+        if len(regions) <= 1:
+            return
+
+        regions.sort(key=len, reverse=True)
+        main = regions[0]
+
+        for small in regions[1:]:
+            if len(small) < min_region:
+                for x, y in small:
+                    if col[y][x] == _TCOL_PASS:
+                        col[y][x] = _TCOL_SOLID
+            else:
+                s_samp = list(small)
+                m_samp = list(main)
+                if len(s_samp) > 40:
+                    s_samp = rng.sample(s_samp, 40)
+                if len(m_samp) > 40:
+                    m_samp = rng.sample(m_samp, 40)
+                best_d = 10 ** 9
+                best_pair: tuple[tuple[int, int], tuple[int, int]] | None = None
+                for p1 in s_samp:
+                    for p2 in m_samp:
+                        d = abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
+                        if d < best_d:
+                            best_d = d
+                            best_pair = (p1, p2)
+                if best_pair:
+                    self._td_carve_tunnel(col, gw, gh, best_pair[0], best_pair[1], rng, corridor_w)
+                    main = main | small
+
+    def _gen_topdown_bsp(
+        self,
+        rng: random.Random,
+        gw: int, gh: int,
+        gen_water: bool,
+        border_n: bool, border_s: bool,
+        border_e: bool, border_w: bool,
+        bsp_depth: int,
+        loop_pct: int,
+        corridor_w: int = 1,
+    ) -> list[list[int]]:
+        """BSP room placement + MST corridor graph + optional water."""
+        import heapq
+
+        col: list[list[int]] = [[_TCOL_SOLID] * gw for _ in range(gh)]
+
+        if not border_n:
+            for x in range(gw): col[0][x]      = _TCOL_PASS
+        if not border_s:
+            for x in range(gw): col[gh-1][x]   = _TCOL_PASS
+        if not border_w:
+            for y in range(gh): col[y][0]       = _TCOL_PASS
+        if not border_e:
+            for y in range(gh): col[y][gw-1]    = _TCOL_PASS
+
+        x0 = 1 if border_w else 0
+        x1 = (gw - 1) if border_e else gw
+        y0 = 1 if border_n else 0
+        y1 = (gh - 1) if border_s else gh
+
+        # Minimum BSP leaf size and minimum room size scale with corridor_w
+        # so rooms are always navigable for sprites of that footprint.
+        min_leaf = max(4, corridor_w * 3 + 2)
+        min_room = max(2, corridor_w + 1)
+
+        if x1 - x0 < min_leaf * 2 or y1 - y0 < min_leaf * 2:
+            return col
+
+        # --- BSP partition ---
+        class _Leaf:
+            __slots__ = ('x', 'y', 'w', 'h', 'left', 'right', 'room')
+            def __init__(self, lx: int, ly: int, lw: int, lh: int) -> None:
+                self.x, self.y, self.w, self.h = lx, ly, lw, lh
+                self.left = self.right = self.room = None
+
+            def split(self, _rng: random.Random, min_sz: int = 4) -> bool:
+                if self.left:
+                    return False
+                go_h = _rng.random() < 0.5
+                if self.w > self.h * 1.25:
+                    go_h = False
+                elif self.h > self.w * 1.25:
+                    go_h = True
+                span = self.h if go_h else self.w
+                if span < min_sz * 2:
+                    return False
+                pos = _rng.randint(min_sz, span - min_sz)
+                if go_h:
+                    self.left  = _Leaf(self.x,       self.y,       self.w,       pos)
+                    self.right = _Leaf(self.x,       self.y + pos, self.w,       self.h - pos)
+                else:
+                    self.left  = _Leaf(self.x,       self.y,       pos,          self.h)
+                    self.right = _Leaf(self.x + pos, self.y,       self.w - pos, self.h)
+                return True
+
+        root = _Leaf(x0, y0, x1 - x0, y1 - y0)
+        leaves: list[_Leaf] = [root]
+        for _ in range(bsp_depth):
+            grew = False
+            nxt: list[_Leaf] = []
+            for lf in leaves:
+                if lf.split(rng, min_sz=min_leaf):
+                    assert lf.left is not None and lf.right is not None
+                    nxt += [lf.left, lf.right]
+                    grew = True
+                else:
+                    nxt.append(lf)
+            leaves = nxt
+            if not grew:
+                break
+
+        # --- Carve rooms in leaf nodes ---
+        rooms: list[tuple[int, int]] = []
+        for lf in leaves:
+            shrink_w = rng.randint(1, max(1, lf.w - min_room - 1))
+            shrink_h = rng.randint(1, max(1, lf.h - min_room - 1))
+            rw = max(min_room, lf.w - shrink_w)
+            rh = max(min_room, lf.h - shrink_h)
+            rx = lf.x + rng.randint(1, max(1, lf.w - rw - 1))
+            ry = lf.y + rng.randint(1, max(1, lf.h - rh - 1))
+            rx = max(x0, min(rx, x1 - rw))
+            ry = max(y0, min(ry, y1 - rh))
+            rw = min(rw, x1 - rx)
+            rh = min(rh, y1 - ry)
+            if rw < min_room or rh < min_room:
+                continue
+            for dy in range(rh):
+                for dx in range(rw):
+                    col[ry + dy][rx + dx] = _TCOL_PASS
+            lf.room = (rx + rw // 2, ry + rh // 2)
+            rooms.append(lf.room)
+
+        # --- MST + loop corridors ---
+        if len(rooms) >= 2:
+            heap: list[tuple[int, int, int]] = []
+            for i in range(len(rooms)):
+                for j in range(i + 1, len(rooms)):
+                    d = abs(rooms[i][0] - rooms[j][0]) + abs(rooms[i][1] - rooms[j][1])
+                    heapq.heappush(heap, (d, i, j))
+
+            par = list(range(len(rooms)))
+
+            def _find(n: int) -> int:
+                while par[n] != n:
+                    par[n] = par[par[n]]
+                    n = par[n]
+                return n
+
+            def _union(a: int, b: int) -> None:
+                par[_find(a)] = _find(b)
+
+            mst_e: list[tuple[int, int]] = []
+            extra_e: list[tuple[int, int]] = []
+            while heap:
+                _, i, j = heapq.heappop(heap)
+                if _find(i) == _find(j):
+                    extra_e.append((i, j))
+                else:
+                    _union(i, j)
+                    mst_e.append((i, j))
+
+            for i, j in mst_e:
+                self._td_carve_tunnel(col, gw, gh, rooms[i], rooms[j], rng, corridor_w)
+
+            if extra_e and loop_pct > 0:
+                n_loops = max(1, int(len(extra_e) * loop_pct / 100))
+                for i, j in rng.sample(extra_e, min(n_loops, len(extra_e))):
+                    self._td_carve_tunnel(col, gw, gh, rooms[i], rooms[j], rng, corridor_w)
+
+        # --- Water (ponds only — rivers don't fit well in corridor maps) ---
+        if gen_water and gw > 4 and gh > 4:
+            for _ in range(max(1, (gw * gh) // 300)):
+                sx = rng.randint(2, gw - 3)
+                sy = rng.randint(2, gh - 3)
+                if col[sy][sx] != _TCOL_PASS:
+                    continue
+                blob_size = rng.randint(2, max(3, (gw * gh) // 150))
+                q2: list[tuple[int, int]] = [(sx, sy)]
+                vis2: set[tuple[int, int]] = {(sx, sy)}
+                placed = 0
+                while q2 and placed < blob_size:
+                    bx, by = q2.pop(rng.randint(0, len(q2) - 1))
+                    if col[by][bx] == _TCOL_PASS:
+                        col[by][bx] = _TCOL_DAMAGE
+                        placed += 1
+                    for ddx, ddy in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+                        nx2, ny2 = bx + ddx, by + ddy
+                        if (1 <= nx2 < gw - 1 and 1 <= ny2 < gh - 1
+                                and (nx2, ny2) not in vis2
+                                and col[ny2][nx2] == _TCOL_PASS):
+                            vis2.add((nx2, ny2))
+                            q2.append((nx2, ny2))
+
         return col
 
     def _gen_shmup(self, rng: random.Random, gw: int, gh: int) -> list[list[int]]:
@@ -10641,11 +11181,78 @@ class LevelTab(QWidget):
         rng  = random.Random(seed)
         gw, gh = self._grid_w, self._grid_h
 
+        # Snapshot BEFORE any changes so Ctrl+Z restores the pre-generation state
+        self._push_undo()
+
         # Generate/update collision map depending on mode
         if mode == "platformer":
             self._col_map = self._gen_platformer(rng, gw, gh)
         elif mode == "topdown":
-            self._col_map = self._gen_topdown(rng, gw, gh, bool(self._chk_dir_walls.isChecked()))
+            _dir_walls = bool(self._chk_dir_walls.isChecked())
+            _gen_water = bool(self._chk_td_water.isChecked())
+            _bn = bool(self._chk_td_border_n.isChecked())
+            _bs = bool(self._chk_td_border_s.isChecked())
+            _be = bool(self._chk_td_border_e.isChecked())
+            _bw = bool(self._chk_td_border_w.isChecked())
+            _td_mode = self._combo_td_gen_mode.currentData() or "scatter"
+            _corridor_w = 1  # overridden in BSP branch
+
+            if _td_mode == "bsp":
+                _out_w = self._spin_td_bsp_out_w.value()
+                _out_h = self._spin_td_bsp_out_h.value()
+                bsp_gw = _out_w if _out_w >= 6 else gw
+                bsp_gh = _out_h if _out_h >= 6 else gh
+                _sprite_sz = self._spin_td_bsp_sprite.value()
+                _corridor_w = _sprite_sz + 1
+                col = self._gen_topdown_bsp(
+                    rng, bsp_gw, bsp_gh,
+                    gen_water=_gen_water,
+                    border_n=_bn, border_s=_bs, border_e=_be, border_w=_bw,
+                    bsp_depth=self._spin_td_bsp_depth.value(),
+                    loop_pct=self._spin_td_loop_pct.value(),
+                    corridor_w=_corridor_w,
+                )
+                if bsp_gw != gw or bsp_gh != gh:
+                    gw, gh = bsp_gw, bsp_gh
+                    self._grid_w, self._grid_h = gw, gh
+                    self._spin_gw.blockSignals(True)
+                    self._spin_gh.blockSignals(True)
+                    self._spin_gw.setValue(gw)
+                    self._spin_gh.setValue(gh)
+                    self._spin_gw.blockSignals(False)
+                    self._spin_gh.blockSignals(False)
+                    self._on_size_changed()
+            else:
+                col = self._gen_topdown(
+                    rng, gw, gh,
+                    dir_walls=False,        # applied below after flood-fix
+                    wall_dens=self._spin_wall_dens.value() / 100.0,
+                    gen_int_walls=bool(self._chk_td_int_walls.isChecked()),
+                    gen_water=_gen_water,
+                    border_n=_bn, border_s=_bs, border_e=_be, border_w=_bw,
+                )
+                if self._chk_td_ca.isChecked():
+                    self._td_cellular_smooth(col, gw, gh)
+
+            # Shared post-processing for both modes
+            _flood_cw = _corridor_w if _td_mode == "bsp" else 1
+            self._td_flood_fix(col, gw, gh, rng, corridor_w=_flood_cw)
+            if _dir_walls:
+                self._apply_dir_walls(col, gw, gh)
+                # Border corners: only assign if both adjacent border tiles are
+                # already directional (wall/corner), so BSP maps with solid-only
+                # borders don't get phantom corner tiles at the 4 screen edges.
+                _dw = {_TCOL_WALL_N, _TCOL_WALL_S, _TCOL_WALL_E, _TCOL_WALL_W,
+                       _TCOL_CORNER_NE, _TCOL_CORNER_NW, _TCOL_CORNER_SE, _TCOL_CORNER_SW}
+                if _bn and _bw and col[0][1] in _dw and col[1][0] in _dw:
+                    col[0][0] = _TCOL_CORNER_SE
+                if _bn and _be and col[0][gw-2] in _dw and col[1][gw-1] in _dw:
+                    col[0][gw-1] = _TCOL_CORNER_SW
+                if _bs and _bw and col[gh-1][1] in _dw and col[gh-2][0] in _dw:
+                    col[gh-1][0] = _TCOL_CORNER_NE
+                if _bs and _be and col[gh-1][gw-2] in _dw and col[gh-2][gw-1] in _dw:
+                    col[gh-1][gw-1] = _TCOL_CORNER_NW
+            self._col_map = col
         elif mode == "shmup":
             self._col_map = self._gen_shmup(rng, gw, gh)
         elif mode == "open":
@@ -10832,7 +11439,6 @@ class LevelTab(QWidget):
                     new_entities.append(self._make_entity(t, pos[0], pos[1]))
                     _mark_used(t, pos[0], pos[1])
 
-        self._push_undo()
         self._entities = new_entities
         self._selected = -1
 

@@ -5115,14 +5115,13 @@ def write_autorun_main_c(
             _p_sc = p.get("slot_count", 4)
             _p_off_v = _p_slot_offsets[idx]
             slot = f"(u8)({player_spr_base} + {_p_off_v}u)" if _p_off_v else f"(u8){player_spr_base}"
-            _spr_pri = "SPR_FRONT" if str((p.get("ctrl") or {}).get("spr_priority", "middle")).lower() == "front" else "SPR_MIDDLE"
-            c.append(f"                if (player_render_idx == {idx}u) ngpng_player_layer_sync({slot}, {_p_sc}u, (s16)(s_{n}.x + player_render_off_x), (s16)(s_{n}.y + player_render_off_y), s_{n}.frame, {n}_anim, {n}_anim_count, (u8)({_spr_pri} | (s_{n}.face_hflip ? SPR_HFLIP : 0u) | (s_{n}.face_vflip ? SPR_VFLIP : 0u)), &s_{n}_visible, &s_{n}_last_x, &s_{n}_last_y, &s_{n}_last_frame, &s_{n}_last_flags);\n")
+            c.append(f"                if (player_render_idx == {idx}u) ngpng_player_layer_sync({slot}, {_p_sc}u, (s16)(s_{n}.x + player_render_off_x), (s16)(s_{n}.y + player_render_off_y), s_{n}.frame, {n}_anim, {n}_anim_count, (u8)(g_ngpng_entity_prio | (s_{n}.face_hflip ? SPR_HFLIP : 0u) | (s_{n}.face_vflip ? SPR_VFLIP : 0u)), &s_{n}_visible, &s_{n}_last_x, &s_{n}_last_y, &s_{n}_last_frame, &s_{n}_last_flags);\n")
             c.append(f"                else {{ ngpng_sprite_hide_range({slot}, {_p_sc}u); s_{n}_visible = 0u; }}\n")
             # Layer1 draw immediately after base draw (correct OAM order)
             if p.get("has_layer1"):
                 l1_slot = f"(u8)({player_spr_base} + {p['l1_slot_base']}u)"
                 l1_slots = p["l1_slots"]
-                c.append(f"                if (player_render_idx == {idx}u) ngpng_player_layer_sync({l1_slot}, {l1_slots}u, (s16)(s_{n}.x + player_render_off_x), (s16)(s_{n}.y + player_render_off_y), s_{n}.frame, {n}_layer1_anim, {n}_layer1_anim_count, (u8)({_spr_pri} | (s_{n}.face_hflip ? SPR_HFLIP : 0u) | (s_{n}.face_vflip ? SPR_VFLIP : 0u)), &s_{n}_l1_visible, &s_{n}_l1_last_x, &s_{n}_l1_last_y, &s_{n}_l1_last_frame, &s_{n}_l1_last_flags);\n")
+                c.append(f"                if (player_render_idx == {idx}u) ngpng_player_layer_sync({l1_slot}, {l1_slots}u, (s16)(s_{n}.x + player_render_off_x), (s16)(s_{n}.y + player_render_off_y), s_{n}.frame, {n}_layer1_anim, {n}_layer1_anim_count, (u8)(g_ngpng_entity_prio | (s_{n}.face_hflip ? SPR_HFLIP : 0u) | (s_{n}.face_vflip ? SPR_VFLIP : 0u)), &s_{n}_l1_visible, &s_{n}_l1_last_x, &s_{n}_l1_last_y, &s_{n}_l1_last_frame, &s_{n}_l1_last_flags);\n")
                 c.append(f"                else {{ ngpng_sprite_hide_range({l1_slot}, {l1_slots}u); s_{n}_l1_visible = 0u; }}\n")
         c.append("            } else {\n")
         for idx, p in enumerate(players):
@@ -5130,16 +5129,14 @@ def write_autorun_main_c(
             _p_sc = p.get("slot_count", 4)
             _p_off_v = _p_slot_offsets[idx]
             slot = f"(u8)({player_spr_base} + {_p_off_v}u)" if _p_off_v else f"(u8){player_spr_base}"
-            _spr_pri = "SPR_FRONT" if str((p.get("ctrl") or {}).get("spr_priority", "middle")).lower() == "front" else "SPR_MIDDLE"
-            c.append(f"                ngpng_player_layer_sync({slot}, {_p_sc}u, (s16)(s_{n}.x + player_render_off_x), (s16)(s_{n}.y + player_render_off_y), s_{n}.frame, {n}_anim, {n}_anim_count, (u8)({_spr_pri} | (s_{n}.face_hflip ? SPR_HFLIP : 0u) | (s_{n}.face_vflip ? SPR_VFLIP : 0u)), &s_{n}_visible, &s_{n}_last_x, &s_{n}_last_y, &s_{n}_last_frame, &s_{n}_last_flags);\n")
+            c.append(f"                ngpng_player_layer_sync({slot}, {_p_sc}u, (s16)(s_{n}.x + player_render_off_x), (s16)(s_{n}.y + player_render_off_y), s_{n}.frame, {n}_anim, {n}_anim_count, (u8)(g_ngpng_entity_prio | (s_{n}.face_hflip ? SPR_HFLIP : 0u) | (s_{n}.face_vflip ? SPR_VFLIP : 0u)), &s_{n}_visible, &s_{n}_last_x, &s_{n}_last_y, &s_{n}_last_frame, &s_{n}_last_flags);\n")
         # Layer1 draws in single-form branch
         for idx, p in enumerate(players):
             if p.get("has_layer1"):
                 n = p["name"]
                 l1_slot = f"(u8)({player_spr_base} + {p['l1_slot_base']}u)"
                 l1_slots = p["l1_slots"]
-                _spr_pri = "SPR_FRONT" if str((p.get("ctrl") or {}).get("spr_priority", "middle")).lower() == "front" else "SPR_MIDDLE"
-                c.append(f"                ngpng_player_layer_sync({l1_slot}, {l1_slots}u, (s16)(s_{n}.x + player_render_off_x), (s16)(s_{n}.y + player_render_off_y), s_{n}.frame, {n}_layer1_anim, {n}_layer1_anim_count, (u8)({_spr_pri} | (s_{n}.face_hflip ? SPR_HFLIP : 0u) | (s_{n}.face_vflip ? SPR_VFLIP : 0u)), &s_{n}_l1_visible, &s_{n}_l1_last_x, &s_{n}_l1_last_y, &s_{n}_l1_last_frame, &s_{n}_l1_last_flags);\n")
+                c.append(f"                ngpng_player_layer_sync({l1_slot}, {l1_slots}u, (s16)(s_{n}.x + player_render_off_x), (s16)(s_{n}.y + player_render_off_y), s_{n}.frame, {n}_layer1_anim, {n}_layer1_anim_count, (u8)(g_ngpng_entity_prio | (s_{n}.face_hflip ? SPR_HFLIP : 0u) | (s_{n}.face_vflip ? SPR_VFLIP : 0u)), &s_{n}_l1_visible, &s_{n}_l1_last_x, &s_{n}_l1_last_y, &s_{n}_l1_last_frame, &s_{n}_l1_last_flags);\n")
         c.append("            }\n")
         c.append("        } else {\n")
         for idx, p in enumerate(players):
