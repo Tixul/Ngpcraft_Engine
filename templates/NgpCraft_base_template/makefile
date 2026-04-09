@@ -14,6 +14,14 @@ NAME = main
 OBJ_DIR = build/obj
 TMP_DIR = build/tmp
 OUTPUT_DIR = bin
+
+# Path to Toshiba toolchain (cc900, asm900, tulink, tuconv, s242ngp).
+# Windows: set via system environment variables (THOME already defined by installer).
+# Linux:   set here or override with: make THOME=/path/to/toshiba
+#   Example: THOME = /home/user/toshiba
+THOME ?=
+export THOME
+
 # Auto-detect Python: prefer 'py -3' (Windows Launcher), fall back to 'python3', then 'python'
 ifeq ($(OS),Windows_NT)
     PYTHON := $(shell py -3 --version >NUL 2>&1 && echo py -3 || (python3 --version >NUL 2>&1 && echo python3 || echo python))

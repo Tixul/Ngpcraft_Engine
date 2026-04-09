@@ -283,18 +283,35 @@ Default distributed-template behavior:
 - flash save stays disabled by default (`NGP_ENABLE_FLASH_SAVE=0`)
 - enable with `make NGP_ENABLE_FLASH_SAVE=1` — no `system.lib` needed
 
-### Manual (any platform)
+### Linux
 
+The Toshiba toolchain (`cc900`, `asm900`, `tulink`, `tuconv`, `s242ngp`) runs under Wine. `build_utils.py` wraps the tools automatically — no manual Wine invocation needed.
+
+**Prerequisites:**
+```bash
+sudo apt install wine make python3
 ```
-export THOME=/path/to/T900
-export PATH=$PATH:$THOME/bin
+
+**Set `THOME` in the makefile** (edit once, no shell config needed):
+```makefile
+# makefile
+THOME = /home/user/toshiba
+```
+Or pass it on the command line:
+```bash
+make THOME=/home/user/toshiba
+```
+
+**Build:**
+```bash
 make clean && make && make move_files
 ```
 
-Manual build checklist:
-- `cc900`, `asm900`, `tulink`, `tuconv`, `s242ngp` reachable in `PATH`
-- `make` reachable in `PATH`
-- Python available for `tools/build_utils.py`
+Linux build checklist:
+- `wine` installed and working
+- `THOME` pointing to the Toshiba toolchain folder (must contain `BIN/cc900.exe`, `BIN/asm900.exe`, etc.)
+- `make` and `python3` available
+- `.asm` CRLF normalization is handled automatically by `build_utils.py`
 
 Enable flash save (no system.lib required):
 

@@ -15,6 +15,9 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+
+_IS_WINDOWS = sys.platform == "win32"
 
 
 def _safe_remove(path: str) -> None:
@@ -22,6 +25,58 @@ def _safe_remove(path: str) -> None:
         os.remove(path)
     except FileNotFoundError:
         pass
+
+
+def _resolve_tool(name: str) -> list[str]:
+    """Return the command list to invoke a Toshiba tool.
+
+    On Windows: find name.exe via THOME or PATH.
+    On Linux:   same lookup, but prepend 'wine'. Falls back to a plain
+                shell wrapper named <name> if one exists in PATH (no wine needed).
+    """
+    exe_name = name + ".exe"
+    thome = os.environ.get("THOME", "")
+    thome_path = os.path.join(thome, "BIN", exe_name) if thome else ""
+
+    if _IS_WINDOWS:
+        path = thome_path if (thome_path and os.path.exists(thome_path)) else shutil.which(exe_name) or shutil.which(name)
+        if not path:
+            print(f"{exe_name} not found (set THOME or PATH).", file=sys.stderr)
+            return []
+        return [path]
+    else:
+        # Linux: prefer a plain wrapper script (no wine needed), then wine + .exe
+        wrapper = shutil.which(name)
+        if wrapper:
+            return [wrapper]
+        exe_path = thome_path if (thome_path and os.path.exists(thome_path)) else shutil.which(exe_name)
+        if not exe_path:
+            print(f"{exe_name} not found (set THOME or PATH).", file=sys.stderr)
+            return []
+        wine = shutil.which("wine")
+        if not wine:
+            print("wine not found. Install wine to run Toshiba tools on Linux.", file=sys.stderr)
+            return []
+        return [wine, exe_path]
+
+
+def _ensure_crlf(src: str) -> tuple[str, bool]:
+    """On Linux, copy src to a temp file with CRLF endings for ASM900.
+    Returns (path_to_use, is_temp). Caller must delete temp if is_temp=True.
+    """
+    if _IS_WINDOWS:
+        return src, False
+    with open(src, "rb") as f:
+        data = f.read()
+    if b"\r\n" in data:
+        return src, False
+    crlf_data = data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+    tmp = tempfile.NamedTemporaryFile(
+        suffix=".asm", dir=os.path.dirname(os.path.abspath(src)), delete=False
+    )
+    tmp.write(crlf_data)
+    tmp.close()
+    return tmp.name, True
 
 
 def cmd_clean() -> int:
@@ -85,27 +140,30 @@ def cmd_asm(src: str, obj: str) -> int:
 
     os.makedirs(os.path.dirname(obj) or ".", exist_ok=True)
 
-    thome = os.environ.get("THOME", "")
-    asm900_from_thome = os.path.join(thome, "BIN", "asm900.exe") if thome else ""
-    asm900 = asm900_from_thome if (asm900_from_thome and os.path.exists(asm900_from_thome)) else shutil.which("asm900")
-    if not asm900:
-        print("asm900 not found (set THOME or PATH).", file=sys.stderr)
+    asm900_cmd = _resolve_tool("asm900")
+    if not asm900_cmd:
         return 2
 
-    # asm900 always writes <source_basename>.rel next to the source file.
-    # Run it from the source directory so the output lands predictably.
-    src_dir = os.path.dirname(src) or "."
-    src_name = os.path.basename(src)
-    rel_name = os.path.splitext(src_name)[0] + ".rel"
-    rel_out = os.path.join(src_dir, rel_name)
+    # ASM900 requires CRLF line endings; normalize on Linux.
+    crlf_src, is_temp = _ensure_crlf(src)
+    try:
+        # asm900 always writes <source_basename>.rel next to the source file.
+        # Run it from the source directory so the output lands predictably.
+        src_dir = os.path.dirname(crlf_src) or "."
+        src_name = os.path.basename(crlf_src)
+        rel_name = os.path.splitext(os.path.basename(src))[0] + ".rel"
+        rel_out = os.path.join(os.path.dirname(src) or ".", rel_name)
 
-    result = subprocess.run(
-        [asm900, "-g", src_name],
-        cwd=src_dir,
-        check=False,
-    )
-    if result.returncode != 0:
-        return result.returncode
+        result = subprocess.run(
+            asm900_cmd + ["-g", src_name],
+            cwd=src_dir,
+            check=False,
+        )
+        if result.returncode != 0:
+            return result.returncode
+    finally:
+        if is_temp:
+            _safe_remove(crlf_src)
 
     # Move the .rel to the expected build/obj path.
     if os.path.normpath(rel_out) != os.path.normpath(obj):
@@ -120,16 +178,13 @@ def cmd_compile(src: str, obj: str, extra_flags: list[str]) -> int:
 
     os.makedirs(os.path.dirname(obj) or ".", exist_ok=True)
 
-    thome = os.environ.get("THOME", "")
-    cc900_from_thome = os.path.join(thome, "BIN", "cc900.exe") if thome else ""
-    cc900 = cc900_from_thome if (cc900_from_thome and os.path.exists(cc900_from_thome)) else shutil.which("cc900")
-    if not cc900:
-        print("cc900 not found (set THOME or PATH).", file=sys.stderr)
+    cc900_cmd = _resolve_tool("cc900")
+    if not cc900_cmd:
         return 2
 
     # cc900 invokes thc1/thc2 as relative paths, so it must run from its own
     # directory. Use absolute paths for source, output, and includes.
-    cc900_dir = os.path.dirname(os.path.abspath(cc900))
+    cc900_dir = os.path.dirname(os.path.abspath(cc900_cmd[-1]))
     src_abs = os.path.abspath(os.path.join(project_root, src))
     obj_abs = os.path.abspath(os.path.join(project_root, obj))
     include_flags = [
@@ -142,7 +197,7 @@ def cmd_compile(src: str, obj: str, extra_flags: list[str]) -> int:
             abs_extra_flags.append("-I" + os.path.abspath(os.path.join(project_root, flag[2:])))
         else:
             abs_extra_flags.append(flag)
-    cmd = [cc900, "-c", "-O3"] + include_flags + abs_extra_flags + [src_abs, "-o", obj_abs]
+    cmd = cc900_cmd + ["-c", "-O3"] + include_flags + abs_extra_flags + [src_abs, "-o", obj_abs]
     result = subprocess.run(
         cmd,
         cwd=cc900_dir,
@@ -153,28 +208,23 @@ def cmd_compile(src: str, obj: str, extra_flags: list[str]) -> int:
 
 def cmd_link(abs_path: str, lcf: str, link_args: list[str]) -> int:
     """Invoke tulink then tuconv using THOME for tool discovery."""
-    thome = os.environ.get("THOME", "")
-    tulink_from_thome = os.path.join(thome, "BIN", "tulink.exe") if thome else ""
-    tulink = tulink_from_thome if (tulink_from_thome and os.path.exists(tulink_from_thome)) else shutil.which("tulink")
-    if not tulink:
-        print("tulink not found (set THOME or PATH).", file=sys.stderr)
+    tulink_cmd = _resolve_tool("tulink")
+    if not tulink_cmd:
         return 2
 
-    tuconv_from_thome = os.path.join(thome, "BIN", "tuconv.exe") if thome else ""
-    tuconv = tuconv_from_thome if (tuconv_from_thome and os.path.exists(tuconv_from_thome)) else shutil.which("tuconv")
-    if not tuconv:
-        print("tuconv not found (set THOME or PATH).", file=sys.stderr)
+    tuconv_cmd = _resolve_tool("tuconv")
+    if not tuconv_cmd:
         return 2
 
     result = subprocess.run(
-        [tulink, "-la", "-o", abs_path, lcf] + link_args,
+        tulink_cmd + ["-la", "-o", abs_path, lcf] + link_args,
         check=False,
     )
     if result.returncode != 0:
         return result.returncode
 
     result = subprocess.run(
-        [tuconv, "-Fs24", abs_path],
+        tuconv_cmd + ["-Fs24", abs_path],
         check=False,
     )
     return result.returncode
@@ -185,15 +235,12 @@ def cmd_s242ngp(s24_path: str) -> int:
     workdir = os.path.dirname(s24_path) or "."
     s24_name = os.path.basename(s24_path)
 
-    thome = os.environ.get("THOME", "")
-    s242ngp_from_thome = os.path.join(thome, "BIN", "s242ngp.exe") if thome else ""
-    s242ngp = s242ngp_from_thome if (s242ngp_from_thome and os.path.exists(s242ngp_from_thome)) else shutil.which("s242ngp")
-    if not s242ngp:
-        print("s242ngp not found (set THOME or PATH).", file=sys.stderr)
+    s242ngp_cmd = _resolve_tool("s242ngp")
+    if not s242ngp_cmd:
         return 2
 
     result = subprocess.run(
-        [s242ngp, s24_name],
+        s242ngp_cmd + [s24_name],
         cwd=workdir,
         check=False,
     )

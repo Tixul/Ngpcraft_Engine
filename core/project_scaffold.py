@@ -197,6 +197,13 @@ def _patch_makefile(path: Path, p: ScaffoldParams) -> None:
         lambda _: f"SYSTEM_LIB ?= {system_lib}",
         content,
     )
+    if p.compiler_path:
+        thome = p.compiler_path.strip().strip('"').replace("\\", "/")
+        content = re.sub(
+            r"(?m)^THOME\s*\?=\s*.*$",
+            lambda _: f"THOME ?= {thome}",
+            content,
+        )
     path.write_text(content, encoding="utf-8")
 
 
