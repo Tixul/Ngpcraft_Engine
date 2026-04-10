@@ -25,6 +25,7 @@
 
 ---
 https://discord.gg/zCfUBDVw to get help and stay up-to-date on the latest fixes
+
 **Visual asset pipeline and no-code game generator for Neo Geo Pocket Color homebrew.**
 
 NgpCraft Engine is a GUI tool that bridges the gap between your art and a buildable NGPC cartridge.

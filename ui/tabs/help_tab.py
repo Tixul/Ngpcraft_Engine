@@ -3058,6 +3058,60 @@ if (pat != 0xFF) {
 }</pre>
 <p><b>RAM :</b> 34 octets par entité (<code>NgpcMotionBuf</code>). Les step arrays et la pattern table sont en ROM (NGP_FAR).</p>
 
+<h2>Affichage contextuel — pourquoi certains champs disparaissent</h2>
+<p>L'onglet Hitbox affiche <b>seulement les paramètres pertinents</b> pour le type d'entité courant.
+Si vous ouvrez un sprite ennemi, les champs de saut et de contrôleur PAD sont masqués automatiquement.
+Aucune donnée n'est effacée — les champs cachés sont juste repliés.</p>
+
+<h3>Profils physiques détectés automatiquement</h3>
+<table>
+  <tr><th>Profil</th><th>Condition de déclenchement</th><th>Champs affichés</th></tr>
+  <tr><td><b>Platformer / Saut</b></td><td><code>move_type=2</code> ou scène de type platformer</td><td>Saut, gravité, chute max, accel/décel, friction</td></tr>
+  <tr><td><b>Top-down 4/8 dir</b></td><td>Présence de props top-down, scène RPG/tactical, ou frames directionnelles</td><td>Vitesse, axes X/Y, flip dir</td></tr>
+  <tr><td><b>Véhicule top-down</b></td><td><code>td_move=2</code> ou scène de type race</td><td>Tout le bloc top-down (td_speed_max, td_accel, td_brake…)</td></tr>
+  <tr><td><b>Défilement forcé</b></td><td><code>move_type=3</code> ou scène shmup</td><td>Axes X/Y uniquement</td></tr>
+  <tr><td><b>Aucune physique</b></td><td>Pas de propriété physique configurée, entité statique</td><td>Bandeau informatif (les paramètres physiques restent accessibles)</td></tr>
+</table>
+
+<h3>Profils de rôle détectés automatiquement</h3>
+<table>
+  <tr><th>Rôle</th><th>Condition</th><th>Sections activées</th></tr>
+  <tr><td><b>Joueur</b></td><td><code>ctrl.role=player</code> ou <code>gameplay_role=player</code></td><td>Contrôleur PAD + Physique complète + Combat</td></tr>
+  <tr><td><b>Ennemi</b></td><td><code>gameplay_role=enemy</code></td><td>Combat, Hurtbox, PV, dégâts</td></tr>
+  <tr><td><b>PNJ</b></td><td><code>gameplay_role=npc</code></td><td>Combat si HP/dégâts configurés</td></tr>
+  <tr><td><b>Prop / Décor</b></td><td>Aucun rôle explicite</td><td>Hitbox seule, pas de Combat (sauf données présentes)</td></tr>
+</table>
+
+<h2>Config. rapide et override de contexte</h2>
+<p>En haut du panneau droit, une ligne compacte permet de <b>forcer le contexte</b> quand la détection automatique est insuffisante :</p>
+<ul>
+  <li><b>Config. rapide…</b> : ouvre un dialog avec des presets prêts à l'emploi (Joueur Platformer, Joueur Shmup, Joueur Top-down, Joueur Véhicule, Ennemi, PNJ, Prop/Décor). Sélectionner un preset adapte immédiatement les sections visibles. <b>Aucune valeur numérique n'est modifiée.</b></li>
+  <li><b>Combo Rôle</b> : force le profil de rôle (Joueur, Ennemi, PNJ, Prop). Défaut = Auto.</li>
+  <li><b>Combo Physique</b> : force le profil physique (Platformer/Saut, Top-down, Véhicule, Défilement, Aucune). Défaut = Auto.</li>
+</ul>
+<p>Quand un axe est sur Auto, la déduction automatique s'applique. Toute valeur non-Auto prime sur l'auto-détection. Le contexte forcé est sauvegardé dans <code>sprite_meta["display_hint"]</code> avec le sprite — il est rechargé automatiquement à la prochaine ouverture.</p>
+<p><b>Quand utiliser l'override ?</b> Surtout sur les sprites nouvellement créés (pas encore de <code>ctrl.role</code> ni de props configurées) ou quand un sprite polyvalent doit montrer des champs spécifiques.</p>
+
+<h2>Champs avancés et badges pipeline</h2>
+<p>Le bouton <b>Afficher les champs avancés</b> (en bas du panneau) développe le groupe <b>Avancé</b> et révèle des champs peu fréquents :</p>
+<table>
+  <tr><th>Champ</th><th>Pourquoi dans Avancé</th></tr>
+  <tr><td><b>Poids</b></td><td>Rarement ajusté — le comportement par défaut convient dans la plupart des cas</td></tr>
+  <tr><td><b>Direction gravité</b></td><td>Pertinent uniquement pour les jeux avec gravité inversée</td></tr>
+  <tr><td><b>Tag IA</b> (behavior)</td><td>Métadonnée sprite uniquement — le vrai comportement IA se configure dans Level</td></tr>
+  <tr><td><b>Type ID</b></td><td>Tag libre pour votre runtime, rarement nécessaire côté Hitbox</td></tr>
+</table>
+<p>En mode avancé, des <b>badges colorés</b> apparaissent à droite de chaque champ pour indiquer dans quel pipeline la valeur est utilisée.
+Survolez un badge pour obtenir une explication complète :</p>
+<table>
+  <tr><th>Badge</th><th>Couleur</th><th>Signification</th></tr>
+  <tr><td><b>CTRL</b></td><td>Vert foncé</td><td>Va dans <code>_ctrl.h</code> — contrôleur joueur. Partagé par toutes les instances.</td></tr>
+  <tr><td><b>PROPS</b></td><td>Brun-orange</td><td>Compilé en ROM dans <code>_props.h</code> — données statiques par type de sprite.</td></tr>
+  <tr><td><b>SCENE</b></td><td>Bleu</td><td>Stocké dans la scène — peut différer par instance dans Level.</td></tr>
+  <tr><td><b>TAG</b></td><td>Gris</td><td>Métadonnée seulement — n'affecte pas directement la physique runtime.</td></tr>
+</table>
+<p>Les badges n'affectent pas la sauvegarde ni l'export — ils sont purement informatifs.</p>
+
 <h2>Tips</h2>
 <ul>
   <li><b>Hitbox centrée standard</b> : sprite 16×16 → <code>x=−8, y=−8, w=16, h=16</code>. Shmup réduit : <code>x=−3, y=−3, w=6, h=6</code>.</li>
@@ -3066,6 +3120,8 @@ if (pat != 0xFF) {
   <li><b>Deux coups différents sur un même sprite</b> : créer deux boîtes avec des <b>État anim</b> différents (ex. <code>attack</code> et <code>special</code>). Le runtime filtre automatiquement.</li>
   <li><b>Pattern sans → Anim</b> : laisser la colonne vide — le dispatch table n'est pas généré, gérer dans un <code>switch(pat)</code>.</li>
   <li><b>Panneau droit trop chargé ?</b> Repliez les sections Contrôleur, Motion Patterns et Animation si vous ne faites que des hurtboxes.</li>
+  <li><b>Sprite nouveau sans contexte ?</b> Cliquez <b>Config. rapide…</b> et choisissez le type — l'affichage s'adapte immédiatement.</li>
+  <li><b>Champ attendu absent ?</b> Ouvrez le groupe <b>Avancé</b> ou forcez la Physique/Rôle avec les combos en haut du panneau.</li>
 </ul>
 """
 
@@ -3955,6 +4011,60 @@ if (pat != 0xFF) {
 }</pre>
 <p><b>RAM:</b> 34 bytes per entity (<code>NgpcMotionBuf</code>). Step arrays and pattern table are ROM data (NGP_FAR).</p>
 
+<h2>Contextual display — why some fields disappear</h2>
+<p>The Hitbox tab shows <b>only the parameters relevant</b> to the current entity type.
+If you open an enemy sprite, jump and PAD controller fields are automatically hidden.
+No data is deleted — hidden fields are simply collapsed.</p>
+
+<h3>Physics profiles (auto-detected)</h3>
+<table>
+  <tr><th>Profile</th><th>Trigger condition</th><th>Fields shown</th></tr>
+  <tr><td><b>Platformer / Jump</b></td><td><code>move_type=2</code> or platformer scene</td><td>Jump force, gravity, max fall speed, accel/decel, friction</td></tr>
+  <tr><td><b>Top-down 4/8 dir</b></td><td>Top-down props present, RPG/tactical scene, or dir frames</td><td>Speed, axis X/Y, flip dir</td></tr>
+  <tr><td><b>Top-down vehicle</b></td><td><code>td_move=2</code> or race scene</td><td>Full top-down block (td_speed_max, td_accel, td_brake…)</td></tr>
+  <tr><td><b>Forced scroll</b></td><td><code>move_type=3</code> or shmup scene</td><td>Axis X/Y only</td></tr>
+  <tr><td><b>No physics</b></td><td>No physics properties configured, static entity</td><td>Info banner (physics params remain accessible)</td></tr>
+</table>
+
+<h3>Role profiles (auto-detected)</h3>
+<table>
+  <tr><th>Role</th><th>Condition</th><th>Sections enabled</th></tr>
+  <tr><td><b>Player</b></td><td><code>ctrl.role=player</code> or <code>gameplay_role=player</code></td><td>PAD controller + full physics + combat</td></tr>
+  <tr><td><b>Enemy</b></td><td><code>gameplay_role=enemy</code></td><td>Combat, hurtbox, HP, damage</td></tr>
+  <tr><td><b>NPC</b></td><td><code>gameplay_role=npc</code></td><td>Combat only if HP/damage configured</td></tr>
+  <tr><td><b>Prop / Decor</b></td><td>No explicit role</td><td>Hurtbox only, no combat (unless data present)</td></tr>
+</table>
+
+<h2>Quick setup and context override</h2>
+<p>At the top of the right panel, a compact row lets you <b>force the display context</b> when auto-detection is not sufficient:</p>
+<ul>
+  <li><b>Quick setup…</b>: opens a dialog with ready-to-use presets (Player Platformer, Player Shmup, Player Top-down, Player Vehicle, Enemy, NPC, Prop/Decor). Selecting a preset instantly adjusts which sections are visible. <b>No numeric values are changed.</b></li>
+  <li><b>Role combo</b>: force the role profile (Player, Enemy, NPC, Prop). Default = Auto.</li>
+  <li><b>Physics combo</b>: force the physics profile (Platformer/Jump, Top-down, Vehicle, Scroll, None). Default = Auto.</li>
+</ul>
+<p>When an axis is set to Auto, the automatic deduction applies. Any non-Auto value overrides the auto-detection. The forced context is saved in <code>sprite_meta["display_hint"]</code> with the sprite — it is reloaded automatically next time.</p>
+<p><b>When to use the override?</b> Mainly on newly created sprites (no <code>ctrl.role</code> or props configured yet), or when a general-purpose sprite needs to show specific fields.</p>
+
+<h2>Advanced fields and pipeline badges</h2>
+<p>The <b>Show advanced fields</b> button (in the panel) expands the <b>Advanced</b> group and reveals less-common fields:</p>
+<table>
+  <tr><th>Field</th><th>Why it's in Advanced</th></tr>
+  <tr><td><b>Weight</b></td><td>Rarely adjusted — the default behaviour covers most cases</td></tr>
+  <tr><td><b>Gravity direction</b></td><td>Only relevant for games with reversed gravity</td></tr>
+  <tr><td><b>AI tag</b> (behavior)</td><td>Sprite metadata only — actual AI behaviour is configured in Level</td></tr>
+  <tr><td><b>Type ID</b></td><td>Free tag for your runtime, rarely needed from the Hitbox side</td></tr>
+</table>
+<p>In advanced mode, <b>coloured badges</b> appear to the right of each field to show which pipeline consumes the value.
+Hover over a badge for a full explanation:</p>
+<table>
+  <tr><th>Badge</th><th>Colour</th><th>Meaning</th></tr>
+  <tr><td><b>CTRL</b></td><td>Dark green</td><td>Goes into <code>_ctrl.h</code> — player controller. Shared by all instances.</td></tr>
+  <tr><td><b>PROPS</b></td><td>Brown-orange</td><td>Compiled into ROM in <code>_props.h</code> — static data per sprite type.</td></tr>
+  <tr><td><b>SCENE</b></td><td>Blue</td><td>Stored in the scene file — can differ per instance in Level.</td></tr>
+  <tr><td><b>TAG</b></td><td>Grey</td><td>Metadata only — does not directly affect runtime physics.</td></tr>
+</table>
+<p>Badges do not affect saving or export — they are purely informational.</p>
+
 <h2>Tips</h2>
 <ul>
   <li><b>Standard centred hitbox</b>: 16×16 sprite → <code>x=−8, y=−8, w=16, h=16</code>. Tight shmup ship: <code>x=−3, y=−3, w=6, h=6</code>.</li>
@@ -3963,6 +4073,8 @@ if (pat != 0xFF) {
   <li><b>Two different strikes on the same sprite</b>: create two boxes with different <b>Anim state</b> values (e.g. <code>attack</code> and <code>special</code>). The runtime filters automatically.</li>
   <li><b>Pattern with no → Anim</b>: leave the column blank — no dispatch table generated, handle it with a <code>switch(pat)</code>.</li>
   <li><b>Right panel too cluttered?</b> Collapse the Controller, Motion Patterns, and Animation sections if you are only editing hurtboxes.</li>
+  <li><b>New sprite with no context?</b> Click <b>Quick setup…</b> and choose the type — the display adjusts instantly.</li>
+  <li><b>Expected field missing?</b> Open the <b>Advanced</b> group or force the Physics/Role with the combos at the top of the panel.</li>
 </ul>
 """
 

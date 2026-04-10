@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QGridLayout,
     QInputDialog,
@@ -474,6 +475,118 @@ _PROPS_DEFAULTS: dict = {
     "td_decel_rate":          1,  # u8 — frames entre chaque tick de friction (1=chaque frame)
 }
 
+# Pipeline badge mapping: prop_key → list of pipelines that consume it.
+# Shown in Advanced mode only. Up to 2 badges per row.
+# SCENE = runtime scène natif, CTRL = _ctrl.h, PROPS = _props.h, TAG = métadonnée
+_PROP_PIPELINES: dict[str, list[str]] = {
+    "max_speed":            ["CTRL", "SCENE"],
+    "sprint_speed":         ["CTRL"],
+    "accel":                ["CTRL", "PROPS"],
+    "decel":                ["PROPS"],
+    "weight":               ["PROPS"],
+    "friction":             ["CTRL", "PROPS"],
+    "brake_force":          ["CTRL"],
+    "jump_force":           ["CTRL", "PROPS"],
+    "gravity":              ["CTRL", "PROPS", "SCENE"],
+    "max_fall_speed":       ["PROPS", "SCENE"],
+    "move_type":            ["CTRL", "SCENE"],
+    "axis_x":               ["CTRL", "SCENE"],
+    "axis_y":               ["CTRL", "SCENE"],
+    "can_jump":             ["CTRL", "SCENE"],
+    "gravity_dir":          ["PROPS"],
+    "shoot_cooldown":       ["CTRL"],
+    "bullet_speed":         ["CTRL"],
+    "bullet_ttl":           ["CTRL"],
+    "bullet_w":             ["CTRL"],
+    "bullet_h":             ["CTRL"],
+    "hp":                   ["PROPS", "SCENE"],
+    "damage":               ["PROPS", "SCENE"],
+    "inv_frames":           ["PROPS"],
+    "td_control":           ["SCENE"],
+    "td_move":              ["SCENE"],
+    "td_speed_max":         ["SCENE"],
+    "td_speed_max_reverse": ["SCENE"],
+    "td_accel":             ["SCENE"],
+    "td_brake":             ["SCENE"],
+    "td_friction":          ["SCENE"],
+    "td_turn_rate":         ["SCENE"],
+    "td_decel_rate":        ["SCENE"],
+    "behavior":             ["TAG"],
+    "score":                ["PROPS", "SCENE"],
+    "anim_spd":             ["SCENE"],
+    "type_id":              ["PROPS"],
+    "flip_x_dir":           ["SCENE"],
+}
+
+_BADGE_STYLE: dict[str, str] = {
+    "SCENE":  "background:#2a5080;color:white;border-radius:2px;padding:0 3px;font-size:7pt;",
+    "CTRL":   "background:#2a6040;color:white;border-radius:2px;padding:0 3px;font-size:7pt;",
+    "PROPS":  "background:#704020;color:white;border-radius:2px;padding:0 3px;font-size:7pt;",
+    "TAG":    "background:#505050;color:white;border-radius:2px;padding:0 3px;font-size:7pt;",
+    "MODULE": "background:#404080;color:white;border-radius:2px;padding:0 3px;font-size:7pt;",
+}
+
+# Concrete tooltip per pipeline — shown on badge hover in advanced mode.
+# Keyed by pipeline name, value is an i18n key resolved at widget creation time.
+_BADGE_TOOLTIP_KEY: dict[str, str] = {
+    "SCENE":  "hitbox.badge_tt_scene",
+    "CTRL":   "hitbox.badge_tt_ctrl",
+    "PROPS":  "hitbox.badge_tt_props",
+    "TAG":    "hitbox.badge_tt_tag",
+    "MODULE": "hitbox.badge_tt_module",
+}
+
+
+# Quick-setup presets: (i18n_key, role_value, physics_value)
+# role_value / physics_value = "" means "don't override that axis"
+_QUICK_PRESETS: list[tuple[str, str, str]] = [
+    ("hitbox.preset_player_platformer",  "player",  "phys_jump"),
+    ("hitbox.preset_player_shmup",       "player",  "phys_scroll"),
+    ("hitbox.preset_player_topdown",     "player",  "phys_topdown_dir"),
+    ("hitbox.preset_player_vehicle",     "player",  "phys_topdown_vehicle"),
+    ("hitbox.preset_enemy",              "enemy",   ""),
+    ("hitbox.preset_npc",                "npc",     ""),
+    ("hitbox.preset_prop",               "prop",    "phys_none"),
+]
+
+
+class _QuickSetupDialog(QDialog):
+    """Small modal dialog with preset buttons for quick entity context setup."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.selected_role: str = ""
+        self.selected_physics: str = ""
+        self.setWindowTitle(tr("hitbox.quick_setup_title"))
+        self.setModal(True)
+        self.setMinimumWidth(340)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        desc = QLabel(tr("hitbox.quick_setup_desc"))
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #9aa3ad; font-size: 10px;")
+        layout.addWidget(desc)
+
+        grid = QGridLayout()
+        grid.setSpacing(6)
+        for i, (key, role, phys) in enumerate(_QUICK_PRESETS):
+            btn = QPushButton(tr(key))
+            btn.setStyleSheet("padding:6px 10px; text-align:left;")
+            btn.clicked.connect(lambda _checked, r=role, p=phys: self._select(r, p))
+            grid.addWidget(btn, i // 2, i % 2)
+        layout.addLayout(grid)
+
+        cancel = QPushButton(tr("hitbox.quick_setup_cancel"))
+        cancel.clicked.connect(self.reject)
+        layout.addWidget(cancel)
+
+    def _select(self, role: str, physics: str) -> None:
+        self.selected_role = role
+        self.selected_physics = physics
+        self.accept()
+
 
 class HitboxTab(QWidget):
     """Hitbox editor tab — roadmap item B."""
@@ -498,6 +611,7 @@ class HitboxTab(QWidget):
         self._active_box_kind: str = "hurtbox"
         self._props: dict = {}
         self._prop_widgets: dict[str, tuple[QCheckBox, QSpinBox]] = {}
+        self._prop_row_widgets: dict[str, QWidget] = {}
         self._ctrl: dict = {}                  # {"role": str, "left": str|None, ...}
         self._ctrl_action_cbs: dict[str, QComboBox] = {}  # pad_name → combo of actions
         self._anims: dict = {}                 # {state: {start,count,loop,spd}}
@@ -514,6 +628,11 @@ class HitboxTab(QWidget):
         self._updating_frame_size: bool = False
         self._rail_btns: list[tuple[QToolButton, str]] = []  # (button, rel_file)
         self._rail_anim_timers: list[QTimer] = []           # A-2: per-thumb anim timers
+        self._display_context: dict[str, object] = {}
+        self._badge_widgets: dict[str, list["QLabel"]] = {}   # prop_key → list of badge QLabels
+        self._advanced_mode: bool = False
+        # P2: display_hint override — {"role": str, "physics": str}, "" = Auto
+        self._display_hint_override: dict[str, str] = {"role": "", "physics": ""}
         # Anim preview state
         self._preview_state: Optional[str] = None
         self._preview_tick: int = 0
@@ -672,8 +791,60 @@ class HitboxTab(QWidget):
         self._lbl_checklist.setStyleSheet("color: #9aa3ad; font-size: 10px;")
         right.addWidget(self._lbl_checklist)
 
+        # ---- Context override row (P2) ----------------------------------------
+        ctx_row_w = QWidget()
+        ctx_row = QHBoxLayout(ctx_row_w)
+        ctx_row.setContentsMargins(0, 2, 0, 2)
+        ctx_row.setSpacing(6)
+
+        self._btn_quick_setup = QPushButton(tr("hitbox.btn_quick_setup"))
+        self._btn_quick_setup.setToolTip(tr("hitbox.btn_quick_setup_tt"))
+        self._btn_quick_setup.setStyleSheet("font-size:8pt; padding:2px 6px;")
+        self._btn_quick_setup.clicked.connect(self._on_quick_setup)
+        ctx_row.addWidget(self._btn_quick_setup)
+
+        ctx_row.addStretch()
+
+        _role_lbl = QLabel(tr("hitbox.ctx_role_lbl"))
+        _role_lbl.setStyleSheet("font-size:8pt;")
+        ctx_row.addWidget(_role_lbl)
+        self._combo_role_hint = QComboBox()
+        self._combo_role_hint.setToolTip(tr("hitbox.ctx_role_tt"))
+        self._combo_role_hint.setStyleSheet("font-size:8pt;")
+        for _key, _lbl in (
+            ("",       tr("hitbox.hint_auto")),
+            ("player", tr("hitbox.hint_role_player")),
+            ("enemy",  tr("hitbox.hint_role_enemy")),
+            ("npc",    tr("hitbox.hint_role_npc")),
+            ("prop",   tr("hitbox.hint_role_prop")),
+        ):
+            self._combo_role_hint.addItem(_lbl, _key)
+        self._combo_role_hint.currentIndexChanged.connect(self._on_display_hint_changed)
+        ctx_row.addWidget(self._combo_role_hint)
+
+        _phy_lbl = QLabel(tr("hitbox.ctx_phy_lbl"))
+        _phy_lbl.setStyleSheet("font-size:8pt;")
+        ctx_row.addWidget(_phy_lbl)
+        self._combo_phy_hint = QComboBox()
+        self._combo_phy_hint.setToolTip(tr("hitbox.ctx_phy_tt"))
+        self._combo_phy_hint.setStyleSheet("font-size:8pt;")
+        for _key, _lbl in (
+            ("",                      tr("hitbox.hint_auto")),
+            ("phys_jump",             tr("hitbox.hint_phys_jump")),
+            ("phys_topdown_dir",      tr("hitbox.hint_phys_topdown")),
+            ("phys_topdown_vehicle",  tr("hitbox.hint_phys_vehicle")),
+            ("phys_scroll",           tr("hitbox.hint_phys_scroll")),
+            ("phys_none",             tr("hitbox.hint_phys_none")),
+        ):
+            self._combo_phy_hint.addItem(_lbl, _key)
+        self._combo_phy_hint.currentIndexChanged.connect(self._on_display_hint_changed)
+        ctx_row.addWidget(self._combo_phy_hint)
+
+        right.addWidget(ctx_row_w)
+
         # Coordinates group
         grp = QGroupBox(tr("hitbox.coords"))
+        self._grp_coords = grp
         grp.setCheckable(True)
         grp.setChecked(True)
         _grp_outer = QVBoxLayout(grp)
@@ -848,7 +1019,7 @@ class HitboxTab(QWidget):
 
         # ---- Sprite properties (per-sprite, not per-frame) ------------------
 
-        def _props_grp(title_key: str, parent_layout: QVBoxLayout) -> QVBoxLayout:
+        def _props_grp(title_key: str, parent_layout: QVBoxLayout) -> tuple[QGroupBox, QVBoxLayout]:
             grp = QGroupBox(tr(title_key))
             grp.setCheckable(True)
             grp.setChecked(True)
@@ -861,17 +1032,19 @@ class HitboxTab(QWidget):
             grp_outer.addWidget(content_w)
             grp.toggled.connect(content_w.setVisible)
             parent_layout.addWidget(grp)
-            return gl
+            return grp, gl
 
         def _psb(gl: QVBoxLayout, prop_key: str, label_key: str, tooltip_key: str, vmax: int = 255) -> None:
-            """Build one prop row: [checkbox] [label] [spinbox]. Stores in _prop_widgets."""
-            row = QHBoxLayout()
+            """Build one prop row: [checkbox] [label] [spinbox] [badges…]. Stores in _prop_widgets."""
+            row_w = QWidget()
+            row = QHBoxLayout(row_w)
+            row.setContentsMargins(0, 0, 0, 0)
             cb = QCheckBox()
             cb.setFixedWidth(18)
             cb.setToolTip(tr(tooltip_key))
             row.addWidget(cb)
             lbl = QLabel(tr(label_key))
-            lbl.setFixedWidth(44)
+            lbl.setFixedWidth(116)
             lbl.setToolTip(tr(tooltip_key))
             row.addWidget(lbl)
             sb = QSpinBox()
@@ -879,19 +1052,50 @@ class HitboxTab(QWidget):
             sb.setEnabled(False)  # starts disabled until checked
             sb.setToolTip(tr(tooltip_key))
             row.addWidget(sb)
-            gl.addLayout(row)
+            # Pipeline badges — hidden by default, shown in advanced mode
+            badges: list[QLabel] = []
+            for pipe in _PROP_PIPELINES.get(prop_key, []):
+                badge = QLabel(pipe)
+                badge.setStyleSheet(_BADGE_STYLE.get(pipe, ""))
+                tt_key = _BADGE_TOOLTIP_KEY.get(pipe, "")
+                if tt_key:
+                    badge.setToolTip(tr(tt_key))
+                badge.setVisible(False)
+                row.addWidget(badge)
+                badges.append(badge)
+            if badges:
+                self._badge_widgets[prop_key] = badges
+            row.addStretch()
+            gl.addWidget(row_w)
             cb.toggled.connect(lambda checked, s=sb: s.setEnabled(checked))
             cb.toggled.connect(self._on_props_changed)
             sb.valueChanged.connect(self._on_props_changed)
             self._prop_widgets[prop_key] = (cb, sb)
+            self._prop_row_widgets[prop_key] = row_w
 
-        # Group 1 — Physique / Mouvement
-        gl_phy = _props_grp("hitbox.grp_physics", right)
+        # Info banner — shown for phys_none entities (no physics props relevant)
+        self._lbl_phys_none_banner = QLabel(tr("hitbox.banner_phys_none"))
+        self._lbl_phys_none_banner.setWordWrap(True)
+        self._lbl_phys_none_banner.setStyleSheet(
+            "background:#3a3a1a;color:#c8c870;border-radius:4px;padding:4px 6px;font-size:8pt;"
+        )
+        self._lbl_phys_none_banner.setVisible(False)
+        right.addWidget(self._lbl_phys_none_banner)
+
+        # Advanced mode toggle
+        self._btn_advanced = QPushButton(tr("hitbox.btn_advanced"))
+        self._btn_advanced.setCheckable(True)
+        self._btn_advanced.setChecked(False)
+        self._btn_advanced.setStyleSheet("font-size:8pt; padding:2px 8px;")
+        self._btn_advanced.toggled.connect(self._toggle_advanced_mode)
+        right.addWidget(self._btn_advanced)
+
+        # Group 1 — Physique / Mouvement (weight + gravity_dir moved to Advanced)
+        self._grp_physics, gl_phy = _props_grp("hitbox.grp_physics", right)
         _psb(gl_phy, "max_speed",      "hitbox.max_speed",      "hitbox.tt_max_speed")
         _psb(gl_phy, "sprint_speed",   "hitbox.sprint_speed",   "hitbox.tt_sprint_speed")
         _psb(gl_phy, "accel",          "hitbox.accel",          "hitbox.tt_accel")
         _psb(gl_phy, "decel",          "hitbox.decel",          "hitbox.tt_decel")
-        _psb(gl_phy, "weight",         "hitbox.weight",         "hitbox.tt_weight")
         _psb(gl_phy, "friction",       "hitbox.friction",       "hitbox.tt_friction")
         _psb(gl_phy, "brake_force",    "hitbox.brake_force",    "hitbox.tt_brake_force")
         _psb(gl_phy, "jump_force",     "hitbox.jump_force",     "hitbox.tt_jump_force")
@@ -901,10 +1105,9 @@ class HitboxTab(QWidget):
         _psb(gl_phy, "axis_x",         "hitbox.axis_x",         "hitbox.tt_axis_x",         vmax=1)
         _psb(gl_phy, "axis_y",         "hitbox.axis_y",         "hitbox.tt_axis_y",         vmax=1)
         _psb(gl_phy, "can_jump",       "hitbox.can_jump",       "hitbox.tt_can_jump",       vmax=1)
-        _psb(gl_phy, "gravity_dir",    "hitbox.gravity_dir",    "hitbox.tt_gravity_dir",    vmax=2)
 
         # Group 2 — Projectiles
-        gl_proj = _props_grp("hitbox.grp_projectiles", right)
+        self._grp_projectiles, gl_proj = _props_grp("hitbox.grp_projectiles", right)
         _psb(gl_proj, "shoot_cooldown", "hitbox.shoot_cooldown", "hitbox.tt_shoot_cooldown")
         _psb(gl_proj, "bullet_speed",   "hitbox.bullet_speed",   "hitbox.tt_bullet_speed")
         _psb(gl_proj, "bullet_ttl",     "hitbox.bullet_ttl",     "hitbox.tt_bullet_ttl")
@@ -912,13 +1115,13 @@ class HitboxTab(QWidget):
         _psb(gl_proj, "bullet_h",       "hitbox.bullet_h",       "hitbox.tt_bullet_h")
 
         # Group 3 — Combat
-        gl_cbt = _props_grp("hitbox.grp_combat", right)
+        self._grp_combat, gl_cbt = _props_grp("hitbox.grp_combat", right)
         _psb(gl_cbt, "hp",         "hitbox.hp",         "hitbox.tt_hp")
         _psb(gl_cbt, "damage",     "hitbox.damage",     "hitbox.tt_damage")
         _psb(gl_cbt, "inv_frames", "hitbox.inv_frames", "hitbox.tt_inv_frames")
 
         # Group 4 — Top-down (player only)
-        gl_td = _props_grp("hitbox.grp_topdown", right)
+        self._grp_topdown, gl_td = _props_grp("hitbox.grp_topdown", right)
         _psb(gl_td, "td_control",          "hitbox.td_control",          "hitbox.tt_td_control",          vmax=1)
         _psb(gl_td, "td_move",             "hitbox.td_move",             "hitbox.tt_td_move",              vmax=2)
         _psb(gl_td, "td_speed_max",        "hitbox.td_speed_max",        "hitbox.tt_td_speed_max")
@@ -929,15 +1132,22 @@ class HitboxTab(QWidget):
         _psb(gl_td, "td_turn_rate",        "hitbox.td_turn_rate",        "hitbox.tt_td_turn_rate")
         _psb(gl_td, "td_decel_rate",       "hitbox.td_decel_rate",       "hitbox.tt_td_decel_rate")
 
-        # Group 5 — Divers
-        gl_misc = _props_grp("hitbox.grp_misc", right)
-        _psb(gl_misc, "behavior", "hitbox.behavior", "hitbox.tt_behavior", vmax=3)
-        _psb(gl_misc, "score",    "hitbox.score",    "hitbox.tt_score")
-        _psb(gl_misc, "anim_spd", "hitbox.anim_spd", "hitbox.tt_anim_spd")
-        _psb(gl_misc, "type_id",  "hitbox.type_id",  "hitbox.tt_type_id")
+        # Group 5 — Divers (behavior + type_id moved to Advanced)
+        self._grp_misc, gl_misc = _props_grp("hitbox.grp_misc", right)
+        _psb(gl_misc, "score",      "hitbox.score",    "hitbox.tt_score")
+        _psb(gl_misc, "anim_spd",   "hitbox.anim_spd", "hitbox.tt_anim_spd_global")
         _psb(gl_misc, "flip_x_dir", "hitbox.flip_x_dir", "hitbox.tt_flip_x_dir", vmax=1)
 
+        # Group 6 — Advanced (collapsed by default; weight, gravity_dir, behavior, type_id)
+        self._grp_advanced, gl_adv = _props_grp("hitbox.grp_advanced", right)
+        self._grp_advanced.setChecked(False)   # collapsed by default
+        _psb(gl_adv, "weight",      "hitbox.weight",      "hitbox.tt_weight")
+        _psb(gl_adv, "gravity_dir", "hitbox.gravity_dir", "hitbox.tt_gravity_dir", vmax=2)
+        _psb(gl_adv, "behavior",    "hitbox.behavior",    "hitbox.tt_behavior",    vmax=3)
+        _psb(gl_adv, "type_id",     "hitbox.type_id",     "hitbox.tt_type_id")
+
         props_hint = QLabel(tr("hitbox.props_hint"))
+        self._lbl_props_hint = props_hint
         props_hint.setWordWrap(True)
         props_hint.setStyleSheet("color: gray; font-size: 10px;")
         right.addWidget(props_hint)
@@ -970,6 +1180,7 @@ class HitboxTab(QWidget):
         ]
 
         ctrl_grp = QGroupBox(tr("hitbox.grp_controller"))
+        self._grp_controller = ctrl_grp
         ctrl_grp.setToolTip(tr("hitbox.tt_ctrl_role"))
         ctrl_grp.setCheckable(True)
         ctrl_grp.setChecked(True)
@@ -1045,6 +1256,7 @@ class HitboxTab(QWidget):
 
         # ---- Motion Patterns group (ngpc_motion) ------------------------------
         motion_grp = QGroupBox(tr("hitbox.grp_motion"))
+        self._grp_motion = motion_grp
         motion_grp.setToolTip(tr("hitbox.tt_motion"))
         motion_grp.setCheckable(True)
         motion_grp.setChecked(True)
@@ -1109,6 +1321,7 @@ class HitboxTab(QWidget):
 
         # ---- Animation States group ------------------------------------------
         anim_grp = QGroupBox(tr("hitbox.grp_anims"))
+        self._grp_anims = anim_grp
         anim_grp.setToolTip(tr("hitbox.tt_anims"))
         anim_grp.setCheckable(True)
         anim_grp.setChecked(True)
@@ -1223,6 +1436,7 @@ class HitboxTab(QWidget):
 
         # ---- Directional frames group ----------------------------------------
         dir_grp = QGroupBox(tr("hitbox.grp_dir_frames"))
+        self._grp_dir_frames = dir_grp
         dir_grp_lay = QVBoxLayout(dir_grp)
         dir_grp_lay.setContentsMargins(6, 4, 6, 4)
         dir_grp_lay.setSpacing(4)
@@ -1288,6 +1502,7 @@ class HitboxTab(QWidget):
 
         # ── Named animations (ngpc_anim module) ────────────────────────────
         named_anim_grp = QGroupBox(tr("hitbox.grp_named_anims"))
+        self._grp_named_anims = named_anim_grp
         named_anim_grp.setToolTip(tr("hitbox.tt_named_anims"))
         named_anim_grp.setCheckable(True)
         named_anim_grp.setChecked(True)
@@ -1650,6 +1865,9 @@ class HitboxTab(QWidget):
         # Load ctrl config
         self._load_ctrl(sprite_meta.get("ctrl") or {})
 
+        # Load display_hint override (P2)
+        self._load_display_hint(sprite_meta.get("display_hint") or {})
+
         # Load animation states
         self._load_anims(sprite_meta.get("anims") or {})
         # Load named animations (ngpc_anim module)
@@ -1668,6 +1886,7 @@ class HitboxTab(QWidget):
             self._tabs_box_kind.blockSignals(False)
         self._stop_preview()
         self._set_controls_enabled(True)
+        self._update_section_visibility()
         self._lbl_status.setText("")
         self._refresh_frame()
         self._refresh_checklist()
@@ -1892,6 +2111,355 @@ class HitboxTab(QWidget):
             return "ok", tr("hitbox.genre_fit_topdown")
         return "ok", tr("hitbox.genre_fit_generic")
 
+    def _current_enabled_props(self) -> dict[str, int]:
+        if self._prop_widgets:
+            props: dict[str, int] = {}
+            for key, (cb, sb) in self._prop_widgets.items():
+                if cb.isChecked():
+                    props[key] = int(sb.value())
+            return props
+        raw = (self._sprite_meta or {}).get("props") or {}
+        return {
+            str(key): int(val)
+            for key, val in raw.items()
+            if key in _PROPS_DEFAULTS
+        }
+
+    def _has_configured_attack_boxes(self) -> bool:
+        if not self._attack_hitboxes:
+            return False
+        if len(self._attack_hitboxes) > 1:
+            return True
+        box = dict(self._attack_hitboxes[0] or {})
+        ref_hurt = dict(self._hurtboxes[0] if self._hurtboxes else self._default_hurtbox())
+        geom_changed = any(
+            int(box.get(axis, ref_hurt.get(axis, 0)) or 0) != int(ref_hurt.get(axis, 0) or 0)
+            for axis in ("x", "y", "w", "h")
+        )
+        if geom_changed:
+            return True
+        attack_defaults = {
+            "damage": 0,
+            "knockback_x": 0,
+            "knockback_y": 0,
+            "active_start": 0,
+            "active_len": 0,
+            "priority": 0,
+            "active_anim_state": 0xFF,
+        }
+        for key, default in attack_defaults.items():
+            if int(box.get(key, default) or default) != default:
+                return True
+        return False
+
+    def _derive_display_context(self, sprite_meta: dict | None = None) -> dict[str, object]:
+        meta = sprite_meta if isinstance(sprite_meta, dict) else (self._sprite_meta or {})
+        props = self._current_enabled_props()
+        ctrl = self._collect_ctrl() if hasattr(self, "_ctrl_role_cb") else dict(self._ctrl or {})
+        ctrl_role = str((ctrl or {}).get("role", "none") or "none").strip().lower()
+        gameplay_role = sprite_gameplay_role(meta, ctrl_role)
+        scene_profile = self._scene_profile()
+        move_type = int(props.get("move_type", _PROPS_DEFAULTS.get("move_type", 0)) or 0)
+        td_move = int(props.get("td_move", _PROPS_DEFAULTS.get("td_move", 0)) or 0)
+        td_keys = {
+            "td_control",
+            "td_move",
+            "td_speed_max",
+            "td_speed_max_reverse",
+            "td_accel",
+            "td_brake",
+            "td_friction",
+            "td_turn_rate",
+            "td_decel_rate",
+        }
+        projectile_keys = {
+            "shoot_cooldown",
+            "bullet_speed",
+            "bullet_ttl",
+            "bullet_w",
+            "bullet_h",
+        }
+        has_topdown_props = any(key in props for key in td_keys)
+        has_dir_frames = bool(self._collect_dir_frames()) if hasattr(self, "_dir_mode_combo") else bool(self._dir_frames)
+        has_motion_patterns = (
+            bool(self._collect_motion_patterns())
+            if hasattr(self, "_motion_table") else
+            bool(self._motion_patterns)
+        )
+        has_ctrl_shoot = any(key in props for key in projectile_keys) or bool((ctrl or {}).get("shoot"))
+        has_hp = "hp" in props
+        has_contact_damage = "damage" in props and int(props.get("damage", 0) or 0) > 0
+        platformer_hint = scene_profile in ("platformer", "run_gun")
+        topdown_hint = scene_profile in ("topdown_rpg", "tactical", "race")
+        vehicle_hint = scene_profile == "race"
+        scroll_hint = scene_profile in ("shmup", "rhythm")
+
+        # Bug-fix: platformer/scroll must take priority over dir_frames/topdown hints
+        # so that a platformer sprite with dir_frames doesn't lose its jump parameters.
+        if move_type == 2 or platformer_hint:
+            physics_profile = "phys_jump"
+        elif move_type == 3 or scroll_hint:
+            physics_profile = "phys_scroll"
+        elif has_topdown_props or topdown_hint or has_dir_frames or td_move != 0:
+            physics_profile = "phys_topdown_vehicle" if (td_move == 2 or vehicle_hint) else "phys_topdown_dir"
+        else:
+            physics_profile = "phys_none"
+
+        # P2: apply display_hint overrides (user-set via combos — trumps auto-detection)
+        hint = self._display_hint_override
+        if hint.get("physics"):
+            physics_profile = hint["physics"]
+        if hint.get("role") and hint["role"] in ("player", "enemy", "npc", "prop"):
+            gameplay_role = hint["role"]
+
+        return {
+            "enabled_props": props,
+            "ctrl": ctrl,
+            "ctrl_role": ctrl_role,
+            "scene_profile": scene_profile,
+            "gameplay_role": gameplay_role,
+            "move_type": move_type,
+            "td_move": td_move,
+            "physics_profile": physics_profile,
+            "topdown_active": physics_profile in ("phys_topdown_dir", "phys_topdown_vehicle"),
+            "vehicle_active": physics_profile == "phys_topdown_vehicle",
+            "has_jump_profile": physics_profile == "phys_jump",
+            "has_ctrl_shoot": has_ctrl_shoot,
+            "has_dir_frames": has_dir_frames,
+            "has_motion_patterns": has_motion_patterns,
+            "has_attack_boxes": self._has_configured_attack_boxes(),
+            "has_hp": has_hp,
+            "has_contact_damage": has_contact_damage,
+            "platformer_hint": platformer_hint,
+            "topdown_hint": topdown_hint,
+            "vehicle_hint": vehicle_hint,
+            "scroll_hint": scroll_hint,
+            "motion_hint": scene_profile in ("fighting", "brawler"),
+        }
+
+    def _set_prop_row_visible(self, key: str, visible: bool) -> None:
+        row = self._prop_row_widgets.get(key)
+        if row is not None:
+            row.setVisible(bool(visible))
+
+    def _toggle_advanced_mode(self, checked: bool) -> None:
+        """Show or hide pipeline badges and update advanced button label."""
+        self._advanced_mode = checked
+        for badges in self._badge_widgets.values():
+            for badge in badges:
+                badge.setVisible(checked)
+        if hasattr(self, "_btn_advanced"):
+            self._btn_advanced.setText(
+                tr("hitbox.btn_advanced_on") if checked else tr("hitbox.btn_advanced")
+            )
+
+    # ------------------------------------------------------------------
+    # P2 — display_hint override + quick-setup presets
+    # ------------------------------------------------------------------
+
+    def _on_display_hint_changed(self) -> None:
+        """Called when the role or physics override combo changes."""
+        if not hasattr(self, "_combo_role_hint"):
+            return
+        role = self._combo_role_hint.currentData() or ""
+        phys = self._combo_phy_hint.currentData() or ""
+        self._display_hint_override = {"role": role, "physics": phys}
+        self._update_section_visibility()
+
+    def _load_display_hint(self, hint: dict) -> None:
+        """Populate override combos from saved display_hint dict (called on sprite load)."""
+        if not hasattr(self, "_combo_role_hint"):
+            return
+        role = str(hint.get("role", "") or "")
+        phys = str(hint.get("physics", "") or "")
+        # Block signals to avoid triggering visibility update twice during load
+        for combo, value in (
+            (self._combo_role_hint, role),
+            (self._combo_phy_hint, phys),
+        ):
+            combo.blockSignals(True)
+            idx = combo.findData(value)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            combo.blockSignals(False)
+        self._display_hint_override = {"role": role, "physics": phys}
+
+    def _on_quick_setup(self) -> None:
+        """Open the quick-setup preset dialog."""
+        dlg = _QuickSetupDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        role, phys = dlg.selected_role, dlg.selected_physics
+        if not hasattr(self, "_combo_role_hint"):
+            return
+        for combo, value in (
+            (self._combo_role_hint, role),
+            (self._combo_phy_hint, phys),
+        ):
+            combo.blockSignals(True)
+            idx = combo.findData(value)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            combo.blockSignals(False)
+        self._display_hint_override = {"role": role, "physics": phys}
+        self._update_section_visibility()
+
+    def _update_section_visibility(self) -> None:
+        ctx = self._derive_display_context()
+        self._display_context = ctx
+        props = set(ctx.get("enabled_props", {}).keys())
+        ctrl_role = str(ctx.get("ctrl_role", "none") or "none")
+        gameplay_role = str(ctx.get("gameplay_role", "prop") or "prop")
+        scene_profile = str(ctx.get("scene_profile", "none") or "none")
+        physics_profile = str(ctx.get("physics_profile", "phys_none") or "phys_none")
+        player_ctx = ctrl_role == "player" or gameplay_role == "player"
+        enemy_ctx = gameplay_role == "enemy"
+        npc_ctx = gameplay_role == "npc"
+        topdown_active = bool(ctx.get("topdown_active"))
+        vehicle_active = bool(ctx.get("vehicle_active"))
+        has_dir_frames = bool(ctx.get("has_dir_frames"))
+        has_ctrl_shoot = bool(ctx.get("has_ctrl_shoot"))
+        has_motion_patterns = bool(ctx.get("has_motion_patterns"))
+        motion_hint = bool(ctx.get("motion_hint"))
+        platformer_hint = bool(ctx.get("platformer_hint"))
+        topdown_hint = bool(ctx.get("topdown_hint"))
+        has_jump_profile = bool(ctx.get("has_jump_profile"))
+
+        def _checked(*keys: str) -> bool:
+            return any(key in props for key in keys)
+
+        jump_keys = ("jump_force", "gravity", "max_fall_speed", "can_jump", "gravity_dir")
+        td_keys = (
+            "td_control",
+            "td_move",
+            "td_speed_max",
+            "td_speed_max_reverse",
+            "td_accel",
+            "td_brake",
+            "td_friction",
+            "td_turn_rate",
+            "td_decel_rate",
+        )
+        show_jump = has_jump_profile or platformer_hint or _checked(*jump_keys)
+        # Bug-fix: phys_scroll alone (non-player) should not show sprint/brake rows.
+        show_move_tuning = player_ctx or physics_profile == "phys_jump" or _checked(
+            "sprint_speed",
+            "accel",
+            "decel",
+            "friction",
+            "brake_force",
+        )
+        physics_rows = {
+            "max_speed": True,
+            "move_type": True,
+            "axis_x": True,
+            "axis_y": True,
+            "sprint_speed": player_ctx or _checked("sprint_speed"),
+            "accel": show_move_tuning,
+            "decel": show_move_tuning,
+            "friction": show_move_tuning,
+            "brake_force": player_ctx or _checked("brake_force"),
+            "jump_force": show_jump,
+            "gravity": show_jump,
+            "max_fall_speed": show_jump,
+            "can_jump": show_jump,
+        }
+        for key, visible in physics_rows.items():
+            self._set_prop_row_visible(key, visible)
+
+        show_projectiles = player_ctx or has_ctrl_shoot
+        show_topdown = topdown_active or topdown_hint or has_dir_frames or _checked(*td_keys)
+        show_motion = motion_hint or has_motion_patterns
+        show_dir_frames = has_dir_frames or topdown_active or topdown_hint
+
+        for key in ("shoot_cooldown", "bullet_speed", "bullet_ttl", "bullet_w", "bullet_h"):
+            self._set_prop_row_visible(key, show_projectiles or _checked(key))
+
+        combat_rows = {
+            "hp": True,
+            "damage": True,
+            "inv_frames": player_ctx or enemy_ctx or npc_ctx or _checked("inv_frames"),
+        }
+        for key, visible in combat_rows.items():
+            self._set_prop_row_visible(key, visible)
+
+        topdown_rows = {
+            "td_control": show_topdown,
+            "td_move": show_topdown,
+            "td_turn_rate": show_topdown,
+            "td_speed_max": vehicle_active or _checked("td_speed_max"),
+            "td_speed_max_reverse": vehicle_active or _checked("td_speed_max_reverse"),
+            "td_accel": vehicle_active or _checked("td_accel"),
+            "td_brake": vehicle_active or _checked("td_brake"),
+            "td_friction": vehicle_active or _checked("td_friction"),
+            "td_decel_rate": vehicle_active or _checked("td_decel_rate"),
+        }
+        for key, visible in topdown_rows.items():
+            self._set_prop_row_visible(key, visible)
+
+        misc_rows = {
+            "score": True,
+            "anim_spd": True,
+            "flip_x_dir": topdown_active or has_dir_frames or player_ctx or enemy_ctx or _checked("flip_x_dir"),
+        }
+        for key, visible in misc_rows.items():
+            self._set_prop_row_visible(key, visible)
+
+        # Advanced group rows — always visible when group is open
+        advanced_rows = {
+            "weight": True,
+            "gravity_dir": show_jump,
+            "behavior": True,
+            "type_id": True,
+        }
+        for key, visible in advanced_rows.items():
+            self._set_prop_row_visible(key, visible)
+
+        action_profiles = {
+            "platformer",
+            "run_gun",
+            "shmup",
+            "topdown_rpg",
+            "tactical",
+            "fighting",
+            "brawler",
+            "race",
+        }
+        # Bug-fix: "gameplay_role == prop" was the default fallback for any unconfigured
+        # sprite, making show_combat always True and defeating the masking purpose.
+        # Pure props/decor/triggers with no hp/damage/attack boxes hide the combat group.
+        show_combat = (
+            scene_profile in action_profiles
+            or player_ctx
+            or enemy_ctx
+            or npc_ctx
+            or bool(ctx.get("has_attack_boxes"))
+            or bool(ctx.get("has_hp"))
+            or bool(ctx.get("has_contact_damage"))
+        )
+        # phys_none banner: shown when entity has no physics relevance
+        show_phys_none_banner = physics_profile == "phys_none" and not player_ctx and not enemy_ctx
+        if hasattr(self, "_lbl_phys_none_banner"):
+            self._lbl_phys_none_banner.setVisible(show_phys_none_banner)
+
+        for name, visible in (
+            ("_grp_projectiles", show_projectiles),
+            ("_grp_combat", show_combat),
+            ("_grp_topdown", show_topdown),
+            ("_grp_motion", show_motion),
+            ("_grp_dir_frames", show_dir_frames),
+            ("_grp_advanced", True),
+        ):
+            grp = getattr(self, name, None)
+            if grp is not None:
+                grp.setVisible(bool(visible))
+
+        if hasattr(self, "_lbl_jump_summary"):
+            self._lbl_jump_summary.setVisible(show_jump)
+        if hasattr(self, "_lbl_props_hint"):
+            self._lbl_props_hint.setVisible(True)
+        btn_motion = getattr(self, "_btn_export_motion", None)
+        if btn_motion is not None:
+            btn_motion.setVisible(show_motion)
+
     def _refresh_box_hint(self) -> None:
         if not hasattr(self, "_lbl_box_hint"):
             return
@@ -2017,6 +2585,8 @@ class HitboxTab(QWidget):
         self._boxes_for_kind(self._active_box_kind)[fi] = dst
         self._refresh_frame()
         self._lbl_status.setText(tr("hitbox.copied_from_other"))
+        if self._active_box_kind == "attack":
+            self._update_section_visibility()
         self._refresh_checklist()
 
     def _on_frame_size_changed(self) -> None:
@@ -2130,6 +2700,7 @@ class HitboxTab(QWidget):
         self._current_attack_box = len(self._attack_hitboxes) - 1
         self._lbl_status.setText(tr("hitbox.attack_box_added"))
         self._refresh_frame()
+        self._update_section_visibility()
         self._refresh_checklist()
 
     def _remove_attack_box(self) -> None:
@@ -2139,6 +2710,7 @@ class HitboxTab(QWidget):
         self._current_attack_box = max(0, min(self._current_attack_box, len(self._attack_hitboxes) - 1))
         self._lbl_status.setText(tr("hitbox.attack_box_removed"))
         self._refresh_frame()
+        self._update_section_visibility()
         self._refresh_checklist()
 
     # ------------------------------------------------------------------
@@ -2253,6 +2825,8 @@ class HitboxTab(QWidget):
         self._sb_h.setValue(hb["h"])
         self._updating_spinboxes = False
         self._refresh_attack_box_ui(cur)
+        if self._active_box_kind == "attack":
+            self._update_section_visibility()
         self._refresh_checklist()
 
     def _on_spinbox_changed(self) -> None:
@@ -2274,6 +2848,8 @@ class HitboxTab(QWidget):
         self._canvas.set_hitbox(hb)
         self._canvas.set_secondary_hitbox(self._secondary_box())
         self._refresh_attack_box_ui(hb)
+        if self._active_box_kind == "attack":
+            self._update_section_visibility()
         self._refresh_checklist()
 
     def _on_box_enabled_changed(self, checked: bool) -> None:
@@ -2283,6 +2859,7 @@ class HitboxTab(QWidget):
         self._canvas.set_hitbox(box)
         self._canvas.set_secondary_hitbox(self._secondary_box())
         self._refresh_attack_box_ui(box)
+        self._update_section_visibility()
         self._refresh_checklist()
 
     def _on_attack_damage_changed(self) -> None:
@@ -2291,6 +2868,7 @@ class HitboxTab(QWidget):
         fi = self._current_attack_box
         box = self._ensure_box("attack", fi)
         box["damage"] = int(self._sb_attack_damage.value() or 0)
+        self._update_section_visibility()
         self._refresh_checklist()
 
     def _on_attack_knockback_changed(self) -> None:
@@ -2300,6 +2878,7 @@ class HitboxTab(QWidget):
         box = self._ensure_box("attack", fi)
         box["knockback_x"] = int(self._sb_attack_kbx.value() or 0)
         box["knockback_y"] = int(self._sb_attack_kby.value() or 0)
+        self._update_section_visibility()
         self._refresh_checklist()
 
     def _on_attack_window_changed(self) -> None:
@@ -2311,6 +2890,7 @@ class HitboxTab(QWidget):
         box["active_start"] = int(self._sb_attack_start.value() or 0)
         box["active_len"] = int(self._sb_attack_len.value() or 0)
         box["active_anim_state"] = int(self._cb_attack_anim_state.currentData() or 0xFF) & 0xFF
+        self._update_section_visibility()
         self._refresh_checklist()
 
     def _on_props_changed(self) -> None:
@@ -2322,6 +2902,7 @@ class HitboxTab(QWidget):
             if cb.isChecked()
         }
         self._refresh_props_summary()
+        self._update_section_visibility()
         self._refresh_checklist()
         self._refresh_spd_hint()
 
@@ -2404,6 +2985,12 @@ class HitboxTab(QWidget):
             if cb.isChecked()
         }
         self._sprite_meta["ctrl"] = self._collect_ctrl()
+        # Save display_hint override (P2) — only write when at least one axis is overridden
+        hint = self._display_hint_override
+        if hint.get("role") or hint.get("physics"):
+            self._sprite_meta["display_hint"] = {k: v for k, v in hint.items() if v}
+        elif "display_hint" in self._sprite_meta:
+            del self._sprite_meta["display_hint"]
         anims = self._collect_anims()
         if anims:
             self._sprite_meta["anims"] = anims
@@ -2445,6 +3032,7 @@ class HitboxTab(QWidget):
     def _on_dir_frame_changed(self) -> None:
         self._dir_frames = self._collect_dir_frames()
         self._update_dir_auto_labels()
+        self._update_section_visibility()
 
     def _refresh_dir_ui(self) -> None:
         if self._dir_mode_combo is None:
@@ -2510,6 +3098,7 @@ class HitboxTab(QWidget):
             sb.blockSignals(False)
         self._dir_frames = dict(df)
         self._refresh_dir_ui()
+        self._update_section_visibility()
 
     def _on_ctrl_role_changed(self) -> None:
         self._refresh_ctrl_ui()
@@ -2517,6 +3106,7 @@ class HitboxTab(QWidget):
 
     def _on_ctrl_changed(self) -> None:
         self._ctrl = self._collect_ctrl()
+        self._update_section_visibility()
         self._refresh_checklist()
 
     def _populate_ctrl_role_combo(self, keep_role: str | None = None) -> None:
@@ -2539,7 +3129,7 @@ class HitboxTab(QWidget):
     def _refresh_ctrl_ui(self) -> None:
         role = str(self._ctrl_role_cb.currentData() or "none")
         is_player = role == "player"
-        gameplay_role = sprite_gameplay_role(self._sprite_meta or {})
+        gameplay_role = sprite_gameplay_role(self._sprite_meta or {}, role)
         self._ctrl_bindings_widget.setVisible(is_player)
         self._lbl_ctrl_hint.setText(tr(f"hitbox.ctrl_hint_{role}") if role in ("none", "player", "enemy", "npc") else "")
         if hasattr(self, "_lbl_ctrl_gameplay"):
@@ -2568,6 +3158,7 @@ class HitboxTab(QWidget):
             action_cb.setEnabled(bool(self._file_path) and is_player)
         if hasattr(self, "_btn_ctrl_preset"):
             self._btn_ctrl_preset.setEnabled(bool(self._file_path) and is_player)
+        self._update_section_visibility()
 
     def _collect_ctrl(self) -> dict:
         """Build action→button dict from the button-centric UI."""
@@ -2614,6 +3205,7 @@ class HitboxTab(QWidget):
             cb.setCurrentIndex(max(0, idx))
             cb.blockSignals(False)
         self._ctrl = self._collect_ctrl()
+        self._update_section_visibility()
 
     # ---- Controller presets --------------------------------------------------
 
@@ -2826,6 +3418,7 @@ class HitboxTab(QWidget):
             tbl.setItem(row, 2, QTableWidgetItem(str(entry.get("window") or "20")))
             tbl.setItem(row, 3, QTableWidgetItem(str(entry.get("anim")   or "")))
         tbl.blockSignals(False)
+        self._motion_patterns = self._collect_motion_patterns()
 
     def _collect_motion_patterns(self) -> list:
         result = []
@@ -2846,6 +3439,8 @@ class HitboxTab(QWidget):
 
     def _on_motion_changed(self) -> None:
         self._motion_patterns = self._collect_motion_patterns()
+        self._update_section_visibility()
+        self._refresh_checklist()
 
     def _add_motion_pattern(self) -> None:
         tbl = self._motion_table
