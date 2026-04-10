@@ -511,6 +511,47 @@ class ProjectTab(ProjectPathMixin, QWidget):
         _gt = self._globals_tab
         return _gt.write_entity_types_h(export_dir, errs) if _gt else None
 
+    def _maybe_write_entity_type_events_h(self, export_dir: Path | None, errs: list[str]) -> Path | None:
+        if not export_dir or not isinstance(self._data, dict):
+            return None
+        try:
+            from core.entity_type_events_gen import write_entity_type_events_h
+            return write_entity_type_events_h(project_data=self._data, export_dir=export_dir)
+        except Exception as exc:
+            errs.append(f"entity_type_events.h: {exc}")
+            return None
+
+    def _maybe_write_custom_events_h(self, export_dir: Path | None, errs: list[str]) -> Path | None:
+        if not export_dir or not isinstance(self._data, dict):
+            return None
+        try:
+            from core.custom_events_gen import write_custom_events_h
+            return write_custom_events_h(project_data=self._data, export_dir=export_dir)
+        except Exception as exc:
+            errs.append(f"custom_events.h: {exc}")
+            return None
+
+    def _maybe_write_item_table_h(self, export_dir: Path | None, errs: list[str]) -> Path | None:
+        if not export_dir or not isinstance(self._data, dict):
+            return None
+        try:
+            from core.item_table_gen import write_item_table_h
+            return write_item_table_h(project_data=self._data, export_dir=export_dir)
+        except Exception as exc:
+            errs.append(f"item_table.h: {exc}")
+            return None
+
+    def _maybe_write_procgen_configs(self, export_dir: Path | None, errs: list[str]) -> list[Path]:
+        """Write procgen_config.h and/or cavegen_config.h when any scene has runtime params."""
+        if not export_dir or not isinstance(self._data, dict):
+            return []
+        try:
+            from core.procgen_config_gen import write_all_procgen_configs
+            return write_all_procgen_configs(project_data=self._data, export_dir=export_dir)
+        except Exception as exc:
+            errs.append(f"procgen_config: {exc}")
+            return []
+
     def _run_globals_validation(self, errs: list[str]) -> None:
         """Append globals consistency warnings (C1/C2) to errs."""
         if isinstance(self._data, dict):
@@ -630,6 +671,12 @@ class ProjectTab(ProjectPathMixin, QWidget):
         self._btn_del.clicked.connect(self._delete_scene)
         self._btn_del.setEnabled(False)
         sb.addWidget(self._btn_del)
+        self._btn_dup = QPushButton("⧉")
+        self._btn_dup.setFixedWidth(28)
+        self._btn_dup.setToolTip("Duplicate scene (deep copy)")
+        self._btn_dup.clicked.connect(self._duplicate_scene)
+        self._btn_dup.setEnabled(False)
+        sb.addWidget(self._btn_dup)
         ll.addLayout(sb)
 
         start_row = QHBoxLayout()
@@ -2492,6 +2539,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
         can = scene is not None
         self._btn_ren.setEnabled(can)
         self._btn_del.setEnabled(can)
+        self._btn_dup.setEnabled(can)
         self._btn_import_dir.setEnabled(can)
         self._btn_auto_share.setEnabled(can)
         self._btn_rm_spr.setEnabled(can) 
@@ -2946,7 +2994,28 @@ class ProjectTab(ProjectPathMixin, QWidget):
         self._scenes_list.setCurrentRow(min(row, len(self._data["scenes"]) - 1))
         self._update_global_budget()
 
-    def _change_graphx_dir(self) -> None: 
+    def _duplicate_scene(self) -> None:
+        import copy
+        scene = self._current_scene()
+        if not scene:
+            return
+        new_scene = copy.deepcopy(scene)
+        new_scene["id"] = str(uuid.uuid4())[:8]
+        orig_label = scene.get("label", "scene")
+        name, ok = QInputDialog.getText(
+            self, "Duplicate scene", "New scene name:",
+            text=f"{orig_label} copy",
+        )
+        if not ok or not name.strip():
+            return
+        new_scene["label"] = name.strip()
+        self._data["scenes"].append(new_scene)
+        self._on_save()
+        self._populate_scenes()
+        self._scenes_list.setCurrentRow(len(self._data["scenes"]) - 1)
+        self._update_global_budget()
+
+    def _change_graphx_dir(self) -> None:
         base = str(self._project_dir) if self._project_dir else ""
         d = QFileDialog.getExistingDirectory(self, tr("proj.graphx_dir"), base)
         if d: 
@@ -3719,6 +3788,10 @@ class ProjectTab(ProjectPathMixin, QWidget):
         constants_h = self._maybe_write_constants_h(exp_dir, errs)
         game_vars_h = self._maybe_write_game_vars_h(exp_dir, errs)
         entity_types_h = self._maybe_write_entity_types_h(exp_dir, errs)
+        self._maybe_write_entity_type_events_h(exp_dir, errs)
+        self._maybe_write_custom_events_h(exp_dir, errs)
+        self._maybe_write_item_table_h(exp_dir, errs)
+        procgen_hs = self._maybe_write_procgen_configs(exp_dir, errs)
         self._run_globals_validation(errs)
 
         msg = tr("proj.export_done", n=n)
@@ -3996,6 +4069,12 @@ class ProjectTab(ProjectPathMixin, QWidget):
         entity_types_h = self._maybe_write_entity_types_h(exp_dir, errs) if do_autogen_mk else None
         if entity_types_h:
             msg += "\n" + tr("proj.entity_types_written", path=self._rel(entity_types_h))
+        self._maybe_write_entity_type_events_h(exp_dir, errs)
+        self._maybe_write_custom_events_h(exp_dir, errs)
+        self._maybe_write_item_table_h(exp_dir, errs)
+        procgen_hs = self._maybe_write_procgen_configs(exp_dir, errs)
+        if procgen_hs:
+            msg += "\n" + " ".join(p.name for p in procgen_hs) + " written"
         self._run_globals_validation(errs)
         if errs:
             msg += "\n" + "\n".join(errs[:6])
@@ -4240,6 +4319,12 @@ class ProjectTab(ProjectPathMixin, QWidget):
         entity_types_h = self._maybe_write_entity_types_h(exp_dir, errs) if do_autogen_mk else None
         if entity_types_h:
             msg += "\n" + tr("proj.entity_types_written", path=self._rel(entity_types_h))
+        self._maybe_write_entity_type_events_h(exp_dir, errs)
+        self._maybe_write_custom_events_h(exp_dir, errs)
+        self._maybe_write_item_table_h(exp_dir, errs)
+        procgen_hs = self._maybe_write_procgen_configs(exp_dir, errs)
+        if procgen_hs:
+            msg += "\n" + " ".join(p.name for p in procgen_hs) + " written"
         self._run_globals_validation(errs)
         if errs:
             msg += "\n" + "\n".join(errs[:6])
@@ -4549,6 +4634,8 @@ class ProjectTab(ProjectPathMixin, QWidget):
         constants_h = self._maybe_write_constants_h(exp_dir, errs)
         game_vars_h = self._maybe_write_game_vars_h(exp_dir, errs)
         entity_types_h = self._maybe_write_entity_types_h(exp_dir, errs)
+        self._maybe_write_item_table_h(exp_dir, errs)
+        procgen_hs = self._maybe_write_procgen_configs(exp_dir, errs)
         self._run_globals_validation(errs)
         msg = tr("proj.export_done", n=n)
         if mk_path:

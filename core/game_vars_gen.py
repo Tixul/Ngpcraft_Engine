@@ -38,7 +38,7 @@ from pathlib import Path
 
 _OUTPUT_FILENAME = "ngpc_game_vars.h"
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_COUNT = 8
+_COUNT = 16
 
 # Trigger condition/action types that access game_flags via flag_var_index / action_flag_var
 _FLAG_CONDS = frozenset({

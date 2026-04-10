@@ -154,6 +154,10 @@ def make_entity_types_h(*, project_data: dict) -> str:
         "    u8 dir;",
         "    u8 data;",
         "    u8 flags;",
+        "    u8 hp;",
+        "    u8 atk;",
+        "    u8 def;",
+        "    u8 xp;",
         "} EntityTypeDef;",
         "",
         "static const EntityTypeDef et_table[] = {",
@@ -169,10 +173,15 @@ def make_entity_types_h(*, project_data: dict) -> str:
         direction = int(t.get("direction", 0))
         data      = int(t.get("data", 0))
         flags     = int(t.get("flags", 0))
+        hp        = int(t.get("hp", 10))
+        atk       = int(t.get("atk", 1))
+        def_      = int(t.get("def", 0))
+        xp        = int(t.get("xp", 0))
         sep = "," if i < len(active) - 1 else ""
         lines.append(
             f"    /* {ename} */ "
-            f"{{ {role_int}, {behavior}, {speed}, {rng}, {lose}, {change_ev}, {direction}, {data}, {flags} }}{sep}"
+            f"{{ {role_int}, {behavior}, {speed}, {rng}, {lose}, {change_ev}, {direction}, {data}, {flags},"
+            f" {hp}, {atk}, {def_}, {xp} }}{sep}"
         )
 
     lines += [

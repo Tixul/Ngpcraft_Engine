@@ -1,6 +1,6 @@
 # NgpCraft Engine
 
-> **Last updated: 2026-03-30**
+> **Last updated: 2026-04-10**
 
 Visual asset pipeline and no-code game generator for **Neo Geo Pocket Color** homebrew.
 
@@ -30,7 +30,9 @@ You design your game in the GUI. NgpCraft Engine generates everything:
 | Tilemap PNGs | `*_map.c/h` — scroll maps, collision grid |
 | Frame slices + hitboxes | `*_hitbox.h`, `*_ctrl.h`, `*_props.h`, `*_anims.h`, `*_motion.h` |
 | Entity placements + AI rules | Spawn tables, path tables, wave tables |
-| Trigger rules (visual) | 68 conditions × 76 actions + OR-groups → `g_scene_trig_*[]` C arrays |
+| Trigger rules (visual) | 89 conditions × 79 actions + OR-groups → `g_scene_trig_*[]` C arrays |
+| Entity type archetypes + events | `ngpc_entity_types.h` + `ngpc_entity_type_events.h` — global no-code automation |
+| Custom events (global bus) | `ngpc_custom_events.h` — named events with AND/OR guards + 57 actions |
 | Dialogue banks | Per-scene lines, choices, menus → `scene_*_dialogs.h` |
 | Sound Creator manifest | `audio_autogen.mk`, `sound_data.c/h`, `Sfx_Play()` wrapper |
 | Flash save intent | `NgpngSaveData` struct + append-only slot logic |
@@ -60,11 +62,23 @@ One click: **Export (template-ready)** patches the Makefile and produces a build
 - Genre-aware UI: trigger conditions/actions/presets reordered for the active profile
 
 **Trigger system (visual scripting)**
-- 68 conditions: button press, `on_jump/land/hurt/death`, player in region, enemy count, HP, timer, flags, variables, wave state, quest stage, collectibles, distance, `chance`, push-block-on-tile, all-switches-on, `dialogue_done`, `choice_result`…
-- 76 actions: BGM/SFX, spawn entity/wave, scene transition, show/hide/teleport entity, set flag/variable, give item, toggle tile, flash screen, camera lock, fade, save game, `start_dialogue`, `show_menu`…
+- 89 conditions: button press, `on_jump/land/hurt/death`, player in region, enemy count, HP, timer, flags, variables, wave state, quest stage, collectibles, distance, `chance`, push-block-on-tile, all-switches-on, `dialogue_done`, `choice_result`, `on_custom_event`, `item_count_ge`, entity-type state (19 conditions)…
+- 79 actions: BGM/SFX, spawn entity/wave, scene transition, show/hide/teleport entity, set flag/variable, give/remove/drop item (`drop_item`, `drop_random_item`), toggle tile, flash screen, camera lock, fade, save game, `start_dialogue`, `show_menu`…
 - **Move entity to exact tile** — "Place ↗" button: click any tile on the canvas to set the destination for `move_entity_to`, `teleport_player`, or `spawn_at_region`. No manual region required; a synthetic 1×1 destination region is generated at export. A dashed arrow shows the path from entity spawn to destination.
 - Multi-condition AND chains + OR groups (multiple trigger sets, any can fire)
 - Exported as plain C89 arrays — zero runtime overhead for unused features
+
+**Globals tab (entity archetypes, no-code events, custom event bus)**
+- Define reusable entity type archetypes (role, behavior, AI params, physics, flags, combat stats) shared across all scenes
+- Attach **16 global events** per type (death, collect, hit, spawn, all buttons, player enter/exit zone, timer, low HP) → automatic actions without scene-level triggers
+- **Custom Events** (Événements tab): named global events fired by `ngpc_emit_event(id)` from any trigger or entity event
+  - 57 actions in 11 groups (Audio, Visual, Navigation, Entities, Player, Flags/Variables, Camera, Triggers, Narrative, RPG/Quest, System)
+  - Guard conditions: AND group + multiple OR groups, 88 conditions, negate support
+  - Preset library for common patterns (boss phase change, collectible pickup, door unlock, etc.)
+  - Searchable combos — type to filter 88 conditions and 57 actions
+  - Export: `ngpc_custom_events.h` with `CEV_*` macros, `NgpngCevCond g_cev_conds[]`, `NgpngEventAction g_custom_events[]`
+- Procgen rules: min/max count, weight, rarity, allowed tile types
+- Export: `ngpc_entity_types.h` + `ngpc_entity_type_events.h` (tree-shaken) + `ngpc_custom_events.h`
 
 **Hitbox & controller editor**
 - Per-frame AABB hurtboxes and multi-box attack windows
@@ -98,7 +112,7 @@ One click: **Export (template-ready)** patches the Makefile and produces a build
 
 `Horizontal shmup` · `Vertical shmup` · `Platformer` · `Run'n'gun` · `Top-down` ·
 `Puzzle` · `RPG / Adventure` · `Fighting` · `Brawler` · `Racing` · `TCG / Card game` ·
-`Rhythm` · `Roguelike` · `Visual novel` · `Menu` · `Single-screen`
+`Rhythm` · `Roguelike` · `Roguelite (room-by-room)` · `Visual novel` · `Menu` · `Single-screen`
 
 Each genre profile pre-configures map mode, scroll axes, loop settings, tile roles, and
 reorders the trigger condition/action/preset combos to surface the most relevant options first.
@@ -209,7 +223,8 @@ python sync_template.py --verbose
    - 4.7 [VRAM Tab](#47-vram-tab)
    - 4.8 [Bundle Tab](#48-bundle-tab)
    - 4.9 [Dialogues Tab](#49-dialogues-tab)
-   - 4.10 [Help Tab](#410-help-tab)
+   - 4.10 [Globals Tab](#410-globals-tab)
+   - 4.11 [Help Tab](#411-help-tab)
 5. [Export Pipeline](#5-export-pipeline)
    - 5.1 [Export Modes](#51-export-modes)
    - 5.2 [Generated Files](#52-generated-files)
@@ -641,9 +656,9 @@ Triggers can be generated directly from a selected region (`enter_region` / `lea
 **Triggers:**
 Condition → action rules. Exported as C arrays (`g_scene_trig_conds[]`, etc.).
 
-68 conditions include: `btn_a/b/option`, `enter_region`, `on_jump/land/hurt/death/crouch`, `player_has_item`, `npc_talked_to`, `flag_set/clear`, `variable_ge/eq/ne/le`, `enemy_count_ge`, `health_eq`, `score_ge`, `timer_le/every`, `scene_first_enter`, `on_swim/dash/attack/pickup`, `entity_in_region`, `quest_stage_eq`, `ability_unlocked`, `resource_ge`, `combo_ge`, `lap_ge`, `btn_held_ge`, `chance`, `block_on_tile`, `all_switches_on`, `count_eq`, `dialogue_done`, `choice_result`…
+89 conditions include: `btn_a/b/option`, `enter_region`, `on_jump/land/hurt/death/crouch`, `player_has_item`, `item_count_ge`, `npc_talked_to`, `flag_set/clear`, `variable_ge/eq/ne/le`, `enemy_count_ge`, `health_eq`, `score_ge`, `timer_le/every`, `scene_first_enter`, `on_swim/dash/attack/pickup`, `entity_in_region`, `quest_stage_eq`, `ability_unlocked`, `resource_ge`, `combo_ge`, `lap_ge`, `btn_held_ge`, `chance`, `block_on_tile`, `all_switches_on`, `count_eq`, `dialogue_done`, `choice_result`, `on_custom_event` + 19 entity-type conditions: `entity_type_all_dead`, `entity_type_count_ge`, `entity_type_collected`, `entity_type_alive_le`, `entity_type_all_collected`, `entity_type_activated`, `entity_type_all_activated`, `entity_type_any_alive`, `entity_type_btn_a/b/opt`, `entity_type_contact`, `entity_type_near_player`, `entity_type_hit`, `entity_type_hit_ge`, `entity_type_spawned`, `entity_type_spawned_ge`…
 
-78 actions include: `play_bgm/sfx`, `start/stop/fade_bgm`, `spawn_entity/wave`, `goto_scene`, `warp_to`, `show_entity`, `hide_entity`, `move_entity_to`, `teleport_player`, `spawn_at_region`, `set_flag/clear_flag/toggle_flag`, `set_variable/inc_variable/dec_variable`, `give_item/remove_item`, `unlock_door`, `set_quest_stage`, `toggle_tile`, `reset_scene`, `flash_screen`, `screen_shake`, `fade_out/in`, `camera_lock/unlock`, `add_combo/reset_combo`, `add_health/set_health`, `add_lives/set_lives`, `set_score/add_score`, `set_timer/pause_timer/resume_timer`, `save_game`, `set_bgm_volume`, `flip_sprite_h`, `flip_sprite_v`, `lock_player_input`, `unlock_player_input`, `enable_trigger/disable_trigger`, `pause_entity_path/resume_entity_path`, `set_checkpoint`, `respawn_player`, `start_dialogue`, `show_menu`…
+79 actions include: `play_bgm/sfx`, `start/stop/fade_bgm`, `spawn_entity/wave`, `goto_scene`, `warp_to`, `show_entity`, `hide_entity`, `move_entity_to`, `teleport_player`, `spawn_at_region`, `set_flag/clear_flag/toggle_flag`, `set_variable/inc_variable/dec_variable`, `give_item/remove_item`, `drop_item`, `drop_random_item`, `unlock_door`, `set_quest_stage`, `toggle_tile`, `reset_scene`, `flash_screen`, `screen_shake`, `fade_out/in`, `camera_lock/unlock`, `add_combo/reset_combo`, `add_health/set_health`, `add_lives/set_lives`, `set_score/add_score`, `set_timer/pause_timer/resume_timer`, `save_game`, `set_bgm_volume`, `flip_sprite_h`, `flip_sprite_v`, `lock_player_input`, `unlock_player_input`, `enable_trigger/disable_trigger`, `pause_entity_path/resume_entity_path`, `set_checkpoint`, `respawn_player`, `start_dialogue`, `show_menu`…
 
 **Move entity to exact tile (Place ↗):** When the action is `move_entity_to`, `teleport_player`, or `spawn_at_region`, a **Place ↗** button appears. Click it, then click any tile on the canvas to set the exact destination — no manual region needed. The canvas draws a dashed arrow from the entity's spawn position to the destination, and a crosshair marks the target tile. Each additional destination (C, D…) is a separate trigger with a different condition.
 
@@ -805,7 +820,104 @@ Both modules are part of `NgpCraft_base_template/optional/`. Include and link th
 
 ---
 
-### 4.10 Help Tab
+### 4.10 Globals Tab
+
+Project-wide entity archetype library and no-code global event system.
+
+**Variables sub-tab (Flags & persistent variables):**
+- 16 boolean **flags** (0–15) that persist across scene changes — set/clear/toggle via triggers
+- 16 u8 **variables** (0–15) — counters 0–255 with optional initial value (`init_game_vars` action)
+- Named slots generate `GAME_FLAG_N` / `GAME_VAR_N` defines + `g_game_var_inits[16]` on export
+- Tree-shaking: unnamed, unreferenced slots generate no C code
+
+**Items sub-tab:**
+- Define the project item table: each row specifies name, type (ITEM_HEAL/ATK_UP/DEF_UP/XP_UP/GOLD/DICE_PLUS/KEY/CUSTOM), rarity (COMMON/UNCOMMON/RARE), a u8 value, a price (0–255), and a sprite index (0–255 — index into the PNG bundle metasprites for the pickup entity visual)
+- Exported as `item_table.h` — `NgpcItem` typedef (`type`, `value`, `rarity`, `price`, `sprite_id`) + `g_item_table[]` static const array
+
+**Entity Types sub-tab:**
+- Define named entity archetypes shared across all scenes and procgen layouts
+- Each archetype: `role` (enemy/item/npc/trigger/platform/block/prop), behavior, AI params (speed, aggro/lose range, dir-change cadence), physics flags, custom data byte, combat stats (`hp`, `atk`, `def`, `xp`) for enemy archetypes
+- Archetypes are referenced by level entities via `type_id` — changing an archetype propagates to all instances at export
+
+**Events sub-tab (per archetype):**
+Attach automatic actions to 16 global entity events. These fire for *any* instance of that type, across *all* scenes including procgen:
+
+| Event | Index | Fires when… |
+|---|---|---|
+| `entity_death` | 0 | Instance killed |
+| `entity_collect` | 1 | Instance picked up |
+| `entity_activate` | 2 | Instance activated |
+| `entity_hit` | 3 | Instance hit by player |
+| `entity_spawn` | 4 | Instance spawned |
+| `entity_btn_a/b/opt/up/down/left/right` | 5–11 | Button pressed near instance |
+| `entity_player_enter` | 12 | Player enters proximity range |
+| `entity_player_exit` | 13 | Player leaves proximity range |
+| `entity_timer` | 14 | Periodic timer fires |
+| `entity_low_hp` | 15 | HP drops below threshold |
+
+Available events are filtered by role. Actions: play SFX, start BGM, inc/set variable, set/clear flag, add score, add HP, go to scene, screen shake, fade, save game…
+
+**Procgen sub-tab:**
+Per-type procgen rules (min/max count, weight, rarity, allowed tile types) that control procedural room generation.
+
+**Export:**
+- `ngpc_entity_types.h` — `EntityTypeId` enum + `NgpngEntityType g_entity_types[]` archetype table
+- `ngpc_entity_type_events.h` — `NgpngTypeEvent g_type_events[]` dispatch table + `EV_ENTITY_*` macros. Tree-shaking: only types both used in a scene *and* having events are emitted.
+
+---
+
+### 4.10b Custom Events tab (Globals → Événements)
+
+Global event bus: named events fired by `ngpc_emit_event(u8 id)` from any scene trigger or entity type event.
+
+**What it is:**
+- Named events (e.g. `boss_phase_2`, `key_collected`) stored at project level
+- Each event has optional **guard conditions** (AND group + OR groups) and a list of **actions**
+- The engine evaluates the guards, then executes all matching actions
+- Guard logic: `(all AND conditions pass) OR (all conds in OR group 0 pass) OR (all in OR group 1) OR …`
+- No conditions → always fires
+
+**57 actions** in 11 groups (Audio, Visual, Navigation, Entities, Player, Flags/Variables,
+Camera/Scroll, Triggers/HUD, Narrative, RPG/Quest, System) — same vocabulary as scene triggers.
+
+**89 guard conditions** in 9 groups (same vocabulary as scene triggers).
+
+**Consuming custom events from scene triggers — flag bridge pattern:**
+Custom events cannot be directly listened to by scene triggers. Use a flag as bridge:
+1. Custom event action: `set_flag(N)`
+2. Scene trigger condition: `flag_set(N)` → actions + `clear_flag(N)`
+
+**Note — template-dependent actions:** `unlock_ability`, `add_resource`, `set_gravity_dir`,
+`cycle_player_form`, `set_quest_stage`, `show_dialogue`, etc. emit the correct `TRIG_ACT_*`
+constant but require the C template to implement the case in `ngpng_trigger_execute_action()`.
+
+**Export — `ngpc_custom_events.h`:**
+
+```c
+#define CEV_BOSS_PHASE_2    0u
+#define CEV_KEY_COLLECTED   1u
+#define CUSTOM_EVENT_COUNT      3   /* action rows */
+#define CUSTOM_EVENT_COND_COUNT 1   /* guard condition rows */
+
+typedef struct {
+    u8 event_id; u8 cond; u8 index; u16 value; u8 group_id; u8 negate;
+} NgpngCevCond;  /* group_id=0xFF → AND group, 0..N → OR group N */
+
+typedef struct {
+    u8 event_id; u8 action; u8 a0; u8 a1; u8 once;
+} NgpngEventAction;
+
+static const NgpngCevCond    g_cev_conds[]     = { … };
+static const NgpngEventAction g_custom_events[] = { … };
+```
+
+`CUSTOM_EVENT_COUNT == 0` → header is valid, tables are empty, no dead code emitted.
+
+⚠️ **Order = C index.** Reordering events changes `CEV_*` values. In production, always append to the end.
+
+---
+
+### 4.11 Help Tab
 
 Embedded FR/EN help browser for quick in-app reference.
 
@@ -851,6 +963,12 @@ All files are written to `export_dir` (configured per project, e.g. `GraphX/gen`
 | `*_props.h` | Entity physics and combat properties struct (speed, gravity, HP, damage, etc.). |
 | `*_namedanims.h` | Named animation states for `ngpc_anim` module (frame array, mode loop/pingpong/oneshot, speed). |
 | `ngpc_project_constants.h` | Project-level `#define` constants (game tuning values defined in the Project tab). |
+| `ngpc_entity_types.h` | `EntityTypeId` enum + `EntityTypeDef g_entity_types[]` archetype table — role, behavior, AI params, physics flags, combat stats (hp/atk/def/xp) for each type. |
+| `item_table.h` | `NgpcItem` typedef + `g_item_table[]` — type, value, rarity, price, sprite_id for each item defined in Globals → Items. |
+| `procgen_config.h` | Dungeon DFS parameters (`PROCGEN_GRID_W/H`, `PROCGEN_MAX_ENEMIES`, tier table…). Generated when a scene has rt_dfs_params enabled. |
+| `cavegen_config.h` | Cave cellular-automaton parameters (`CAVEGEN_WALL_PCT`, `CAVEGEN_MAX_ITEMS`, `CAVEGEN_PICKUP_TYPE`, tier table, item pool…). Generated when a scene has rt_cave_params enabled. |
+| `ngpc_entity_type_events.h` | `EV_ENTITY_*` macros (0–15) + `NgpngTypeEvent g_type_events[]` global event dispatch table. Tree-shaken: only types used in a scene *and* having events are emitted. |
+| `ngpc_custom_events.h` | `CEV_*` macros + `NgpngCevCond g_cev_conds[]` (guard conditions with AND/OR groups) + `NgpngEventAction g_custom_events[]` (action dispatch table). Always generated; empty tables if no events defined. |
 
 **Anti-duplicate safety:** If `GraphX/foo.c/.h` already exists (e.g., template-provided assets), NgpCraft Engine reuses those files instead of generating a duplicate `GraphX/gen/foo_map.c` that would cause a linker "multiply defined" error. `assets_autogen.mk` filters accordingly.
 
@@ -1171,7 +1289,8 @@ budget = estimate_vram(project_data)
 | `sfx_play_autogen.py` | Generate `sounds_game_sfx_autogen.c` |
 | `assets_autogen_mk.py` | Generate `assets_autogen.mk` with link-order sorting |
 | `game_constants_gen.py` | Generate `ngpc_project_constants.h` from project-level `#define` list |
-| `game_vars_gen.py` | Generate `ngpc_game_vars.h` — game flags and variable declarations |
+| `game_vars_gen.py` | Generate `ngpc_game_vars.h` — 16 game flags and 16 u8 variable declarations |
+| `item_table_gen.py` | Generate `item_table.h` — `NgpcItem` typedef + `g_item_table[]` from Globals → Items |
 | `hitbox_export.py` | Generate `*_hitbox.h`, `*_ctrl.h`, `*_props.h`, `*_anims.h`, `*_motion.h` from sprite frame metadata |
 | `project_templates.py` | Concrete starter templates for new projects (Blank, Shmup example, Platformer example) |
 | `sprite_export_cli.py` | Robust subprocess wrapper to call `ngpc_sprite_export.py`; handles path resolution and error reporting |

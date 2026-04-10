@@ -2178,6 +2178,7 @@ STRINGS_EN: dict[str, str] = {
     "level.profile.visual_novel": "Visual novel",
     "level.profile.rhythm": "Rhythm",
     "level.profile.race": "Race",
+    "level.profile.roguelite_room": "Roguelite (room-by-room)",
     "level.rules_hazards_group": "Hazards / damage",
     "level.rules_hazard_damage": "Hazard damage:",
     "level.rules_hazard_damage_tt": "Damage applied on contact with a DAMAGE tile. 0 = no damage.",

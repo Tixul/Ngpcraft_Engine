@@ -332,6 +332,7 @@ _TRIGGER_CONDS: tuple[tuple[str, str], ...] = (
     ("on_conveyor",        "level.trigger_cond.on_conveyor"),
     ("on_spring",          "level.trigger_cond.on_spring"),
     ("player_has_item",    "level.trigger_cond.player_has_item"),
+    ("item_count_ge",      "level.trigger_cond.item_count_ge"),
     ("npc_talked_to",      "level.trigger_cond.npc_talked_to"),
     ("entity_contact",     "level.trigger_cond.entity_contact"),
     ("count_eq",           "level.trigger_cond.count_eq"),
@@ -365,7 +366,37 @@ _TRIGGER_CONDS: tuple[tuple[str, str], ...] = (
     ("dialogue_done",    "level.trigger_cond.dialogue_done"),
     ("choice_result",    "level.trigger_cond.choice_result"),
     ("menu_result",      "level.trigger_cond.menu_result"),
+    ("entity_type_all_dead",      "level.trigger_cond.entity_type_all_dead"),
+    ("entity_type_count_ge",      "level.trigger_cond.entity_type_count_ge"),
+    ("entity_type_collected",     "level.trigger_cond.entity_type_collected"),
+    ("entity_type_alive_le",      "level.trigger_cond.entity_type_alive_le"),
+    ("entity_type_collected_ge",  "level.trigger_cond.entity_type_collected_ge"),
+    ("entity_type_all_collected", "level.trigger_cond.entity_type_all_collected"),
+    ("entity_type_activated",     "level.trigger_cond.entity_type_activated"),
+    ("entity_type_all_activated", "level.trigger_cond.entity_type_all_activated"),
+    ("entity_type_any_alive",     "level.trigger_cond.entity_type_any_alive"),
+    ("entity_type_btn_a",         "level.trigger_cond.entity_type_btn_a"),
+    ("entity_type_btn_b",         "level.trigger_cond.entity_type_btn_b"),
+    ("entity_type_btn_opt",       "level.trigger_cond.entity_type_btn_opt"),
+    ("entity_type_contact",       "level.trigger_cond.entity_type_contact"),
+    ("entity_type_near_player",   "level.trigger_cond.entity_type_near_player"),
+    ("entity_type_hit",           "level.trigger_cond.entity_type_hit"),
+    ("entity_type_hit_ge",        "level.trigger_cond.entity_type_hit_ge"),
+    ("entity_type_spawned",       "level.trigger_cond.entity_type_spawned"),
+    ("entity_type_spawned_ge",    "level.trigger_cond.entity_type_spawned_ge"),
+    ("on_custom_event",           "level.trigger_cond.on_custom_event"),
 )
+_TRIGGER_ENTITY_TYPE_CONDS = {
+    "entity_type_all_dead",    "entity_type_count_ge",
+    "entity_type_collected",   "entity_type_alive_le",
+    "entity_type_collected_ge","entity_type_all_collected",
+    "entity_type_activated",   "entity_type_all_activated",
+    "entity_type_any_alive",   "entity_type_btn_a",
+    "entity_type_btn_b",       "entity_type_btn_opt",
+    "entity_type_contact",     "entity_type_near_player",
+    "entity_type_hit",         "entity_type_hit_ge",
+    "entity_type_spawned",     "entity_type_spawned_ge",
+}
 _TRIGGER_REGION_CONDS = {
     "enter_region", "leave_region",
     "btn_a", "btn_b", "btn_a_b", "btn_up", "btn_down", "btn_left", "btn_right", "btn_opt",
@@ -376,11 +407,13 @@ _TRIGGER_VALUE_CONDS = {
     "cam_x_ge", "cam_y_ge", "timer_ge", "wave_ge", "wave_cleared", "health_le", "health_ge", "enemy_count_le", "lives_le", "lives_ge", "collectible_count_ge",
     "variable_ge", "variable_eq",
     "timer_every",
-    "on_nth_jump", "player_has_item", "npc_talked_to", "entity_contact", "count_eq",
+    "on_nth_jump", "player_has_item", "item_count_ge", "npc_talked_to", "entity_contact", "count_eq",
     "entity_alive", "entity_dead", "ability_unlocked", "combo_ge", "lap_ge", "btn_held_ge", "chance", "quest_stage_eq", "resource_ge",
     "score_ge", "timer_le", "variable_le", "cutscene_done",
     "enemy_count_ge", "variable_ne", "health_eq", "entity_in_region",
     "all_switches_on",
+    "entity_type_count_ge", "entity_type_alive_le",
+    "entity_type_collected_ge", "entity_type_hit_ge", "entity_type_spawned_ge",
 }
 # Conditions that use flag_var_index (0..7) rather than a region or a generic value.
 _TRIGGER_FLAG_CONDS  = {"flag_set", "flag_clear", "all_switches_on"}
@@ -610,6 +643,7 @@ _LEVEL_PROFILES: list[tuple[str, str]] = [
     ("visual_novel", "level.profile.visual_novel"),
     ("rhythm", "level.profile.rhythm"),
     ("race", "level.profile.race"),
+    ("roguelite_room", "level.profile.roguelite_room"),
 ]
 _PROFILE_TO_C: dict[str, int] = {
     name: idx for idx, (name, _label) in enumerate(_LEVEL_PROFILES)
@@ -637,6 +671,7 @@ _GENRE_PRIORITY_TRIGGER_CONDS: dict[str, list[str]] = {
     "visual_novel":["scene_first_enter", "flag_set", "dialogue_done", "choice_result", "menu_result", "quest_stage_eq", "btn_a"],
     "rhythm":      ["timer_ge", "timer_every", "btn_a", "btn_b", "combo_ge", "score_ge"],
     "race":        ["lap_ge", "enter_region", "timer_ge", "timer_le", "btn_a", "btn_held_ge"],
+    "roguelite_room": ["enter_region", "entity_type_all_dead", "entity_type_count_ge", "flag_set", "flag_clear", "variable_ge", "variable_eq", "health_le", "enemy_count_le", "scene_first_enter"],
 }
 
 _GENRE_PRIORITY_TRIGGER_ACTS: dict[str, list[str]] = {
@@ -653,6 +688,7 @@ _GENRE_PRIORITY_TRIGGER_ACTS: dict[str, list[str]] = {
     "visual_novel":["show_dialogue", "open_menu", "set_npc_dialogue", "set_flag", "set_quest_stage", "fade_out", "fade_in", "goto_scene"],
     "rhythm":      ["add_score", "add_combo", "reset_combo", "play_sfx", "flash_screen", "end_game"],
     "race":        ["emit_event", "add_score", "set_timer", "save_game", "goto_scene", "play_sfx", "screen_shake"],
+    "roguelite_room": ["spawn_entity", "enable_trigger", "give_item", "add_score", "inc_variable", "set_flag", "set_variable", "play_sfx", "save_game", "fade_out", "goto_scene"],
 }
 
 _GENRE_PRIORITY_REGION_KINDS: dict[str, list[str]] = {
@@ -669,6 +705,7 @@ _GENRE_PRIORITY_REGION_KINDS: dict[str, list[str]] = {
     "visual_novel":["zone", "spawn"],
     "rhythm":      ["zone", "spawn", "danger_zone"],
     "race":        ["lap_gate", "race_waypoint", "spawn", "checkpoint", "no_spawn"],
+    "roguelite_room": ["spawn", "exit_goal", "checkpoint", "zone", "no_spawn"],
 }
 
 _GENRE_PRIORITY_TRIGGER_PRESETS: dict[str, list[str]] = {
@@ -685,6 +722,7 @@ _GENRE_PRIORITY_TRIGGER_PRESETS: dict[str, list[str]] = {
     "visual_novel":["dialog_show_on_enter", "menu_open_on_enter", "menu_result_scene", "menu_show_on_enter", "menu_hide_on_leave"],
     "rhythm":      ["combat_player_fire_a", "hud_hide_on_health_le"],
     "race":        ["race_countdown_start", "race_countdown_unlock", "race_lap_gate_crossed", "game_save_on_checkpoint", "game_exit_next_scene"],
+    "roguelite_room": ["game_respawn_on_death", "game_save_on_checkpoint", "game_exit_next_scene", "game_checkpoint_enter"],
 }
 
 _GENRE_PRIORITY_REGION_PRESETS: dict[str, list[str]] = {
@@ -701,6 +739,7 @@ _GENRE_PRIORITY_REGION_PRESETS: dict[str, list[str]] = {
     "visual_novel":["zone_marker", "spawn_point", "spawn_safe"],
     "rhythm":      ["zone_marker", "spawn_point", "hazard_floor"],
     "race":        ["lap_gate", "race_waypoint", "spawn_point", "checkpoint", "exit_goal", "spawn_safe"],
+    "roguelite_room": ["spawn_point", "exit_goal", "checkpoint", "zone_marker", "spawn_safe"],
 }
 
 
@@ -4910,6 +4949,33 @@ class LevelTab(QWidget):
         self._combo_trig_menu_item.setVisible(False)
         self._combo_trig_menu_item.currentIndexChanged.connect(self._on_trigger_prop_changed)
         target_row.addWidget(self._combo_trig_menu_item)
+        # Entity type selector — shown for entity_type_all_dead / count_ge / collected conditions
+        self._lbl_trig_entity_type = QLabel("Type :")
+        self._lbl_trig_entity_type.setVisible(False)
+        target_row.addWidget(self._lbl_trig_entity_type)
+        self._combo_trig_entity_type = QComboBox()
+        self._combo_trig_entity_type.setToolTip(tr("level.trigger_cond_entity_type_tt"))
+        self._combo_trig_entity_type.setVisible(False)
+        self._combo_trig_entity_type.currentIndexChanged.connect(self._on_trigger_prop_changed)
+        target_row.addWidget(self._combo_trig_entity_type, 1)
+        # Custom event selector — shown for on_custom_event condition
+        self._lbl_trig_cev = QLabel("Événement :")
+        self._lbl_trig_cev.setVisible(False)
+        target_row.addWidget(self._lbl_trig_cev)
+        self._combo_trig_cev = QComboBox()
+        self._combo_trig_cev.setToolTip("Événement personnalisé à écouter (défini dans Globals → Événements).")
+        self._combo_trig_cev.setVisible(False)
+        self._combo_trig_cev.currentIndexChanged.connect(self._on_trigger_prop_changed)
+        target_row.addWidget(self._combo_trig_cev, 1)
+        # Item selector — shown for give_item / remove_item actions and player_has_item condition
+        self._lbl_trig_item = QLabel("Item :")
+        self._lbl_trig_item.setVisible(False)
+        target_row.addWidget(self._lbl_trig_item)
+        self._combo_trig_item = QComboBox()
+        self._combo_trig_item.setToolTip("Item défini dans Globals → Items. Résolu en index à l'export.")
+        self._combo_trig_item.setVisible(False)
+        self._combo_trig_item.currentIndexChanged.connect(self._on_trigger_prop_changed)
+        target_row.addWidget(self._combo_trig_item, 1)
         tpp.addLayout(target_row)
 
         # Action section separator
@@ -4964,6 +5030,8 @@ class LevelTab(QWidget):
             ("set_npc_dialogue",      "level.trigger_action.set_npc_dialogue"),
             ("give_item",             "level.trigger_action.give_item"),
             ("remove_item",           "level.trigger_action.remove_item"),
+            ("drop_item",             "level.trigger_action.drop_item"),
+            ("drop_random_item",      "level.trigger_action.drop_random_item"),
             ("unlock_door",           "level.trigger_action.unlock_door"),
             ("enable_wall_grab",      "level.trigger_action.enable_wall_grab"),
             ("disable_wall_grab",     "level.trigger_action.disable_wall_grab"),
@@ -5322,8 +5390,17 @@ class LevelTab(QWidget):
         # --- Tab 2: Procgen -----------------------------------------------
         tab_gen = QWidget()
         gv = QVBoxLayout(tab_gen)
-        gv.setContentsMargins(4, 4, 4, 4)
-        gv.setSpacing(5)
+        gv.setContentsMargins(2, 2, 2, 2)
+        gv.setSpacing(0)
+
+        self._procgen_sub_tabs = QTabWidget()
+        self._procgen_sub_tabs.setDocumentMode(True)
+
+        # ── Sub-tab A : Design Map (design-time, existing content) ────────
+        tab_design = QWidget()
+        tab_design_v = QVBoxLayout(tab_design)
+        tab_design_v.setContentsMargins(4, 4, 4, 4)
+        tab_design_v.setSpacing(5)
 
         proc_split = QSplitter(Qt.Orientation.Vertical)
 
@@ -5628,7 +5705,12 @@ class LevelTab(QWidget):
             )
         )
 
-        gv.addWidget(proc_split, 1)
+        tab_design_v.addWidget(proc_split, 1)
+
+        self._procgen_sub_tabs.addTab(tab_design,                      "Design Map")
+        self._procgen_sub_tabs.addTab(self._build_procgen_dfs_tab(),   "Dungeon DFS")
+        self._procgen_sub_tabs.addTab(self._build_procgen_cave_tab(),  "Cave")
+        gv.addWidget(self._procgen_sub_tabs, 1)
 
         self._tab_procgen = tab_gen
         self._right_tabs.addTab(tab_gen, tr("level.tab_procgen"))
@@ -6276,6 +6358,7 @@ class LevelTab(QWidget):
         self._refresh_trigger_bgm_combo()
         self._refresh_trigger_sfx_combo()
         self._refresh_neighbor_combos()
+        self._refresh_procgen_scene_combos()
 
     def _scene_idx_for_id(self, sid: str) -> int | None:
         sid = str(sid or "").strip()
@@ -6993,6 +7076,111 @@ class LevelTab(QWidget):
             self._combo_map_mode.setCurrentIndex(mm_idx)
         self._combo_map_mode.blockSignals(False)
         self._on_map_mode_changed(self._combo_map_mode.currentIndex())
+
+        # ── Restore procgen UI params ─────────────────────────────────
+        pp = scene.get("procgen_params")
+        if isinstance(pp, dict) and pp:
+            try:
+                self._spin_seed.setValue(int(pp.get("seed", 42)))
+                self._spin_margin.setValue(int(pp.get("margin", 1)))
+                self._spin_enemy_dens.setValue(int(pp.get("enemy_dens", 10)))
+                self._spin_item_dens.setValue(int(pp.get("item_dens", 5)))
+                self._spin_open_dens.setValue(int(pp.get("open_dens", 20)))
+                self._spin_td_bsp_depth.setValue(int(pp.get("td_bsp_depth", 4)))
+                self._spin_td_loop_pct.setValue(int(pp.get("td_loop_pct", 15)))
+                self._spin_td_bsp_out_w.setValue(int(pp.get("td_bsp_out_w", 0)))
+                self._spin_td_bsp_out_h.setValue(int(pp.get("td_bsp_out_h", 0)))
+                self._spin_td_bsp_sprite.setValue(int(pp.get("td_bsp_sprite", 1)))
+                self._spin_td_scatter_out_w.setValue(int(pp.get("td_scatter_out_w", 20)))
+                self._spin_td_scatter_out_h.setValue(int(pp.get("td_scatter_out_h", 18)))
+                self._spin_wall_dens.setValue(int(pp.get("wall_dens", 20)))
+                self._chk_td_ca.setChecked(bool(pp.get("td_ca", True)))
+                self._chk_dir_walls.setChecked(bool(pp.get("dir_walls", True)))
+                self._chk_td_int_walls.setChecked(bool(pp.get("td_int_walls", True)))
+                self._chk_td_water.setChecked(bool(pp.get("td_water", True)))
+                self._chk_td_border_n.setChecked(bool(pp.get("td_border_n", True)))
+                self._chk_td_border_s.setChecked(bool(pp.get("td_border_s", True)))
+                self._chk_td_border_e.setChecked(bool(pp.get("td_border_e", True)))
+                self._chk_td_border_w.setChecked(bool(pp.get("td_border_w", True)))
+                self._chk_gen_tilemaps.setChecked(bool(pp.get("gen_tilemaps", True)))
+                self._chk_gen_scr1.setChecked(bool(pp.get("gen_scr1", True)))
+                self._chk_gen_scr2.setChecked(bool(pp.get("gen_scr2", False)))
+                ts_idx = self._combo_tile_src.findData(pp.get("tile_src", "auto"))
+                if ts_idx >= 0:
+                    self._combo_tile_src.setCurrentIndex(ts_idx)
+                td_idx = self._combo_td_gen_mode.findData(pp.get("td_gen_mode", "scatter"))
+                if td_idx >= 0:
+                    self._combo_td_gen_mode.setCurrentIndex(td_idx)
+            except Exception:
+                pass
+
+        # ── Restore runtime DFS params ────────────────────────────────
+        dp = scene.get("rt_dfs_params")
+        self._chk_dfs_enabled.setChecked(isinstance(dp, dict) and bool(dp.get("enabled", False)))
+        if isinstance(dp, dict) and dp:
+            try:
+                self._spin_dfs_grid_w.setValue(int(dp.get("grid_w", 4)))
+                self._spin_dfs_grid_h.setValue(int(dp.get("grid_h", 4)))
+                self._spin_dfs_max_enemies.setValue(int(dp.get("max_enemies", 4)))
+                self._spin_dfs_item_chance.setValue(int(dp.get("item_chance", 25)))
+                self._spin_dfs_loop_pct.setValue(int(dp.get("loop_pct", 20)))
+                self._spin_dfs_max_active.setValue(int(dp.get("max_active", 8)))
+                sm_idx = self._combo_dfs_start_mode.findData(dp.get("start_mode", "corner"))
+                if sm_idx >= 0:
+                    self._combo_dfs_start_mode.setCurrentIndex(sm_idx)
+                self._chk_dfs_multifloor.setChecked(bool(dp.get("multifloor", False)))
+                self._spin_dfs_floor_var.setValue(int(dp.get("floor_var", 0)))
+                self._spin_dfs_max_floors.setValue(int(dp.get("max_floors", 0)))
+                bs_idx = self._combo_dfs_boss_scene.findData(dp.get("boss_scene", ""))
+                if bs_idx >= 0:
+                    self._combo_dfs_boss_scene.setCurrentIndex(bs_idx)
+                ls_idx = self._combo_dfs_loop_scene.findData(dp.get("loop_scene", ""))
+                if ls_idx >= 0:
+                    self._combo_dfs_loop_scene.setCurrentIndex(ls_idx)
+                self._spin_dfs_tier_count.setValue(int(dp.get("tier_count", 5)))
+                self._spin_dfs_floors_per_tier.setValue(int(dp.get("floors_per_tier", 5)))
+                tier = dp.get("tier_table")
+                if isinstance(tier, list):
+                    for r, row_vals in enumerate(tier):
+                        if r >= 4 or not isinstance(row_vals, list):
+                            break
+                        for c, val in enumerate(row_vals):
+                            if c >= 5:
+                                break
+                            self._dfs_tier_table.setItem(r, c, QTableWidgetItem(str(val)))
+            except Exception:
+                pass
+
+        # ── Restore runtime Cave params ───────────────────────────────
+        cp = scene.get("rt_cave_params")
+        self._chk_cave_enabled.setChecked(isinstance(cp, dict) and bool(cp.get("enabled", False)))
+        if isinstance(cp, dict) and cp:
+            try:
+                self._spin_cave_wall_pct.setValue(int(cp.get("wall_pct", 45)))
+                self._spin_cave_iterations.setValue(int(cp.get("iterations", 5)))
+                self._spin_cave_max_enemies.setValue(int(cp.get("max_enemies", 6)))
+                self._spin_cave_max_chests.setValue(int(cp.get("max_items", cp.get("max_chests", 2))))
+                self._spin_cave_pickup_type.setValue(int(cp.get("pickup_type", 0)))
+                self._refresh_cave_item_pool(selected=cp.get("item_pool", []) or [])
+                self._chk_cave_multifloor.setChecked(bool(cp.get("multifloor", False)))
+                self._spin_cave_floor_var.setValue(int(cp.get("floor_var", 0)))
+                self._spin_cave_max_floors.setValue(int(cp.get("max_floors", 0)))
+                cb_idx = self._combo_cave_boss_scene.findData(cp.get("boss_scene", ""))
+                if cb_idx >= 0:
+                    self._combo_cave_boss_scene.setCurrentIndex(cb_idx)
+                self._spin_cave_tier_count.setValue(int(cp.get("tier_count", 5)))
+                self._spin_cave_floors_per_tier.setValue(int(cp.get("floors_per_tier", 5)))
+                tier = cp.get("tier_table")
+                if isinstance(tier, list):
+                    for r, row_vals in enumerate(tier):
+                        if r >= 3 or not isinstance(row_vals, list):
+                            break
+                        for c, val in enumerate(row_vals):
+                            if c >= 5:
+                                break
+                            self._cave_tier_table.setItem(r, c, QTableWidgetItem(str(val)))
+            except Exception:
+                pass
 
         raw_col = scene.get("col_map", None)
         self._clear_col_map_import_meta()
@@ -11268,6 +11456,543 @@ class LevelTab(QWidget):
             self._update_budget()
 
     # ------------------------------------------------------------------
+    # Procgen sub-tab builders
+    # ------------------------------------------------------------------
+
+    def _build_procgen_dfs_tab(self) -> QWidget:
+        """Build and return the Dungeon DFS runtime configuration sub-tab."""
+        tab = QWidget()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(scroll.Shape.NoFrame)
+        inner = QWidget()
+        v = QVBoxLayout(inner)
+        v.setContentsMargins(6, 6, 6, 6)
+        v.setSpacing(8)
+
+        # ── Master enable ─────────────────────────────────────────────────
+        self._chk_dfs_enabled = QCheckBox(
+            "Enable Dungeon DFS runtime generation for this scene")
+        self._chk_dfs_enabled.setToolTip(
+            "When checked, the Export button writes procgen_config.h and the build\n"
+            "pipeline includes it automatically.\n"
+            "Uncheck = this scene uses static Design Map or no runtime procgen.")
+        self._chk_dfs_enabled.setStyleSheet("font-weight: bold;")
+        v.addWidget(self._chk_dfs_enabled)
+
+        # Container that holds all params — disabled when master is off
+        self._dfs_params_widget = QWidget()
+        dfs_params_v = QVBoxLayout(self._dfs_params_widget)
+        dfs_params_v.setContentsMargins(0, 0, 0, 0)
+        dfs_params_v.setSpacing(8)
+
+        def _dfs_toggle(checked: bool) -> None:
+            self._dfs_params_widget.setEnabled(checked)
+
+        self._chk_dfs_enabled.toggled.connect(_dfs_toggle)
+        self._dfs_params_widget.setEnabled(False)  # disabled until checked
+
+        # Wire container into the outer layout NOW, before rebinding v
+        v.addWidget(self._dfs_params_widget, 1)
+
+        # Alias for shorter code below — all subsequent v.addWidget() target the container
+        v = dfs_params_v  # noqa: F841 — intentional rebind
+
+        # ── Grid size ────────────────────────────────────────────────────
+        grp_grid = QGroupBox("Grid size (rooms)")
+        grid_v = QVBoxLayout(grp_grid)
+        grid_v.setSpacing(4)
+        grid_row = QHBoxLayout()
+        grid_row.addWidget(QLabel("W:"))
+        self._spin_dfs_grid_w = QSpinBox()
+        self._spin_dfs_grid_w.setRange(2, 8)
+        self._spin_dfs_grid_w.setValue(4)
+        self._spin_dfs_grid_w.setToolTip("Grid width in rooms (PROCGEN_GRID_W). RAM: W×H bytes.")
+        grid_row.addWidget(self._spin_dfs_grid_w)
+        grid_row.addWidget(QLabel("H:"))
+        self._spin_dfs_grid_h = QSpinBox()
+        self._spin_dfs_grid_h.setRange(2, 8)
+        self._spin_dfs_grid_h.setValue(4)
+        self._spin_dfs_grid_h.setToolTip("Grid height in rooms (PROCGEN_GRID_H). RAM: W×H bytes.")
+        grid_row.addWidget(self._spin_dfs_grid_h)
+        grid_row.addStretch()
+        grid_v.addLayout(grid_row)
+        ram_note = QLabel("RAM: ~72 B base + W×H cells")
+        ram_note.setStyleSheet("color:#aaa;font-size:10px;")
+        grid_v.addWidget(ram_note)
+        v.addWidget(grp_grid)
+
+        # ── Content generation ───────────────────────────────────────────
+        grp_content = QGroupBox("Content per room")
+        content_v = QVBoxLayout(grp_content)
+        content_v.setSpacing(4)
+
+        max_row = QHBoxLayout()
+        max_row.addWidget(QLabel("Max enemies per room:"))
+        self._spin_dfs_max_enemies = QSpinBox()
+        self._spin_dfs_max_enemies.setRange(0, 12)
+        self._spin_dfs_max_enemies.setValue(4)
+        self._spin_dfs_max_enemies.setToolTip("PROCGEN_MAX_ENEMIES — max entities placed per room")
+        max_row.addWidget(self._spin_dfs_max_enemies)
+        max_row.addStretch()
+        content_v.addLayout(max_row)
+
+        item_row = QHBoxLayout()
+        item_row.addWidget(QLabel("Item chance per room:"))
+        self._spin_dfs_item_chance = QSpinBox()
+        self._spin_dfs_item_chance.setRange(0, 100)
+        self._spin_dfs_item_chance.setValue(25)
+        self._spin_dfs_item_chance.setSuffix("%")
+        self._spin_dfs_item_chance.setToolTip("PROCGEN_ITEM_CHANCE — percent chance an item spawns in a room")
+        item_row.addWidget(self._spin_dfs_item_chance)
+        item_row.addStretch()
+        content_v.addLayout(item_row)
+
+        loop_row = QHBoxLayout()
+        loop_row.addWidget(QLabel("Loop injection:"))
+        self._spin_dfs_loop_pct = QSpinBox()
+        self._spin_dfs_loop_pct.setRange(0, 80)
+        self._spin_dfs_loop_pct.setValue(20)
+        self._spin_dfs_loop_pct.setSuffix("%")
+        self._spin_dfs_loop_pct.setToolTip("PROCGEN_LOOP_PCT — extra corridors added after DFS for loops")
+        loop_row.addWidget(self._spin_dfs_loop_pct)
+        loop_row.addStretch()
+        content_v.addLayout(loop_row)
+
+        active_row = QHBoxLayout()
+        active_row.addWidget(QLabel("Max active enemies (global):"))
+        self._spin_dfs_max_active = QSpinBox()
+        self._spin_dfs_max_active.setRange(1, 40)
+        self._spin_dfs_max_active.setValue(8)
+        self._spin_dfs_max_active.setToolTip("PROCGEN_MAX_ACTIVE — max live enemies across all rooms simultaneously")
+        active_row.addWidget(self._spin_dfs_max_active)
+        active_row.addStretch()
+        content_v.addLayout(active_row)
+
+        start_row = QHBoxLayout()
+        start_row.addWidget(QLabel("Player start mode:"))
+        self._combo_dfs_start_mode = QComboBox()
+        self._combo_dfs_start_mode.addItem("Corner (0,0)", "corner")
+        self._combo_dfs_start_mode.addItem("Random room", "random")
+        self._combo_dfs_start_mode.addItem("Furthest from exit", "far_exit")
+        self._combo_dfs_start_mode.setToolTip("PROCGEN_START_MODE — where the player spawns in the dungeon")
+        start_row.addWidget(self._combo_dfs_start_mode, 1)
+        content_v.addLayout(start_row)
+
+        v.addWidget(grp_content)
+
+        # ── Difficulty tiers ─────────────────────────────────────────────
+        grp_tiers = QGroupBox("Difficulty tiers")
+        tiers_v = QVBoxLayout(grp_tiers)
+        tiers_v.setSpacing(4)
+
+        tier_cfg_row = QHBoxLayout()
+        tier_cfg_row.addWidget(QLabel("Tiers actifs :"))
+        self._spin_dfs_tier_count = QSpinBox()
+        self._spin_dfs_tier_count.setRange(1, 5)
+        self._spin_dfs_tier_count.setValue(5)
+        self._spin_dfs_tier_count.setToolTip(
+            "Nombre de colonnes exportées (1–5). Les colonnes désactivées sont grisées\n"
+            "et non incluses dans le .h. Exporte PROCGEN_TIER_COUNT.")
+        tier_cfg_row.addWidget(self._spin_dfs_tier_count)
+        tier_cfg_row.addSpacing(16)
+        tier_cfg_row.addWidget(QLabel("Floors par tier :"))
+        self._spin_dfs_floors_per_tier = QSpinBox()
+        self._spin_dfs_floors_per_tier.setRange(1, 50)
+        self._spin_dfs_floors_per_tier.setValue(5)
+        self._spin_dfs_floors_per_tier.setToolTip(
+            "Nombre d'étages par palier de difficulté.\n"
+            "tier = floor ÷ floors_per_tier, plafonné à tier_count-1.\n"
+            "Exporte PROCGEN_FLOORS_PER_TIER.")
+        tier_cfg_row.addWidget(self._spin_dfs_floors_per_tier)
+        tier_cfg_row.addStretch()
+        tiers_v.addLayout(tier_cfg_row)
+
+        tier_note = QLabel("Colonnes grisées = non exportées. tier = floor ÷ floors_per_tier, plafonné à tier_count−1.")
+        tier_note.setWordWrap(True)
+        tier_note.setStyleSheet("color:#aaa;font-size:10px;")
+        tiers_v.addWidget(tier_note)
+
+        self._dfs_tier_table = QTableWidget(4, 5)
+        self._dfs_tier_table.setHorizontalHeaderLabels(
+            ["Tier 0", "Tier 1", "Tier 2", "Tier 3", "Tier 4"]
+        )
+        self._dfs_tier_table.setVerticalHeaderLabels(
+            ["Max enemies", "Item chance%", "Loop pct%", "Max active"]
+        )
+        _defaults = [
+            [2, 3, 4, 5, 6],
+            [30, 25, 20, 15, 10],
+            [10, 15, 20, 25, 30],
+            [4, 6, 8, 10, 12],
+        ]
+        for r, row_vals in enumerate(_defaults):
+            for c, val in enumerate(row_vals):
+                item = QTableWidgetItem(str(val))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self._dfs_tier_table.setItem(r, c, item)
+        self._dfs_tier_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
+        self._dfs_tier_table.setFixedHeight(130)
+        tiers_v.addWidget(self._dfs_tier_table)
+
+        def _dfs_update_tier_cols(n: int) -> None:
+            for c in range(5):
+                active = c < n
+                for r in range(4):
+                    it = self._dfs_tier_table.item(r, c)
+                    if it:
+                        flags = it.flags()
+                        if active:
+                            it.setFlags(flags | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsEditable)
+                            it.setForeground(self._dfs_tier_table.palette().text())
+                        else:
+                            it.setFlags(flags & ~Qt.ItemFlag.ItemIsEnabled & ~Qt.ItemFlag.ItemIsEditable)
+                            it.setForeground(self._dfs_tier_table.palette().mid())
+
+        self._spin_dfs_tier_count.valueChanged.connect(_dfs_update_tier_cols)
+        _dfs_update_tier_cols(5)
+        v.addWidget(grp_tiers)
+
+        # ── Multi-floor progression ──────────────────────────────────────
+        grp_floor = QGroupBox("Multi-floor progression")
+        floor_v = QVBoxLayout(grp_floor)
+        floor_v.setSpacing(4)
+
+        self._chk_dfs_multifloor = QCheckBox("Enable multi-floor (export goto_scene + var triggers)")
+        self._chk_dfs_multifloor.setToolTip(
+            "When enabled, exports C header constants and a trigger template for\n"
+            "chaining floors via goto_scene + inc_variable(FLOOR).")
+        floor_v.addWidget(self._chk_dfs_multifloor)
+
+        var_row = QHBoxLayout()
+        var_row.addWidget(QLabel("Floor variable index (0-7):"))
+        self._spin_dfs_floor_var = QSpinBox()
+        self._spin_dfs_floor_var.setRange(0, 7)
+        self._spin_dfs_floor_var.setValue(0)
+        self._spin_dfs_floor_var.setToolTip("Which game_vars[] slot tracks the current floor number")
+        var_row.addWidget(self._spin_dfs_floor_var)
+        var_row.addStretch()
+        floor_v.addLayout(var_row)
+
+        max_floor_row = QHBoxLayout()
+        max_floor_row.addWidget(QLabel("Max floors (0 = infinite):"))
+        self._spin_dfs_max_floors = QSpinBox()
+        self._spin_dfs_max_floors.setRange(0, 99)
+        self._spin_dfs_max_floors.setValue(0)
+        self._spin_dfs_max_floors.setToolTip("After this many floors, goto the boss/end scene. 0 = loop forever.")
+        max_floor_row.addWidget(self._spin_dfs_max_floors)
+        max_floor_row.addStretch()
+        floor_v.addLayout(max_floor_row)
+
+        boss_row = QHBoxLayout()
+        boss_row.addWidget(QLabel("Boss/end scene:"))
+        self._combo_dfs_boss_scene = QComboBox()
+        self._combo_dfs_boss_scene.addItem("(none)", "")
+        self._combo_dfs_boss_scene.setToolTip("Scene to go to when max floors is reached")
+        boss_row.addWidget(self._combo_dfs_boss_scene, 1)
+        floor_v.addLayout(boss_row)
+
+        loop_scene_row = QHBoxLayout()
+        loop_scene_row.addWidget(QLabel("Reload scene (self-loop):"))
+        self._combo_dfs_loop_scene = QComboBox()
+        self._combo_dfs_loop_scene.addItem("(same scene)", "")
+        self._combo_dfs_loop_scene.setToolTip(
+            "Scene to goto_scene for each new floor. Leave blank = self-reload.")
+        loop_scene_row.addWidget(self._combo_dfs_loop_scene, 1)
+        floor_v.addLayout(loop_scene_row)
+
+        v.addWidget(grp_floor)
+
+        # ── Export ───────────────────────────────────────────────────────
+        self._btn_export_dfs_config = QPushButton("Export  procgen_config.h")
+        self._btn_export_dfs_config.setToolTip(
+            "Write GraphX/gen/procgen_config.h with #define constants for all parameters above.")
+        self._btn_export_dfs_config.clicked.connect(self._export_dfs_config)
+        v.addWidget(self._btn_export_dfs_config)
+
+        export_note = QLabel(
+            "Include GraphX/gen/procgen_config.h before ngpc_procgen.h in your game code.\n"
+            "Tier table exported as PROCGEN_TIER_* arrays in the header."
+        )
+        export_note.setWordWrap(True)
+        export_note.setStyleSheet("color:#aaa;font-size:10px;")
+        v.addWidget(export_note)
+
+        v.addStretch()
+
+        scroll.setWidget(inner)
+
+        outer_v = QVBoxLayout(tab)
+        outer_v.setContentsMargins(0, 0, 0, 0)
+        outer_v.addWidget(scroll)
+        return tab
+
+    def _build_procgen_cave_tab(self) -> QWidget:
+        """Build and return the Cave (cellular automaton) runtime config sub-tab."""
+        tab = QWidget()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(scroll.Shape.NoFrame)
+        inner = QWidget()
+        v = QVBoxLayout(inner)
+        v.setContentsMargins(6, 6, 6, 6)
+        v.setSpacing(8)
+
+        # ── Master enable ─────────────────────────────────────────────────
+        self._chk_cave_enabled = QCheckBox(
+            "Enable Cave runtime generation for this scene")
+        self._chk_cave_enabled.setToolTip(
+            "When checked, the Export button writes cavegen_config.h and the build\n"
+            "pipeline includes it automatically.\n"
+            "Uncheck = this scene uses static Design Map or no runtime cave gen.")
+        self._chk_cave_enabled.setStyleSheet("font-weight: bold;")
+        v.addWidget(self._chk_cave_enabled)
+
+        # Container that holds all params — disabled when master is off
+        self._cave_params_widget = QWidget()
+        cave_params_v = QVBoxLayout(self._cave_params_widget)
+        cave_params_v.setContentsMargins(0, 0, 0, 0)
+        cave_params_v.setSpacing(8)
+
+        def _cave_toggle(checked: bool) -> None:
+            self._cave_params_widget.setEnabled(checked)
+
+        self._chk_cave_enabled.toggled.connect(_cave_toggle)
+        self._cave_params_widget.setEnabled(False)  # disabled until checked
+
+        # Wire container into the outer layout NOW, before rebinding v
+        v.addWidget(self._cave_params_widget, 1)
+
+        # Alias for shorter code below — all subsequent v.addWidget() target the container
+        v = cave_params_v  # noqa: F841 — intentional rebind
+
+        # ── Cave generation params ───────────────────────────────────────
+        grp_gen = QGroupBox("Cave generation  (ngpc_cavegen)")
+        gen_v = QVBoxLayout(grp_gen)
+        gen_v.setSpacing(4)
+
+        note = QLabel(
+            "32×32 tile cellular automaton cave. RAM: 1024 B (cave grid) + ProcgenMap overhead."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color:#aaa;font-size:10px;")
+        gen_v.addWidget(note)
+
+        wall_row = QHBoxLayout()
+        wall_row.addWidget(QLabel("Initial wall %:"))
+        self._spin_cave_wall_pct = QSpinBox()
+        self._spin_cave_wall_pct.setRange(30, 70)
+        self._spin_cave_wall_pct.setValue(45)
+        self._spin_cave_wall_pct.setSuffix("%")
+        self._spin_cave_wall_pct.setToolTip(
+            "CAVEGEN_WALL_PCT — seed density. 40-50% gives organic caves; <35% = sparse, >55% = very dense.")
+        wall_row.addWidget(self._spin_cave_wall_pct)
+        wall_row.addStretch()
+        gen_v.addLayout(wall_row)
+
+        iter_row = QHBoxLayout()
+        iter_row.addWidget(QLabel("CA iterations:"))
+        self._spin_cave_iterations = QSpinBox()
+        self._spin_cave_iterations.setRange(1, 10)
+        self._spin_cave_iterations.setValue(5)
+        self._spin_cave_iterations.setToolTip(
+            "CAVEGEN_ITERATIONS — smoothing passes. More = rounder caves, heavier init cost.")
+        iter_row.addWidget(self._spin_cave_iterations)
+        iter_row.addStretch()
+        gen_v.addLayout(iter_row)
+
+        v.addWidget(grp_gen)
+
+        # ── Content ──────────────────────────────────────────────────────
+        grp_content = QGroupBox("Content per cave")
+        content_v = QVBoxLayout(grp_content)
+        content_v.setSpacing(4)
+
+        enem_row = QHBoxLayout()
+        enem_row.addWidget(QLabel("Max enemies:"))
+        self._spin_cave_max_enemies = QSpinBox()
+        self._spin_cave_max_enemies.setRange(0, 16)
+        self._spin_cave_max_enemies.setValue(6)
+        self._spin_cave_max_enemies.setToolTip("CAVEGEN_MAX_ENEMIES — enemies placed in open floor cells")
+        enem_row.addWidget(self._spin_cave_max_enemies)
+        enem_row.addStretch()
+        content_v.addLayout(enem_row)
+
+        chest_row = QHBoxLayout()
+        chest_row.addWidget(QLabel("Max items:"))
+        self._spin_cave_max_chests = QSpinBox()
+        self._spin_cave_max_chests.setRange(0, 8)
+        self._spin_cave_max_chests.setValue(2)
+        self._spin_cave_max_chests.setToolTip("CAVEGEN_MAX_ITEMS — item pickups placed in open floor cells")
+        chest_row.addWidget(self._spin_cave_max_chests)
+        chest_row.addStretch()
+        content_v.addLayout(chest_row)
+
+        pickup_row = QHBoxLayout()
+        pickup_row.addWidget(QLabel("Pickup entity type index:"))
+        self._spin_cave_pickup_type = QSpinBox()
+        self._spin_cave_pickup_type.setRange(0, 255)
+        self._spin_cave_pickup_type.setValue(0)
+        self._spin_cave_pickup_type.setToolTip(
+            "CAVEGEN_PICKUP_TYPE — index de l'entity type générique 'pickup' (role=item).\n"
+            "Le runtime spawne cet entity type et applique le sprite de l'item via g_item_table[idx].sprite_id."
+        )
+        self._spin_cave_pickup_type.valueChanged.connect(lambda: self._store_scene_state(save_project=True, update_status=False))
+        pickup_row.addWidget(self._spin_cave_pickup_type)
+        pickup_row.addStretch()
+        content_v.addLayout(pickup_row)
+
+        # Item pool — which items can the procgen place
+        pool_lbl = QLabel("Item pool:")
+        pool_lbl.setToolTip(
+            "Items que le procgen peut placer sur la map.\n"
+            "Exporté comme CAVEGEN_ITEM_POOL[] + CAVEGEN_ITEM_POOL_SIZE.\n"
+            "Vide = tous les items éligibles (le runtime choisit)."
+        )
+        content_v.addWidget(pool_lbl)
+        self._list_cave_item_pool = QListWidget()
+        self._list_cave_item_pool.setToolTip(pool_lbl.toolTip())
+        self._list_cave_item_pool.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+        self._list_cave_item_pool.setMaximumHeight(80)
+        self._list_cave_item_pool.itemSelectionChanged.connect(lambda: self._store_scene_state(save_project=True, update_status=False))
+        content_v.addWidget(self._list_cave_item_pool)
+
+        v.addWidget(grp_content)
+
+        # ── Difficulty tiers ─────────────────────────────────────────────
+        grp_tiers = QGroupBox("Difficulty tiers")
+        tiers_v = QVBoxLayout(grp_tiers)
+        tiers_v.setSpacing(4)
+
+        cave_tier_cfg_row = QHBoxLayout()
+        cave_tier_cfg_row.addWidget(QLabel("Tiers actifs :"))
+        self._spin_cave_tier_count = QSpinBox()
+        self._spin_cave_tier_count.setRange(1, 5)
+        self._spin_cave_tier_count.setValue(5)
+        self._spin_cave_tier_count.setToolTip(
+            "Nombre de colonnes exportées (1–5). Exporte CAVEGEN_TIER_COUNT.")
+        cave_tier_cfg_row.addWidget(self._spin_cave_tier_count)
+        cave_tier_cfg_row.addSpacing(16)
+        cave_tier_cfg_row.addWidget(QLabel("Floors par tier :"))
+        self._spin_cave_floors_per_tier = QSpinBox()
+        self._spin_cave_floors_per_tier.setRange(1, 50)
+        self._spin_cave_floors_per_tier.setValue(5)
+        self._spin_cave_floors_per_tier.setToolTip(
+            "Nombre d'étages par palier de difficulté.\n"
+            "tier = floor ÷ floors_per_tier, plafonné à tier_count-1.\n"
+            "Exporte CAVEGEN_FLOORS_PER_TIER.")
+        cave_tier_cfg_row.addWidget(self._spin_cave_floors_per_tier)
+        cave_tier_cfg_row.addStretch()
+        tiers_v.addLayout(cave_tier_cfg_row)
+
+        cave_tier_note = QLabel("Colonnes grisées = non exportées. tier = floor ÷ floors_per_tier, plafonné à tier_count−1.")
+        cave_tier_note.setWordWrap(True)
+        cave_tier_note.setStyleSheet("color:#aaa;font-size:10px;")
+        tiers_v.addWidget(cave_tier_note)
+
+        self._cave_tier_table = QTableWidget(3, 5)
+        self._cave_tier_table.setHorizontalHeaderLabels(
+            ["Tier 0", "Tier 1", "Tier 2", "Tier 3", "Tier 4"]
+        )
+        self._cave_tier_table.setVerticalHeaderLabels(
+            ["Wall %", "Max enemies", "Max items"]
+        )
+        _cave_defaults = [
+            [45, 47, 50, 52, 55],
+            [3, 4, 6, 8, 10],
+            [3, 2, 2, 1, 1],
+        ]
+        for r, row_vals in enumerate(_cave_defaults):
+            for c, val in enumerate(row_vals):
+                item = QTableWidgetItem(str(val))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self._cave_tier_table.setItem(r, c, item)
+        self._cave_tier_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
+        self._cave_tier_table.setFixedHeight(104)
+        tiers_v.addWidget(self._cave_tier_table)
+
+        def _cave_update_tier_cols(n: int) -> None:
+            for c in range(5):
+                active = c < n
+                for r in range(3):
+                    it = self._cave_tier_table.item(r, c)
+                    if it:
+                        flags = it.flags()
+                        if active:
+                            it.setFlags(flags | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsEditable)
+                            it.setForeground(self._cave_tier_table.palette().text())
+                        else:
+                            it.setFlags(flags & ~Qt.ItemFlag.ItemIsEnabled & ~Qt.ItemFlag.ItemIsEditable)
+                            it.setForeground(self._cave_tier_table.palette().mid())
+
+        self._spin_cave_tier_count.valueChanged.connect(_cave_update_tier_cols)
+        _cave_update_tier_cols(5)
+
+        v.addWidget(grp_tiers)
+
+        # ── Multi-floor progression ──────────────────────────────────────
+        grp_floor = QGroupBox("Multi-floor progression")
+        floor_v = QVBoxLayout(grp_floor)
+        floor_v.setSpacing(4)
+
+        self._chk_cave_multifloor = QCheckBox("Enable multi-floor")
+        self._chk_cave_multifloor.setToolTip(
+            "Export goto_scene + inc_variable trigger template for chained cave floors.")
+        floor_v.addWidget(self._chk_cave_multifloor)
+
+        cvar_row = QHBoxLayout()
+        cvar_row.addWidget(QLabel("Floor variable index (0-7):"))
+        self._spin_cave_floor_var = QSpinBox()
+        self._spin_cave_floor_var.setRange(0, 7)
+        self._spin_cave_floor_var.setValue(0)
+        self._spin_cave_floor_var.setToolTip("Which game_vars[] slot tracks the current floor number")
+        cvar_row.addWidget(self._spin_cave_floor_var)
+        cvar_row.addStretch()
+        floor_v.addLayout(cvar_row)
+
+        cmax_row = QHBoxLayout()
+        cmax_row.addWidget(QLabel("Max floors (0 = infinite):"))
+        self._spin_cave_max_floors = QSpinBox()
+        self._spin_cave_max_floors.setRange(0, 99)
+        self._spin_cave_max_floors.setValue(0)
+        cmax_row.addWidget(self._spin_cave_max_floors)
+        cmax_row.addStretch()
+        floor_v.addLayout(cmax_row)
+
+        cboss_row = QHBoxLayout()
+        cboss_row.addWidget(QLabel("Boss/end scene:"))
+        self._combo_cave_boss_scene = QComboBox()
+        self._combo_cave_boss_scene.addItem("(none)", "")
+        cboss_row.addWidget(self._combo_cave_boss_scene, 1)
+        floor_v.addLayout(cboss_row)
+
+        v.addWidget(grp_floor)
+
+        # ── Export ───────────────────────────────────────────────────────
+        self._btn_export_cave_config = QPushButton("Export  cavegen_config.h")
+        self._btn_export_cave_config.setToolTip(
+            "Write GraphX/gen/cavegen_config.h with #define constants for all parameters above.")
+        self._btn_export_cave_config.clicked.connect(self._export_cave_config)
+        v.addWidget(self._btn_export_cave_config)
+
+        export_note = QLabel(
+            "Include GraphX/gen/cavegen_config.h before ngpc_cavegen.h in your game code."
+        )
+        export_note.setWordWrap(True)
+        export_note.setStyleSheet("color:#aaa;font-size:10px;")
+        v.addWidget(export_note)
+
+        v.addStretch()
+        scroll.setWidget(inner)
+
+        outer_v = QVBoxLayout(tab)
+        outer_v.setContentsMargins(0, 0, 0, 0)
+        outer_v.addWidget(scroll)
+        return tab
+
+    # ------------------------------------------------------------------
     # Procedural generation
     # ------------------------------------------------------------------
 
@@ -11745,6 +12470,134 @@ class LevelTab(QWidget):
             created.append(("scr2", self._ensure_bg_item(rel, _p)))
             self._combo_bg_scr2.setCurrentIndex(created[-1][1])
             self._on_bg_scr2_changed(created[-1][1])
+
+    # ------------------------------------------------------------------
+    # Procgen config header export (DFS + Cave)
+    # ------------------------------------------------------------------
+
+    def _procgen_gen_dir(self) -> Path:
+        """Return the gen output dir (GraphX/gen/ or base dir fallback)."""
+        base = self._base_dir or Path(".")
+        cand = base / "GraphX" / "gen"
+        cand.mkdir(parents=True, exist_ok=True)
+        return cand
+
+    def _export_dfs_config(self) -> None:
+        """Write GraphX/gen/procgen_config.h from the DFS sub-tab params."""
+        try:
+            gen_dir = self._procgen_gen_dir()
+
+            grid_w = self._spin_dfs_grid_w.value()
+            grid_h = self._spin_dfs_grid_h.value()
+            max_enemies = self._spin_dfs_max_enemies.value()
+            item_chance = self._spin_dfs_item_chance.value()
+            loop_pct    = self._spin_dfs_loop_pct.value()
+            max_active  = self._spin_dfs_max_active.value()
+            start_mode_map = {"corner": 0, "random": 1, "far_exit": 2}
+            start_mode  = start_mode_map.get(
+                self._combo_dfs_start_mode.currentData() or "corner", 0)
+            multifloor  = self._chk_dfs_multifloor.isChecked()
+            floor_var   = self._spin_dfs_floor_var.value()
+            max_floors  = self._spin_dfs_max_floors.value()
+            boss_scene  = str(self._combo_dfs_boss_scene.currentData() or "")
+
+            # Read tier table (4 rows × 5 cols)
+            tier_rows = []
+            for r in range(4):
+                row_vals = []
+                for c in range(5):
+                    item = self._dfs_tier_table.item(r, c)
+                    try:
+                        row_vals.append(int(item.text()) if item else 0)
+                    except ValueError:
+                        row_vals.append(0)
+                tier_rows.append(row_vals)
+
+            def _arr(vals: list) -> str:
+                return "{" + ", ".join(str(v) for v in vals) + "}"
+
+            lines = [
+                "/* procgen_config.h — auto-generated by NgpCraft Engine */",
+                "/* DO NOT EDIT — re-export from Level > Procgen > Dungeon DFS */",
+                "#ifndef PROCGEN_CONFIG_H",
+                "#define PROCGEN_CONFIG_H",
+                "",
+                f"#define PROCGEN_GRID_W          {grid_w}",
+                f"#define PROCGEN_GRID_H          {grid_h}",
+                f"#define PROCGEN_MAX_ENEMIES     {max_enemies}",
+                f"#define PROCGEN_ITEM_CHANCE     {item_chance}",
+                f"#define PROCGEN_LOOP_PCT        {loop_pct}",
+                f"#define PROCGEN_MAX_ACTIVE      {max_active}",
+                f"#define PROCGEN_START_MODE      {start_mode}",
+                f"#define PROCGEN_MULTIFLOOR      {1 if multifloor else 0}",
+                f"#define PROCGEN_FLOOR_VAR       {floor_var}",
+                f"#define PROCGEN_MAX_FLOORS      {max_floors}",
+                "",
+                "/* Tier table — index by (game_var[FLOOR] / 5), clamped to 4 */",
+                f"#define PROCGEN_TIER_MAX_ENEMIES    {_arr(tier_rows[0])}",
+                f"#define PROCGEN_TIER_ITEM_CHANCE    {_arr(tier_rows[1])}",
+                f"#define PROCGEN_TIER_LOOP_PCT       {_arr(tier_rows[2])}",
+                f"#define PROCGEN_TIER_MAX_ACTIVE     {_arr(tier_rows[3])}",
+            ]
+
+            if multifloor and boss_scene:
+                lines += [
+                    "",
+                    f'/* Boss/end scene ID — use with ngpc_goto_scene() */',
+                    f'#define PROCGEN_BOSS_SCENE_ID   "{boss_scene}"',
+                ]
+
+            lines += ["", "#endif /* PROCGEN_CONFIG_H */", ""]
+
+            out = gen_dir / "procgen_config.h"
+            out.write_text("\n".join(lines), encoding="utf-8")
+            QMessageBox.information(self, "Export", f"Written: {out}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Export error", str(exc))
+
+    def _export_cave_config(self) -> None:
+        """Write GraphX/gen/cavegen_config.h from the Cave sub-tab params."""
+        try:
+            from core.procgen_config_gen import write_cavegen_config_h
+            # Save current UI state to scene first so the generator sees up-to-date data
+            self._store_scene_state(save_project=False, update_status=False)
+            gen_dir = self._procgen_gen_dir()
+            out = write_cavegen_config_h(
+                scene=self._scene or {},
+                export_dir=gen_dir,
+                project_data=self._project_data_root,
+            )
+            QMessageBox.information(self, "Export", f"Written: {out}")
+            return
+        except Exception as exc:
+            QMessageBox.critical(self, "Export error", str(exc))
+            return
+
+    def _refresh_procgen_scene_combos(self) -> None:
+        """Repopulate boss/loop scene combos in DFS and Cave sub-tabs."""
+        # (combo, empty_label) — loop_scene uses "same scene" semantics
+        entries = [
+            (getattr(self, "_combo_dfs_boss_scene",  None), "(none)"),
+            (getattr(self, "_combo_dfs_loop_scene",  None), "(same scene)"),
+            (getattr(self, "_combo_cave_boss_scene", None), "(none)"),
+        ]
+        for combo, empty_label in entries:
+            if combo is None:
+                continue
+            cur = str(combo.currentData() or "")
+            combo.blockSignals(True)
+            try:
+                combo.clear()
+                combo.addItem(empty_label, "")
+                for s in getattr(self, "_project_scenes", []):
+                    sid   = str(s.get("id") or "").strip()
+                    label = str(s.get("label") or sid)
+                    if sid:
+                        combo.addItem(label, sid)
+                idx = combo.findData(cur)
+                combo.setCurrentIndex(idx if idx >= 0 else 0)
+            finally:
+                combo.blockSignals(False)
 
     def _ensure_bg_item(self, rel: str, abs_path: Path) -> int:
         """Ensure (rel, abs_path) is present in BG combo lists; return index."""
@@ -12845,6 +13698,124 @@ class LevelTab(QWidget):
         self._refresh_menu_item_combo()
         self._on_trigger_prop_changed()
 
+    def _refresh_entity_type_cond_combo(self, cur_name: str = "") -> None:
+        """Rebuild _combo_trig_entity_type from entity types used in this scene."""
+        cmb = getattr(self, "_combo_trig_entity_type", None)
+        if cmb is None:
+            return
+        from core.scene_level_gen import _collect_entity_types  # type: ignore[attr-defined]
+        scene = self._scene if isinstance(self._scene, dict) else {}
+        type_names = _collect_entity_types(scene)
+        prev = cur_name or str(cmb.currentData() or "")
+        cmb.blockSignals(True)
+        cmb.clear()
+        for name in type_names:
+            cmb.addItem(name, name)
+        if prev:
+            idx = cmb.findData(prev)
+            if idx >= 0:
+                cmb.setCurrentIndex(idx)
+        cmb.blockSignals(False)
+
+    def _refresh_trig_cev_combo(self, cur_cev_id: str = "") -> None:
+        """Rebuild _combo_trig_cev from project custom_events list."""
+        cmb = getattr(self, "_combo_trig_cev", None)
+        if cmb is None:
+            return
+        pd = self._project_data_root if isinstance(self._project_data_root, dict) else {}
+        cev_list = pd.get("custom_events", []) or []
+        if not cur_cev_id:
+            sel_idx = self._trigger_selected if hasattr(self, "_trigger_selected") else -1
+            if 0 <= sel_idx < len(self._triggers):
+                cur_cev_id = str(self._triggers[sel_idx].get("cev_id", "") or "")
+        prev = cur_cev_id or str(cmb.currentData() or "")
+        cmb.blockSignals(True)
+        cmb.clear()
+        for ev in cev_list:
+            if not isinstance(ev, dict):
+                continue
+            ev_id = str(ev.get("id", "") or "")
+            ev_name = str(ev.get("name", ev_id) or ev_id)
+            cmb.addItem(ev_name, ev_id)
+        if not cmb.count():
+            cmb.addItem("(aucun événement défini)", "")
+        if prev:
+            idx = cmb.findData(prev)
+            if idx >= 0:
+                cmb.setCurrentIndex(idx)
+        cmb.blockSignals(False)
+
+    def _refresh_cave_item_pool(self, selected: list | None = None) -> None:
+        """Rebuild the cave item pool list from project item_table; restore selection."""
+        lst = getattr(self, "_list_cave_item_pool", None)
+        if lst is None:
+            return
+        pd = self._project_data_root if isinstance(self._project_data_root, dict) else {}
+        item_list = pd.get("item_table", []) or []
+        if selected is None:
+            selected = []
+        selected_set = set(str(s) for s in selected)
+        lst.blockSignals(True)
+        lst.clear()
+        for i, it in enumerate(item_list):
+            if not isinstance(it, dict):
+                continue
+            name = str(it.get("name", "") or f"item_{i}")
+            label = f"[{i}] {name}"
+            from PyQt6.QtWidgets import QListWidgetItem
+            lwi = QListWidgetItem(label)
+            lwi.setData(256, name)  # Qt.UserRole = 256
+            lst.addItem(lwi)
+            if name in selected_set:
+                lwi.setSelected(True)
+        if not lst.count():
+            from PyQt6.QtWidgets import QListWidgetItem
+            ph = QListWidgetItem("(aucun item défini dans Globals)")
+            ph.setFlags(ph.flags() & ~ph.flags())  # not selectable
+            lst.addItem(ph)
+        lst.blockSignals(False)
+
+    def _get_cave_item_pool_selected(self) -> list[str]:
+        """Return list of selected item names from _list_cave_item_pool."""
+        lst = getattr(self, "_list_cave_item_pool", None)
+        if lst is None:
+            return []
+        result = []
+        for i in range(lst.count()):
+            item = lst.item(i)
+            if item and item.isSelected():
+                name = item.data(256)
+                if name:
+                    result.append(str(name))
+        return result
+
+    def _refresh_trig_item_combo(self, cur_item_name: str = "") -> None:
+        """Rebuild _combo_trig_item from project item_table list."""
+        cmb = getattr(self, "_combo_trig_item", None)
+        if cmb is None:
+            return
+        pd = self._project_data_root if isinstance(self._project_data_root, dict) else {}
+        item_list = pd.get("item_table", []) or []
+        if not cur_item_name:
+            sel_idx = self._trigger_selected if hasattr(self, "_trigger_selected") else -1
+            if 0 <= sel_idx < len(self._triggers):
+                cur_item_name = str(self._triggers[sel_idx].get("item_id", "") or "")
+        prev = cur_item_name or str(cmb.currentData() or "")
+        cmb.blockSignals(True)
+        cmb.clear()
+        for i, it in enumerate(item_list):
+            if not isinstance(it, dict):
+                continue
+            name = str(it.get("name", "") or f"item_{i}")
+            cmb.addItem(f"[{i}] {name}", name)
+        if not cmb.count():
+            cmb.addItem("(aucun item défini)", "")
+        if prev:
+            idx = cmb.findData(prev)
+            if idx >= 0:
+                cmb.setCurrentIndex(idx)
+        cmb.blockSignals(False)
+
     def _refresh_menu_combo(self, cur_mid: str = "") -> None:
         """Rebuild the menu combo from current scene menus."""
         cm = getattr(self, "_combo_trig_menu", None)
@@ -13202,6 +14173,33 @@ class LevelTab(QWidget):
                 spn_fv.blockSignals(True)
                 spn_fv.setValue(int(t.get("flag_var_index", 0) or 0))
                 spn_fv.blockSignals(False)
+            # Load cond_type_name for entity_type_* conditions
+            cmb_et = getattr(self, "_combo_trig_entity_type", None)
+            if cmb_et is not None and cond in _TRIGGER_ENTITY_TYPE_CONDS:
+                ctn = str(t.get("cond_type_name", "") or "")
+                self._refresh_entity_type_cond_combo(cur_name=ctn)
+                et_idx = cmb_et.findData(ctn) if ctn else -1
+                cmb_et.blockSignals(True)
+                cmb_et.setCurrentIndex(et_idx if et_idx >= 0 else 0)
+                cmb_et.blockSignals(False)
+            # Load cev_id for on_custom_event condition
+            cmb_cev = getattr(self, "_combo_trig_cev", None)
+            if cmb_cev is not None and cond == "on_custom_event":
+                cev_id = str(t.get("cev_id", "") or "")
+                self._refresh_trig_cev_combo(cur_cev_id=cev_id)
+                cev_idx = cmb_cev.findData(cev_id) if cev_id else -1
+                cmb_cev.blockSignals(True)
+                cmb_cev.setCurrentIndex(cev_idx if cev_idx >= 0 else 0)
+                cmb_cev.blockSignals(False)
+            # Load item_id for give_item / remove_item / player_has_item
+            cmb_it = getattr(self, "_combo_trig_item", None)
+            if cmb_it is not None and (act in ("give_item", "remove_item", "drop_item") or cond in ("player_has_item", "item_count_ge")):
+                item_name = str(t.get("item_id", "") or "")
+                self._refresh_trig_item_combo(cur_item_name=item_name)
+                it_idx = cmb_it.findData(item_name) if item_name else -1
+                cmb_it.blockSignals(True)
+                cmb_it.setCurrentIndex(it_idx if it_idx >= 0 else 0)
+                cmb_it.blockSignals(False)
         finally:
             self._edit_trig_name.blockSignals(False)
             self._combo_trig_cond.blockSignals(False)
@@ -13288,6 +14286,36 @@ class LevelTab(QWidget):
             lmi.setVisible(needs_menu_result)
         if cmi is not None:
             cmi.setVisible(needs_menu_result)
+        # entity type conditions: show type combo
+        needs_entity_type = cond in _TRIGGER_ENTITY_TYPE_CONDS
+        lbl_et = getattr(self, "_lbl_trig_entity_type", None)
+        cmb_et = getattr(self, "_combo_trig_entity_type", None)
+        if lbl_et is not None:
+            lbl_et.setVisible(needs_entity_type)
+        if cmb_et is not None:
+            cmb_et.setVisible(needs_entity_type)
+            if needs_entity_type:
+                self._refresh_entity_type_cond_combo()
+        # on_custom_event: show custom event combo
+        needs_cev = (cond == "on_custom_event")
+        lbl_cev = getattr(self, "_lbl_trig_cev", None)
+        cmb_cev = getattr(self, "_combo_trig_cev", None)
+        if lbl_cev is not None:
+            lbl_cev.setVisible(needs_cev)
+        if cmb_cev is not None:
+            cmb_cev.setVisible(needs_cev)
+            if needs_cev:
+                self._refresh_trig_cev_combo()
+        # player_has_item / item_count_ge: show item combo
+        needs_item = cond in ("player_has_item", "item_count_ge")
+        lbl_it = getattr(self, "_lbl_trig_item", None)
+        cmb_it = getattr(self, "_combo_trig_item", None)
+        if lbl_it is not None:
+            lbl_it.setVisible(needs_item)
+        if cmb_it is not None:
+            cmb_it.setVisible(needs_item)
+            if needs_item:
+                self._refresh_trig_item_combo()
 
     def _update_trigger_ui_for_action(self) -> None:
         act = str(self._combo_trig_action.currentData() or "emit_event")
@@ -13297,11 +14325,17 @@ class LevelTab(QWidget):
         # Always hide pick-dest widgets first; move_entity_to branch re-shows them.
         self._btn_trig_pick_dest.setVisible(False)
         self._lbl_trig_dest_tile.setVisible(False)
-        # Always hide dialogue/menu combos first; individual branches re-show them.
+        # Always hide dialogue/menu/item combos first; individual branches re-show them.
         self._combo_trig_dialogue.setVisible(False)
         cm = getattr(self, "_combo_trig_menu", None)
         if cm is not None:
             cm.setVisible(False)
+        lbl_it = getattr(self, "_lbl_trig_item", None)
+        cmb_it = getattr(self, "_combo_trig_item", None)
+        if lbl_it is not None:
+            lbl_it.setVisible(False)
+        if cmb_it is not None:
+            cmb_it.setVisible(False)
         # Default widgets exist; we only change labels/visibility.
         if act == "emit_event":
             self._lbl_trig_evt.setText(tr("level.trigger_event"))
@@ -13720,17 +14754,22 @@ class LevelTab(QWidget):
             self._combo_trig_entity.setVisible(True)
             self._combo_trig_dialogue.setVisible(True)
             self._refresh_dialogue_combo()
-        elif act in ("give_item", "remove_item"):
-            self._lbl_trig_evt.setText(tr("level.trigger_item_id"))
-            self._spin_trig_event.setToolTip(tr("level.trigger_item_id_tt"))
+        elif act in ("give_item", "remove_item", "drop_item"):
             self._combo_trig_scene.setVisible(False)
             self._combo_trig_target.setVisible(False)
             self._combo_trig_entity.setVisible(False)
-            self._lbl_trig_evt.setVisible(True)
-            self._spin_trig_event.setVisible(True)
+            self._lbl_trig_evt.setVisible(False)
+            self._spin_trig_event.setVisible(False)
             self._lbl_trig_param.setVisible(False)
             self._combo_trig_dest_region.setVisible(False)
             self._spin_trig_param.setVisible(False)
+            lbl_it = getattr(self, "_lbl_trig_item", None)
+            cmb_it = getattr(self, "_combo_trig_item", None)
+            if lbl_it is not None:
+                lbl_it.setVisible(True)
+            if cmb_it is not None:
+                cmb_it.setVisible(True)
+                self._refresh_trig_item_combo()
         elif act == "unlock_door":
             self._lbl_trig_evt.setText(tr("level.trigger_door_id"))
             self._spin_trig_event.setToolTip(tr("level.trigger_door_id_tt"))
@@ -14191,6 +15230,9 @@ class LevelTab(QWidget):
             "menu_id": "",
             "cond_dialogue_id": "",
             "cond_menu_id": "",
+            "cond_type_name": "",
+            "cev_id": "",
+            "item_id": "",
             "menu_item_idx": 0,
             "choice_idx": 0,
             "flag_var_index": 0,
@@ -14673,6 +15715,36 @@ class LevelTab(QWidget):
         spn_fv = getattr(self, "_spin_trig_flag_var", None)
         if spn_fv is not None and spn_fv.isVisible():
             t["flag_var_index"] = int(spn_fv.value())
+        # Persist cond_type_name for entity_type_* conditions.
+        cmb_et = getattr(self, "_combo_trig_entity_type", None)
+        if cmb_et is not None and cmb_et.isVisible():
+            t["cond_type_name"] = str(cmb_et.currentData() or "")
+        # Persist cev_id for on_custom_event condition.
+        cmb_cev = getattr(self, "_combo_trig_cev", None)
+        if cmb_cev is not None and cmb_cev.isVisible():
+            t["cev_id"] = str(cmb_cev.currentData() or "")
+        # Persist item_id for give_item / remove_item / drop_item actions
+        # and player_has_item / item_count_ge conditions.
+        cmb_it = getattr(self, "_combo_trig_item", None)
+        if cmb_it is not None and cmb_it.isVisible():
+            item_name = str(cmb_it.currentData() or "")
+            t["item_id"] = item_name
+            pd = self._project_data_root if isinstance(self._project_data_root, dict) else {}
+            item_list = pd.get("item_table", []) or []
+            item_idx = next(
+                (i for i, it in enumerate(item_list)
+                 if isinstance(it, dict) and str(it.get("name", "") or "") == item_name),
+                0,
+            )
+            # item_count_ge: item_idx goes to region (not event); value spinner holds count
+            cond_now = str(self._combo_trig_cond.currentData() or "")
+            if cond_now != "item_count_ge":
+                t["event"] = int(item_idx) & 0xFF
+                self._spin_trig_event.blockSignals(True)
+                try:
+                    self._spin_trig_event.setValue(t["event"])
+                finally:
+                    self._spin_trig_event.blockSignals(False)
         self._refresh_trigger_list()
         self._canvas.update()
         self._update_diagnostics()
@@ -15362,6 +16434,100 @@ class LevelTab(QWidget):
             self._scene["bg_chunk_map"] = cmap
         else:
             self._scene.pop("bg_chunk_map", None)
+        # ── Procgen UI params (design-time) ──────────────────────────
+        try:
+            self._scene["procgen_params"] = {
+                "seed":             int(self._spin_seed.value()),
+                "margin":           int(self._spin_margin.value()),
+                "enemy_dens":       int(self._spin_enemy_dens.value()),
+                "item_dens":        int(self._spin_item_dens.value()),
+                "open_dens":        int(self._spin_open_dens.value()),
+                "td_gen_mode":      str(self._combo_td_gen_mode.currentData() or "scatter"),
+                "td_bsp_depth":     int(self._spin_td_bsp_depth.value()),
+                "td_loop_pct":      int(self._spin_td_loop_pct.value()),
+                "td_bsp_out_w":     int(self._spin_td_bsp_out_w.value()),
+                "td_bsp_out_h":     int(self._spin_td_bsp_out_h.value()),
+                "td_bsp_sprite":    int(self._spin_td_bsp_sprite.value()),
+                "td_scatter_out_w": int(self._spin_td_scatter_out_w.value()),
+                "td_scatter_out_h": int(self._spin_td_scatter_out_h.value()),
+                "wall_dens":        int(self._spin_wall_dens.value()),
+                "td_ca":            self._chk_td_ca.isChecked(),
+                "dir_walls":        self._chk_dir_walls.isChecked(),
+                "td_int_walls":     self._chk_td_int_walls.isChecked(),
+                "td_water":         self._chk_td_water.isChecked(),
+                "td_border_n":      self._chk_td_border_n.isChecked(),
+                "td_border_s":      self._chk_td_border_s.isChecked(),
+                "td_border_e":      self._chk_td_border_e.isChecked(),
+                "td_border_w":      self._chk_td_border_w.isChecked(),
+                "gen_tilemaps":     self._chk_gen_tilemaps.isChecked(),
+                "gen_scr1":         self._chk_gen_scr1.isChecked(),
+                "gen_scr2":         self._chk_gen_scr2.isChecked(),
+                "tile_src":         str(self._combo_tile_src.currentData() or "auto"),
+            }
+        except Exception:
+            pass
+        # ── Runtime DFS + Cave params ────────────────────────────────────
+        def _read_tier_table(tbl, nrows: int) -> list:
+            rows = []
+            for r in range(nrows):
+                row_vals = []
+                for c in range(5):
+                    it = tbl.item(r, c)
+                    try:
+                        row_vals.append(int(it.text()) if it else 0)
+                    except (ValueError, AttributeError):
+                        row_vals.append(0)
+                rows.append(row_vals)
+            return rows
+
+        # ── Runtime DFS params ───────────────────────────────────────────
+        try:
+            if self._chk_dfs_enabled.isChecked():
+                self._scene["rt_dfs_params"] = {
+                    "enabled":     True,
+                    "grid_w":      int(self._spin_dfs_grid_w.value()),
+                    "grid_h":      int(self._spin_dfs_grid_h.value()),
+                    "max_enemies": int(self._spin_dfs_max_enemies.value()),
+                    "item_chance": int(self._spin_dfs_item_chance.value()),
+                    "loop_pct":    int(self._spin_dfs_loop_pct.value()),
+                    "max_active":  int(self._spin_dfs_max_active.value()),
+                    "start_mode":  str(self._combo_dfs_start_mode.currentData() or "corner"),
+                    "multifloor":  bool(self._chk_dfs_multifloor.isChecked()),
+                    "floor_var":   int(self._spin_dfs_floor_var.value()),
+                    "max_floors":  int(self._spin_dfs_max_floors.value()),
+                    "boss_scene":  str(self._combo_dfs_boss_scene.currentData() or ""),
+                    "loop_scene":  str(self._combo_dfs_loop_scene.currentData() or ""),
+                    "tier_count":       int(self._spin_dfs_tier_count.value()),
+                    "floors_per_tier":  int(self._spin_dfs_floors_per_tier.value()),
+                    "tier_table":       _read_tier_table(self._dfs_tier_table, 4),
+                }
+            else:
+                self._scene.pop("rt_dfs_params", None)
+        except Exception:
+            pass
+        # ── Runtime Cave params ──────────────────────────────────────────
+        try:
+            if self._chk_cave_enabled.isChecked():
+                self._scene["rt_cave_params"] = {
+                    "enabled":          True,
+                    "wall_pct":         int(self._spin_cave_wall_pct.value()),
+                    "iterations":       int(self._spin_cave_iterations.value()),
+                    "max_enemies":      int(self._spin_cave_max_enemies.value()),
+                    "max_items":        int(self._spin_cave_max_chests.value()),
+                    "pickup_type":      int(self._spin_cave_pickup_type.value()),
+                    "item_pool":        self._get_cave_item_pool_selected(),
+                    "multifloor":       bool(self._chk_cave_multifloor.isChecked()),
+                    "floor_var":        int(self._spin_cave_floor_var.value()),
+                    "max_floors":       int(self._spin_cave_max_floors.value()),
+                    "boss_scene":       str(self._combo_cave_boss_scene.currentData() or ""),
+                    "tier_count":       int(self._spin_cave_tier_count.value()),
+                    "floors_per_tier":  int(self._spin_cave_floors_per_tier.value()),
+                    "tier_table":       _read_tier_table(self._cave_tier_table, 3),
+                }
+            else:
+                self._scene.pop("rt_cave_params", None)
+        except Exception:
+            pass
         if save_project and self._on_save:
             self._on_save()
         if update_status:

@@ -953,6 +953,35 @@ def export_project(
                 log(f"SFX map  : {sfx_h}")
         except Exception as e:
             log(f"WARN  cannot write ngpc_project_sfx_map.h: {e}")
+        try:
+            from core.entity_type_events_gen import write_entity_type_events_h
+            ev_h = write_entity_type_events_h(project_data=data, export_dir=export_dir_abs)
+            log(f"TypeEvts : {ev_h}")
+        except Exception as e:
+            log(f"WARN  cannot write ngpc_entity_type_events.h: {e}")
+        try:
+            from core.custom_events_gen import write_custom_events_h
+            cev_h = write_custom_events_h(project_data=data, export_dir=export_dir_abs)
+            log(f"CustEvts : {cev_h}")
+        except Exception as e:
+            log(f"WARN  cannot write ngpc_custom_events.h: {e}")
+        try:
+            from core.item_table_gen import write_item_table_h
+            it_h = write_item_table_h(project_data=data, export_dir=export_dir_abs)
+            log(f"ItemTable: {it_h}")
+        except Exception as e:
+            log(f"WARN  cannot write item_table.h: {e}")
+        try:
+            from core.procgen_config_gen import write_procgen_config_h, write_cavegen_config_h
+            for sc in (data.get("scenes") or []):
+                if sc.get("rt_dfs_params"):
+                    dfs_h = write_procgen_config_h(scene=sc, export_dir=export_dir_abs)
+                    log(f"ProcgenDFS: {dfs_h}")
+                if sc.get("rt_cave_params"):
+                    cave_h = write_cavegen_config_h(scene=sc, export_dir=export_dir_abs, project_data=data)
+                    log(f"ProcgenCave: {cave_h}")
+        except Exception as e:
+            log(f"WARN  cannot write procgen_config.h: {e}")
     # Optional: write Sound Creator exports Makefile include (AUD-4)
     try:
         audio = data.get("audio", {}) if isinstance(data, dict) else {}

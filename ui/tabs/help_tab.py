@@ -587,7 +587,7 @@ pour mémoriser qu'un événement s'est produit :</p>
   <li>Le boss de la zone 2 est mort.</li>
   <li>La porte secrète a été ouverte.</li>
 </ul>
-<p>Dans l'onglet, renseignez un <b>nom</b> pour chaque flag (0 à 7) — ce nom sera exporté comme
+<p>Dans l'onglet, renseignez un <b>nom</b> pour chaque flag (0 à 15) — ce nom sera exporté comme
 commentaire dans le header C pour documenter le code :</p>
 <pre>GAME_FLAG_0  0   /* has_sword   */
 GAME_FLAG_1  1   /* boss2_dead  */
@@ -622,7 +622,7 @@ La valeur Init est appliquée lors de l'action trigger <code>init_game_vars</cod
 Le header exporté contient :</p>
 <pre>GAME_VAR_0   0   /* coins  (init: 0)  */
 GAME_VAR_1   1   /* health (init: 3)  */
-static const u8 g_game_var_inits[8] = { 0, 3, 0, 0, 0, 0, 0, 0 };</pre>
+static const u8 g_game_var_inits[16] = { 0, 3, 0, 0, 0, 0, 0, 0 };</pre>
 <p>Contrôlez les variables via des triggers :</p>
 <table>
   <tr><th>Action trigger</th><th>Effet</th></tr>
@@ -725,8 +725,8 @@ def _fr_globals() -> str:
     return """
 <h1>Onglet Globals</h1>
 <p>L'onglet <b>Globals</b> centralise tout ce qui est <b>global au projet</b> et ne dépend
-d'aucune scène en particulier. Il contient 4 sous-onglets : <b>Variables</b>, <b>Constantes</b>,
-<b>Audio</b> et <b>Templates d'entités</b>.</p>
+d'aucune scène en particulier. Il contient 5 sous-onglets : <b>Variables</b>, <b>Constantes</b>,
+<b>Audio</b>, <b>Items</b> et <b>Templates d'entités</b>.</p>
 
 <h2>Variables (flags &amp; variables persistants)</h2>
 <p>Un projet dispose de 8 <b>flags</b> et 8 <b>variables u8</b> persistants qui survivent
@@ -739,7 +739,7 @@ aux changements de scène tout au long de la session de jeu.</p>
   <li>La porte secrète a été ouverte.</li>
   <li>Le boss est mort.</li>
 </ul>
-<p>Donnez un <b>nom</b> à chaque flag (0–7) pour documenter votre code. Les flags sans nom
+<p>Donnez un <b>nom</b> à chaque flag (0–15) pour documenter votre code. Les flags sans nom
 et non référencés par un trigger <b>ne génèrent aucun code C</b> (tree-shaking).</p>
 <table>
   <tr><th>Condition trigger</th><th>Vérifie</th></tr>
@@ -785,7 +785,7 @@ vides et inutilisés sont silencieusement omis du header :</p>
 #define GAME_FLAG_3  3   /* visited_town */
 #define GAME_VAR_0   0   /* coins  (init: 0) */
 #define GAME_VAR_1   1   /* health (init: 3) */
-static const u8 g_game_var_inits[8] = { 0, 3, 0, 0, 0, 0, 0, 0 };</pre>
+static const u8 g_game_var_inits[16] = { 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };</pre>
 <p><b>Avertissement à l'export :</b> si un trigger référence un slot sans nom, un
 <code>[warning]</code> apparaît dans le résumé d'export.</p>
 
@@ -892,11 +892,12 @@ typedef enum {
 typedef struct {
     u8 role; u8 behavior; u8 speed; u8 range;
     u8 lose_range; u8 change_every; u8 dir; u8 data; u8 flags;
+    u8 hp; u8 atk; u8 def; u8 xp;
 } EntityTypeDef;
 
 static const EntityTypeDef et_table[] = {
-    /* ET_PLAYER */ { 0, 0, 3, 0,  0,  0, 0, 0, 0 },
-    /* ET_SLIME  */ { 1, 0, 1, 10, 16, 60, 0, 0, 0 },
+    /* ET_PLAYER */ { 0, 0, 3, 0,  0,  0, 0, 0, 0,  0, 0, 0, 0 },
+    /* ET_SLIME  */ { 1, 0, 1, 10, 16, 60, 0, 0, 0, 10, 1, 0, 5 },
 };
 #define ET_TABLE_SIZE  2</pre>
 <p>Toutes les données sont <code>const</code> → ROM uniquement, <b>zéro RAM, zéro CPU
@@ -908,6 +909,268 @@ séparément par le pipeline bundle habituel).</p>
   <li>Flag/variable référencé dans un trigger mais sans nom → <code>[warning]</code>.</li>
   <li>Instance avec un <code>type_id</code> qui n'existe plus dans Globals → <code>[warning]</code>.</li>
 </ul>
+
+<h2>Événements par type d'entité (no-code global)</h2>
+<p>La section <b>Événements</b> en bas de chaque template permet d'attacher des <b>actions
+automatiques</b> à un type d'entité — sans écrire une ligne de C. Ces actions se déclenchent
+pour <em>n'importe quelle instance</em> de ce type, dans <em>toutes les scènes</em>,
+y compris les scènes générées par procgen.</p>
+
+<h3>Événements disponibles (16)</h3>
+<table>
+  <tr><th>Événement</th><th>EV_* C (index)</th><th>Se déclenche quand…</th><th>Rôles types</th></tr>
+  <tr><td><code>entity_death</code></td><td>0</td><td>Instance tuée</td><td>enemy, block</td></tr>
+  <tr><td><code>entity_collect</code></td><td>1</td><td>Instance ramassée</td><td>item</td></tr>
+  <tr><td><code>entity_activate</code></td><td>2</td><td>Instance activée (NPC parlé, trigger touché)</td><td>npc, trigger, platform, block, prop</td></tr>
+  <tr><td><code>entity_hit</code></td><td>3</td><td>Instance touchée par le joueur</td><td>enemy, block</td></tr>
+  <tr><td><code>entity_spawn</code></td><td>4</td><td>Instance spawnée à l'exécution</td><td>tous sauf player</td></tr>
+  <tr><td><code>entity_btn_a</code></td><td>5</td><td>Bouton A pressé près d'une instance</td><td>enemy, npc, trigger, platform, block, prop</td></tr>
+  <tr><td><code>entity_btn_b</code></td><td>6</td><td>Bouton B pressé près d'une instance</td><td>enemy, npc, trigger, block, prop</td></tr>
+  <tr><td><code>entity_btn_opt</code></td><td>7</td><td>Option pressé près d'une instance</td><td>npc, trigger, prop</td></tr>
+  <tr><td><code>entity_btn_up</code></td><td>8</td><td>Haut pressé près d'une instance</td><td>npc, trigger</td></tr>
+  <tr><td><code>entity_btn_down</code></td><td>9</td><td>Bas pressé près d'une instance</td><td>npc, trigger</td></tr>
+  <tr><td><code>entity_btn_left</code></td><td>10</td><td>Gauche pressé près d'une instance</td><td>npc, trigger, platform, prop</td></tr>
+  <tr><td><code>entity_btn_right</code></td><td>11</td><td>Droite pressé près d'une instance</td><td>npc, trigger, platform, prop</td></tr>
+  <tr><td><code>entity_player_enter</code></td><td>12</td><td>Joueur entre dans la zone de proximité</td><td>enemy, item, npc, trigger, platform, block, prop</td></tr>
+  <tr><td><code>entity_player_exit</code></td><td>13</td><td>Joueur quitte la zone de proximité</td><td>enemy, npc, trigger, platform, prop</td></tr>
+  <tr><td><code>entity_timer</code></td><td>14</td><td>Timer périodique (cadence définie par instance)</td><td>enemy, npc, block, prop</td></tr>
+  <tr><td><code>entity_low_hp</code></td><td>15</td><td>HP passe sous un seuil (changement de phase boss…)</td><td>enemy, block</td></tr>
+</table>
+<p>Les événements sont filtrés par rôle dans l'interface : un ennemi ne voit pas
+<code>entity_collect</code>, un NPC ne voit pas <code>entity_death</code>.</p>
+
+<h3>Actions configurables par événement</h3>
+<p>Chaque événement peut déclencher une ou plusieurs actions : <b>jouer SFX</b>,
+<b>démarrer/arrêter BGM</b>, <b>incrémenter/définir variable</b>, <b>activer flag</b>,
+<b>aller à scène</b>, <b>ajouter score</b>, <b>ajouter HP</b>, <b>fondu</b>,
+<b>secousse écran</b>, <b>sauvegarder</b>, <b>fin de partie</b>…</p>
+<p>L'option <b>[×1] une seule fois</b> fait que l'action ne se déclenche qu'une fois
+par chargement de scène.</p>
+
+<h3>Export C — ngpc_entity_type_events.h</h3>
+<pre>#define EV_ENTITY_DEATH       0u
+#define EV_ENTITY_COLLECT     1u
+#define EV_ENTITY_BTN_A       5u
+/* … */
+#define TYPE_EVENT_COUNT      3
+
+typedef struct {
+    u8 type_id; u8 event; u8 action; u8 a0; u8 a1; u8 once;
+} NgpngTypeEvent;
+
+static const NgpngTypeEvent g_type_events[] = {
+    { ET_GOBLIN, 0u, 31u, 0u, 1u, 0u },  /* Goblin entity_death */
+    { ET_CHEST,  5u,  1u, 5u, 0u, 0u },  /* Chest entity_btn_a → play_sfx 5 */
+};</pre>
+<p><b>Tree-shaking :</b> seuls les types à la fois référencés dans une scène
+<em>et</em> ayant au moins un événement sont émis.
+Types non utilisés → aucune ligne dans <code>g_type_events[]</code>.</p>
+<p>Le runtime appelle <code>ngpc_entity_dispatch_event(type_id, event_id)</code>
+au bon moment (mort, collecte, btn pressé…). Le moteur parcourt la table et
+exécute les actions correspondantes.</p>
+
+<h3>Conditions scene triggers par type (18 conditions)</h3>
+<p>En complément des events globaux, l'onglet <b>Triggers</b> de chaque scène propose
+18 conditions qui évaluent l'état courant de toutes les instances d'un type
+<em>dans cette scène</em> :</p>
+<table>
+  <tr><th>Condition</th><th>Valeur</th><th>Sens</th></tr>
+  <tr><td><code>entity_type_all_dead</code></td><td>—</td><td>Toutes instances mortes → ouvre sortie</td></tr>
+  <tr><td><code>entity_type_count_ge</code></td><td>N</td><td>Tués ≥ N (cumulatif)</td></tr>
+  <tr><td><code>entity_type_alive_le</code></td><td>N</td><td>Vivants ≤ N → phase boss</td></tr>
+  <tr><td><code>entity_type_any_alive</code></td><td>—</td><td>Au moins 1 vivant (escort, survival)</td></tr>
+  <tr><td><code>entity_type_collected</code></td><td>—</td><td>1 item ramassé</td></tr>
+  <tr><td><code>entity_type_collected_ge</code></td><td>N</td><td>Ramassés ≥ N → "5 pièces → porte"</td></tr>
+  <tr><td><code>entity_type_all_collected</code></td><td>—</td><td>Tous items collectés → "3 clés → boss"</td></tr>
+  <tr><td><code>entity_type_activated</code></td><td>—</td><td>1 instance activée (NPC parlé)</td></tr>
+  <tr><td><code>entity_type_all_activated</code></td><td>—</td><td>Toutes activées → tous switches ON</td></tr>
+  <tr><td><code>entity_type_btn_a</code></td><td>—</td><td>A près d'une instance → play_sfx, interaction</td></tr>
+  <tr><td><code>entity_type_btn_b</code></td><td>—</td><td>B près d'une instance</td></tr>
+  <tr><td><code>entity_type_btn_opt</code></td><td>—</td><td>Option près d'une instance</td></tr>
+  <tr><td><code>entity_type_contact</code></td><td>—</td><td>Joueur touche une instance (hazard, heal)</td></tr>
+  <tr><td><code>entity_type_near_player</code></td><td>—</td><td>Instance à portée joueur (aggro, alarme)</td></tr>
+  <tr><td><code>entity_type_hit</code></td><td>—</td><td>1 instance touchée → feedback, phase</td></tr>
+  <tr><td><code>entity_type_hit_ge</code></td><td>N</td><td>Hits totaux ≥ N → boss multi-phase</td></tr>
+  <tr><td><code>entity_type_spawned</code></td><td>—</td><td>1 instance spawnée → intro cutscene</td></tr>
+  <tr><td><code>entity_type_spawned_ge</code></td><td>N</td><td>Total spawné ≥ N → gestion de waves</td></tr>
+  <tr><td><code>on_custom_event</code></td><td>ID événement</td><td>L'événement personnalisé spécifié a été émis → déclencheur cross-système</td></tr>
+</table>
+<p>Pour chaque condition, un <b>combo "Type"</b> liste les types d'entités présents
+dans la scène. Les conditions avec valeur (N) affichent un spinner.</p>
+
+<h2>Items (onglet Items)</h2>
+<p>L'onglet <b>Items</b> définit la <b>table d'objets</b> du projet : chaque ligne décrit
+un item ramassable (type, rareté, valeur). À l'export, le header <code>item_table.h</code>
+est généré avec toutes les définitions.</p>
+
+<h3>Colonnes de la table</h3>
+<table>
+  <tr><th>Colonne</th><th>Description</th></tr>
+  <tr><td><b>Nom</b></td><td>Identifiant lisible (commentaire dans le header)</td></tr>
+  <tr><td><b>Type</b></td><td>ITEM_HEAL, ITEM_ATK_UP, ITEM_DEF_UP, ITEM_XP_UP, ITEM_GOLD, ITEM_DICE_PLUS, ITEM_KEY, ITEM_CUSTOM</td></tr>
+  <tr><td><b>Rareté</b></td><td>RARITY_COMMON, RARITY_UNCOMMON, RARITY_RARE</td></tr>
+  <tr><td><b>Valeur</b></td><td>Entier u8 (puissance de l'effet : PV restaurés, bonus ATK…)</td></tr>
+</table>
+
+<h3>Header généré — item_table.h</h3>
+<pre>/* item_table.h */
+#define ITEM_HEAL      0
+#define ITEM_ATK_UP    1
+/* ... */
+#define RARITY_COMMON   0
+#define RARITY_UNCOMMON 1
+#define RARITY_RARE     2
+
+typedef struct { u8 type; u8 value; u8 rarity; u8 price; u8 sprite_id; } NgpcItem;
+
+static const NgpcItem g_item_table[] = {
+    /* [0] potion_heal  */ { ITEM_HEAL,    3, RARITY_COMMON,    5, 2 },
+    /* [1] sword_up     */ { ITEM_ATK_UP,  1, RARITY_UNCOMMON, 15, 5 },
+};</pre>
+<p>Ajoutez des items via le bouton <b>＋</b> ; supprimez avec <b>－</b>. Chaque ligne
+peut être éditée directement dans la table.</p>
+<p>Le champ <b>Sprite</b> (colonne de droite) contient l'index du metasprite dans le bundle PNG
+(<code>NGPNG_MSPR_*</code>). À runtime, l'entity type générique <em>pickup</em> (rôle <code>item</code>)
+utilise <code>g_item_table[idx].sprite_id</code> pour afficher le bon visuel —
+une seule entité type pour tous les items.</p>
+
+<h2>Événements personnalisés (Custom Events)</h2>
+<p>Les <b>événements personnalisés</b> ferment la boucle <code>emit_event</code> :
+quand un trigger de scène ou un type d'entité déclenche <code>emit_event(id)</code>,
+c'est dans cette table que le moteur sait quoi faire.</p>
+<p>Définissez-les dans <b>Globals → onglet Événements</b>.</p>
+
+<h3>Flux complet</h3>
+<ol>
+  <li>Dans <b>Globals → Événements</b>, créez un événement (ex : <code>boss_phase_2</code>),
+      ajoutez des <b>conditions de garde</b> (AND/OR), et attachez des actions.</li>
+  <li>Dans n'importe quel trigger de scène ou événement de type d'entité, choisissez
+      l'action <code>emit_event</code> — le combo affiche <b>[0] boss_phase_2</b>
+      au lieu d'un spinner brut.</li>
+  <li>À l'export, <code>ngpc_custom_events.h</code> est généré avec macros, table de
+      conditions et table d'actions.</li>
+  <li>Le runtime appelle <code>ngpc_emit_event(u8 id)</code> — le moteur évalue les
+      gardes puis exécute chaque action liée à cet id.</li>
+</ol>
+
+<h3>Interface — onglet Événements (Globals)</h3>
+<p>L'onglet est divisé en deux zones :</p>
+<ul>
+  <li><b>Panneau haut — liste des événements</b> : créer, renommer, supprimer, réordonner
+      (↑/↓). Les événements peuvent être regroupés en <b>catégories</b> pour l'organisation
+      visuelle.</li>
+  <li><b>Panneau bas — sous-tabs "Conditions" et "Actions"</b> :</li>
+</ul>
+<p>Sous-tab <b>Conditions</b> :</p>
+<ul>
+  <li><b>Groupe AND (principal)</b> : toutes les conditions de cette liste doivent être
+      vraies pour que l'événement se déclenche.</li>
+  <li><b>Groupes OR</b> : créez des groupes alternatifs. L'événement se déclenche si le
+      groupe AND passe OU si <i>toutes</i> les conditions de n'importe quel groupe OR
+      passent.</li>
+  <li>Si aucune condition n'est définie, l'événement se déclenche toujours.</li>
+  <li>Chaque condition peut être <b>inversée (NON)</b>.</li>
+</ul>
+<p>Sous-tab <b>Actions</b> : 57 actions disponibles en 11 groupes (Audio, Visuel,
+Navigation, Entités, Joueur, Flags/Variables, Triggers, Narration, RPG/Quête,
+Système, Avancé). Bouton <b>Présets ▾</b> pour les combinaisons courantes.</p>
+
+<h3>Logique de garde — résumé</h3>
+<pre>Déclenchement si :
+  (tous les AND) OU (tous les conds du groupe OR-0) OU (tous du groupe OR-1) OU ...
+Aucune condition → toujours déclenché.</pre>
+
+<h3>⚠️ L'ordre = index C</h3>
+<p>Réordonner les événements change leurs valeurs <code>CEV_*</code> et invalide les
+appels <code>emit_event(id)</code> dans les ROMs déjà compilées. En production,
+<b>ajoutez toujours en fin de liste</b>.</p>
+
+<h3>Consommer un événement depuis une scène (pont via flag)</h3>
+<p>Les triggers de scène ne peuvent pas écouter directement les custom events.
+Le pattern recommandé est le <b>pont flag</b> :</p>
+<ol>
+  <li>Action de l'événement personnalisé : <code>set_flag(N)</code></li>
+  <li>Trigger de scène : condition <code>flag_set(N)</code> → actions + <code>clear_flag(N)</code></li>
+</ol>
+<p>Cela permet de réagir à n'importe quel custom event depuis n'importe quelle scène.</p>
+
+<h3>Actions disponibles (57)</h3>
+<table>
+  <tr><th>Groupe</th><th>Actions</th></tr>
+  <tr><td>Audio</td><td>play_sfx, start_bgm, stop_bgm, fade_bgm</td></tr>
+  <tr><td>Visuel / Effets</td><td>play_anim, screen_shake, fade_out, fade_in</td></tr>
+  <tr><td>Navigation</td><td>goto_scene, warp_to, set_checkpoint, respawn_player, reset_scene</td></tr>
+  <tr><td>Entités</td><td>spawn_entity, show_entity, hide_entity, move_entity_to, spawn_wave,
+      spawn_at_region, pause_entity_path, resume_entity_path</td></tr>
+  <tr><td>Joueur</td><td>force_jump, lock_player_input, unlock_player_input,
+      enable_multijump, disable_multijump, enable_wall_grab, disable_wall_grab,
+      cycle_player_form, set_player_form, fire_player_shot, set_gravity_dir</td></tr>
+  <tr><td>Flags / Variables</td><td>set_flag, clear_flag, set_variable, inc_variable, dec_variable</td></tr>
+  <tr><td>Caméra / Scroll</td><td>set_scroll_speed, set_cam_target, pause_scroll, resume_scroll</td></tr>
+  <tr><td>Triggers / HUD</td><td>enable_trigger, disable_trigger, add_score, add_health, set_health</td></tr>
+  <tr><td>Narration / Dialogue</td><td>show_dialogue, play_cutscene, set_npc_dialogue</td></tr>
+  <tr><td>RPG / Quête</td><td>give_item, remove_item, drop_item, drop_random_item, unlock_door, unlock_ability,
+      set_quest_stage, add_resource, remove_resource</td></tr>
+  <tr><td>Système</td><td>emit_event, save_game, end_game</td></tr>
+</table>
+<p><b>Note "actions template-dépendantes"</b> : certaines actions (<code>unlock_ability</code>,
+<code>add_resource</code>, <code>set_gravity_dir</code>, <code>cycle_player_form</code>, etc.)
+émettent la constante <code>TRIG_ACT_*</code> correcte mais nécessitent que votre
+<b>template C</b> implémente le cas correspondant dans <code>ngpng_trigger_execute_action()</code>.
+Elles sont disponibles dans l'engine comme "hooks" à brancher.</p>
+
+<h3>Conditions de garde disponibles (88)</h3>
+<p>Même vocabulaire que les triggers de scène et les type-events.
+Organisées en 9 groupes dans le dialog :</p>
+<table>
+  <tr><th>Groupe</th><th>Exemples</th></tr>
+  <tr><td>Joueur — boutons</td><td>btn_a, btn_b, btn_held_ge…</td></tr>
+  <tr><td>Joueur — état</td><td>health_le, on_jump, on_land, score_ge, player_has_item, item_count_ge…</td></tr>
+  <tr><td>Caméra / Scroll</td><td>cam_x_ge, cam_y_ge, enter_region, leave_region</td></tr>
+  <tr><td>Timer / Vague</td><td>timer_ge, timer_every, wave_ge, scene_first_enter…</td></tr>
+  <tr><td>Flags / Variables</td><td>flag_set, flag_clear, variable_ge, variable_eq…</td></tr>
+  <tr><td>Entités — globales</td><td>enemy_count_le, entity_alive, entity_contact…</td></tr>
+  <tr><td>Entités — par type</td><td>entity_type_all_dead, entity_type_count_ge…</td></tr>
+  <tr><td>Quête / Narration</td><td>quest_stage_eq, dialogue_done, cutscene_done…</td></tr>
+  <tr><td>Ressources / Aléatoire</td><td>resource_ge, chance</td></tr>
+</table>
+
+<h3>Export C — ngpc_custom_events.h</h3>
+<pre>#define CEV_BOSS_PHASE_2    0u
+#define CEV_KEY_COLLECTED   1u
+#define CUSTOM_EVENT_COUNT      3   /* lignes d'action */
+#define CUSTOM_EVENT_COND_COUNT 1   /* lignes de condition */
+
+/* Struct condition de garde */
+typedef struct {
+    u8 event_id; u8 cond; u8 index; u16 value; u8 group_id; u8 negate;
+} NgpngCevCond;
+/* group_id = 0xFF → groupe AND principal, 0..N → groupe OR N */
+
+static const NgpngCevCond g_cev_conds[] = {
+    { CEV_BOSS_PHASE_2, 22u, 0u, 0u, 0xFFu, 0u }, /* flag_set[0] AND */
+};
+
+typedef struct {
+    u8 event_id; u8 action; u8 a0; u8 a1; u8 once;
+} NgpngEventAction;
+
+static const NgpngEventAction g_custom_events[] = {
+    { CEV_BOSS_PHASE_2,  2u, 2u, 0u, 0u },  /* start_bgm 2 */
+    { CEV_BOSS_PHASE_2, 15u, 3u, 0u, 0u },  /* screen_shake 3 */
+    { CEV_KEY_COLLECTED,31u, 0u, 0u, 0u },  /* inc_variable[0] */
+};</pre>
+<p>Le runtime évalue d'abord les gardes, puis les actions :</p>
+<pre>void ngpc_emit_event(u8 id) {
+    /* 1. Vérifier les conditions de garde (AND + OR groups) */
+    if (!ngpng_cev_guard_passes(id)) return;
+    /* 2. Exécuter toutes les actions liées à cet id */
+    for (u8 i = 0; i &lt; CUSTOM_EVENT_COUNT; ++i)
+        if (g_custom_events[i].event_id == id)
+            ngpng_exec_action(&amp;g_custom_events[i]);
+}</pre>
+<p><b>Tree-shaking :</b> si <code>CUSTOM_EVENT_COUNT == 0</code>, la table est vide
+et aucun symbole superflu n'est émis.</p>
 """
 
 
@@ -1919,11 +2182,11 @@ def _en_globals() -> str:
     return """
 <h1>Globals Tab</h1>
 <p>The <b>Globals</b> tab centralises everything that is <b>project-wide</b> and not
-tied to any particular scene. It has 4 sub-tabs: <b>Variables</b>, <b>Constants</b>,
-<b>Audio</b>, and <b>Entity Templates</b>.</p>
+tied to any particular scene. It has 5 sub-tabs: <b>Variables</b>, <b>Constants</b>,
+<b>Audio</b>, <b>Items</b>, and <b>Entity Templates</b>.</p>
 
 <h2>Variables (flags &amp; persistent variables)</h2>
-<p>A project has 8 <b>flags</b> and 8 <b>u8 variables</b> that persist across scene
+<p>A project has 16 <b>flags</b> and 16 <b>u8 variables</b> that persist across scene
 changes throughout the game session.</p>
 
 <h3>Flags (booleans)</h3>
@@ -1933,7 +2196,7 @@ changes throughout the game session.</p>
   <li>The secret door was opened.</li>
   <li>The boss is dead.</li>
 </ul>
-<p>Give each flag (0–7) a <b>name</b> to document your code. Unnamed and unreferenced
+<p>Give each flag (0–15) a <b>name</b> to document your code. Unnamed and unreferenced
 flags <b>generate no C code</b> (tree-shaking).</p>
 <table>
   <tr><th>Trigger condition</th><th>Tests</th></tr>
@@ -1979,7 +2242,7 @@ unreferenced slots are silently omitted from the header:</p>
 #define GAME_FLAG_3  3   /* visited_town */
 #define GAME_VAR_0   0   /* coins  (init: 0) */
 #define GAME_VAR_1   1   /* health (init: 3) */
-static const u8 g_game_var_inits[8] = { 0, 3, 0, 0, 0, 0, 0, 0 };</pre>
+static const u8 g_game_var_inits[16] = { 0, 3, 0, 0, 0, 0, 0, 0 };</pre>
 <p><b>Export warning:</b> if a trigger references a slot with no name, a
 <code>[warning]</code> appears in the export summary.</p>
 
@@ -2084,11 +2347,12 @@ typedef enum {
 typedef struct {
     u8 role; u8 behavior; u8 speed; u8 range;
     u8 lose_range; u8 change_every; u8 dir; u8 data; u8 flags;
+    u8 hp; u8 atk; u8 def; u8 xp;
 } EntityTypeDef;
 
 static const EntityTypeDef et_table[] = {
-    /* ET_PLAYER */ { 0, 0, 3, 0,  0,  0, 0, 0, 0 },
-    /* ET_SLIME  */ { 1, 0, 1, 10, 16, 60, 0, 0, 0 },
+    /* ET_PLAYER */ { 0, 0, 3, 0,  0,  0, 0, 0, 0,  0, 0, 0, 0 },
+    /* ET_SLIME  */ { 1, 0, 1, 10, 16, 60, 0, 0, 0, 10, 1, 0, 5 },
 };
 #define ET_TABLE_SIZE  2</pre>
 <p>All data is <code>const</code> → ROM only, <b>zero RAM, zero CPU overhead</b>.
@@ -2100,6 +2364,251 @@ Sprite/hitbox data is not in this header (generated separately by the bundle pip
   <li>Instance with a <code>type_id</code> that no longer exists in Globals →
       <code>[warning]</code>.</li>
 </ul>
+
+<h2>Entity type events (global no-code)</h2>
+<p>The <b>Events</b> section at the bottom of each template lets you attach
+<b>automatic actions</b> to an entity type — no C required. These actions fire for
+<em>any instance</em> of that type, across <em>all scenes</em>, including
+procedurally-generated ones.</p>
+
+<h3>Available events (16)</h3>
+<table>
+  <tr><th>Event</th><th>EV_* C (index)</th><th>Fires when…</th><th>Typical roles</th></tr>
+  <tr><td><code>entity_death</code></td><td>0</td><td>Instance killed</td><td>enemy, block</td></tr>
+  <tr><td><code>entity_collect</code></td><td>1</td><td>Instance picked up</td><td>item</td></tr>
+  <tr><td><code>entity_activate</code></td><td>2</td><td>Instance activated (NPC talked to, trigger hit)</td><td>npc, trigger, platform, block, prop</td></tr>
+  <tr><td><code>entity_hit</code></td><td>3</td><td>Instance hit by player</td><td>enemy, block</td></tr>
+  <tr><td><code>entity_spawn</code></td><td>4</td><td>Instance spawned at runtime</td><td>all except player</td></tr>
+  <tr><td><code>entity_btn_a</code></td><td>5</td><td>Button A pressed near an instance</td><td>enemy, npc, trigger, platform, block, prop</td></tr>
+  <tr><td><code>entity_btn_b</code></td><td>6</td><td>Button B pressed near an instance</td><td>enemy, npc, trigger, block, prop</td></tr>
+  <tr><td><code>entity_btn_opt</code></td><td>7</td><td>Option pressed near an instance</td><td>npc, trigger, prop</td></tr>
+  <tr><td><code>entity_btn_up</code></td><td>8</td><td>Up pressed near an instance</td><td>npc, trigger</td></tr>
+  <tr><td><code>entity_btn_down</code></td><td>9</td><td>Down pressed near an instance</td><td>npc, trigger</td></tr>
+  <tr><td><code>entity_btn_left</code></td><td>10</td><td>Left pressed near an instance</td><td>npc, trigger, platform, prop</td></tr>
+  <tr><td><code>entity_btn_right</code></td><td>11</td><td>Right pressed near an instance</td><td>npc, trigger, platform, prop</td></tr>
+  <tr><td><code>entity_player_enter</code></td><td>12</td><td>Player enters proximity range</td><td>enemy, item, npc, trigger, platform, block, prop</td></tr>
+  <tr><td><code>entity_player_exit</code></td><td>13</td><td>Player leaves proximity range</td><td>enemy, npc, trigger, platform, prop</td></tr>
+  <tr><td><code>entity_timer</code></td><td>14</td><td>Periodic timer fires (rate set per instance)</td><td>enemy, npc, block, prop</td></tr>
+  <tr><td><code>entity_low_hp</code></td><td>15</td><td>HP drops below threshold (boss phase change…)</td><td>enemy, block</td></tr>
+</table>
+<p>Events are filtered by role in the UI: an enemy does not see
+<code>entity_collect</code>; an NPC does not see <code>entity_death</code>.</p>
+
+<h3>Configurable actions</h3>
+<p>Each event can trigger one or more actions: <b>play SFX</b>, <b>start/stop BGM</b>,
+<b>increment/set variable</b>, <b>set flag</b>, <b>go to scene</b>, <b>add score</b>,
+<b>add HP</b>, <b>fade</b>, <b>screen shake</b>, <b>save game</b>, <b>end game</b>…</p>
+<p>The <b>[×1] once</b> option makes the action fire only once per scene load.</p>
+
+<h3>C export — ngpc_entity_type_events.h</h3>
+<pre>#define EV_ENTITY_DEATH       0u
+#define EV_ENTITY_BTN_A       5u
+/* … */
+#define TYPE_EVENT_COUNT      2
+
+static const NgpngTypeEvent g_type_events[] = {
+    { ET_GOBLIN, 0u, 31u, 0u, 1u, 0u },  /* Goblin entity_death */
+    { ET_CHEST,  5u,  1u, 5u, 0u, 0u },  /* Chest entity_btn_a → play_sfx 5 */
+};</pre>
+<p><b>Tree-shaking:</b> only types that are both referenced in a scene
+<em>and</em> have at least one event are emitted.</p>
+<p>The runtime calls <code>ngpc_entity_dispatch_event(type_id, event_id)</code>
+at the right moment. The engine walks the table and executes matching actions.</p>
+
+<h3>Scene trigger conditions by type (18 conditions)</h3>
+<p>The scene <b>Triggers</b> tab also provides 18 conditions that evaluate the
+current state of all instances of a type <em>in that scene</em>:</p>
+<table>
+  <tr><th>Condition</th><th>Value</th><th>Meaning</th></tr>
+  <tr><td><code>entity_type_all_dead</code></td><td>—</td><td>All instances dead → open exit</td></tr>
+  <tr><td><code>entity_type_count_ge</code></td><td>N</td><td>Killed ≥ N (cumulative)</td></tr>
+  <tr><td><code>entity_type_alive_le</code></td><td>N</td><td>Alive ≤ N → boss phase change</td></tr>
+  <tr><td><code>entity_type_any_alive</code></td><td>—</td><td>At least 1 alive (escort, survival)</td></tr>
+  <tr><td><code>entity_type_collected</code></td><td>—</td><td>1 item picked up</td></tr>
+  <tr><td><code>entity_type_collected_ge</code></td><td>N</td><td>Collected ≥ N → "5 coins → door"</td></tr>
+  <tr><td><code>entity_type_all_collected</code></td><td>—</td><td>All items collected → "3 keys → boss"</td></tr>
+  <tr><td><code>entity_type_activated</code></td><td>—</td><td>1 instance activated (NPC talked to)</td></tr>
+  <tr><td><code>entity_type_all_activated</code></td><td>—</td><td>All activated → all switches ON</td></tr>
+  <tr><td><code>entity_type_btn_a</code></td><td>—</td><td>A near an instance → play_sfx, interact</td></tr>
+  <tr><td><code>entity_type_btn_b</code></td><td>—</td><td>B near an instance</td></tr>
+  <tr><td><code>entity_type_btn_opt</code></td><td>—</td><td>Option near an instance</td></tr>
+  <tr><td><code>entity_type_contact</code></td><td>—</td><td>Player overlaps an instance (hazard, heal)</td></tr>
+  <tr><td><code>entity_type_near_player</code></td><td>—</td><td>Instance within range of player (aggro)</td></tr>
+  <tr><td><code>entity_type_hit</code></td><td>—</td><td>1 instance hit → feedback, phase trigger</td></tr>
+  <tr><td><code>entity_type_hit_ge</code></td><td>N</td><td>Total hits ≥ N → multi-phase boss</td></tr>
+  <tr><td><code>entity_type_spawned</code></td><td>—</td><td>1 instance spawned → intro cutscene</td></tr>
+  <tr><td><code>entity_type_spawned_ge</code></td><td>N</td><td>Total spawned ≥ N → wave management</td></tr>
+  <tr><td><code>on_custom_event</code></td><td>Event ID</td><td>The specified custom event has been emitted → cross-system trigger</td></tr>
+</table>
+<p>A <b>Type combo</b> lists all entity types used in the scene.
+Value-based conditions (N) show a spinner.</p>
+
+<h2>Items (Items sub-tab)</h2>
+<p>The <b>Items</b> sub-tab defines the project's <b>item table</b>: each row describes a
+collectible (type, rarity, value). On export, <code>item_table.h</code> is generated with
+all definitions.</p>
+
+<h3>Table columns</h3>
+<table>
+  <tr><th>Column</th><th>Description</th></tr>
+  <tr><td><b>Name</b></td><td>Human-readable identifier (comment in the header)</td></tr>
+  <tr><td><b>Type</b></td><td>ITEM_HEAL, ITEM_ATK_UP, ITEM_DEF_UP, ITEM_XP_UP, ITEM_GOLD, ITEM_DICE_PLUS, ITEM_KEY, ITEM_CUSTOM</td></tr>
+  <tr><td><b>Rarity</b></td><td>RARITY_COMMON, RARITY_UNCOMMON, RARITY_RARE</td></tr>
+  <tr><td><b>Value</b></td><td>u8 integer (effect magnitude: HP restored, ATK bonus…)</td></tr>
+</table>
+
+<h3>Generated header — item_table.h</h3>
+<pre>/* item_table.h */
+#define ITEM_HEAL      0
+#define ITEM_ATK_UP    1
+/* ... */
+#define RARITY_COMMON   0
+#define RARITY_UNCOMMON 1
+#define RARITY_RARE     2
+
+typedef struct { u8 type; u8 value; u8 rarity; u8 price; u8 sprite_id; } NgpcItem;
+
+static const NgpcItem g_item_table[] = {
+    /* [0] potion_heal  */ { ITEM_HEAL,   RARITY_COMMON,   3 },
+    /* [1] sword_up     */ { ITEM_ATK_UP, RARITY_UNCOMMON, 1 },
+};</pre>
+<p>Add items with the <b>＋</b> button; remove with <b>－</b>. Each row is editable
+directly in the table.</p>
+
+<h2>Custom Events</h2>
+<p><b>Custom events</b> close the <code>emit_event</code> loop: when a scene trigger or
+entity type event fires <code>emit_event(id)</code>, the engine looks up this table to
+know what to do.</p>
+<p>Define them in <b>Globals → Events tab</b>.</p>
+
+<h3>Full flow</h3>
+<ol>
+  <li>In <b>Globals → Events</b>, create an event (e.g. <code>boss_phase_2</code>),
+      add <b>guard conditions</b> (AND/OR), and attach actions.</li>
+  <li>In any scene trigger or entity type event, choose the <code>emit_event</code>
+      action — the combo now shows <b>[0] boss_phase_2</b> instead of a raw spinner.</li>
+  <li>On export, <code>ngpc_custom_events.h</code> is generated with macros, a guard
+      condition table, and an action table.</li>
+  <li>The runtime calls <code>ngpc_emit_event(u8 id)</code> — the engine evaluates the
+      guards, then executes every action bound to that id.</li>
+</ol>
+
+<h3>UI — Events tab (Globals)</h3>
+<p>The tab has two areas:</p>
+<ul>
+  <li><b>Top panel — event list</b>: create, rename, delete, reorder (↑/↓). Events can be
+      grouped into <b>categories</b> (visual separators) to keep the project organised.</li>
+  <li><b>Bottom panel — "Conditions" and "Actions" sub-tabs</b>:</li>
+</ul>
+<p><b>Conditions sub-tab:</b></p>
+<ul>
+  <li><b>AND group (primary)</b>: all conditions in this list must be true for the event
+      to fire.</li>
+  <li><b>OR groups</b>: add alternative groups. The event fires if the AND group passes
+      OR if <i>all</i> conditions in any OR group pass.</li>
+  <li>If no conditions are defined, the event always fires.</li>
+  <li>Each condition can be <b>negated (NOT)</b>.</li>
+</ul>
+<p><b>Actions sub-tab</b>: 57 actions in 11 groups (Audio, Visual, Navigation, Entities,
+Player, Flags/Variables, Camera/Scroll, Triggers/HUD, Narrative, RPG/Quest,
+System). A <b>Presets ▾</b> button inserts common combinations.</p>
+
+<h3>Guard logic — summary</h3>
+<pre>Fire if:
+  (all AND conditions pass) OR (all conds in OR group 0) OR (all in OR group 1) OR ...
+No conditions → always fire.</pre>
+
+<h3>⚠️ Order = C index</h3>
+<p>Reordering events changes their <code>CEV_*</code> values and invalidates existing
+<code>emit_event(id)</code> calls in already-compiled ROMs. In production,
+<b>always append to the end of the list</b>.</p>
+
+<h3>Consuming a custom event from a scene trigger (flag bridge)</h3>
+<p>Scene triggers cannot directly listen for a custom event. The recommended pattern
+is the <b>flag bridge</b>:</p>
+<ol>
+  <li>Custom event action: <code>set_flag(N)</code></li>
+  <li>Scene trigger condition: <code>flag_set(N)</code> → actions + <code>clear_flag(N)</code></li>
+</ol>
+<p>This lets any scene react to any custom event.</p>
+
+<h3>Available actions (57)</h3>
+<table>
+  <tr><th>Group</th><th>Actions</th></tr>
+  <tr><td>Audio</td><td>play_sfx, start_bgm, stop_bgm, fade_bgm</td></tr>
+  <tr><td>Visual / Effects</td><td>play_anim, screen_shake, fade_out, fade_in</td></tr>
+  <tr><td>Navigation</td><td>goto_scene, warp_to, set_checkpoint, respawn_player, reset_scene</td></tr>
+  <tr><td>Entities</td><td>spawn_entity, show_entity, hide_entity, move_entity_to, spawn_wave,
+      spawn_at_region, pause_entity_path, resume_entity_path</td></tr>
+  <tr><td>Player</td><td>force_jump, lock_player_input, unlock_player_input,
+      enable_multijump, disable_multijump, enable_wall_grab, disable_wall_grab,
+      cycle_player_form, set_player_form, fire_player_shot, set_gravity_dir</td></tr>
+  <tr><td>Flags / Variables</td><td>set_flag, clear_flag, set_variable, inc_variable, dec_variable</td></tr>
+  <tr><td>Camera / Scroll</td><td>set_scroll_speed, set_cam_target, pause_scroll, resume_scroll</td></tr>
+  <tr><td>Triggers / HUD</td><td>enable_trigger, disable_trigger, add_score, add_health, set_health</td></tr>
+  <tr><td>Narrative / Dialogue</td><td>show_dialogue, play_cutscene, set_npc_dialogue</td></tr>
+  <tr><td>RPG / Quest</td><td>give_item, remove_item, drop_item, drop_random_item, unlock_door, unlock_ability,
+      set_quest_stage, add_resource, remove_resource</td></tr>
+  <tr><td>System</td><td>emit_event, save_game, end_game</td></tr>
+</table>
+<p><b>Note — template-dependent actions:</b> some actions (<code>unlock_ability</code>,
+<code>add_resource</code>, <code>set_gravity_dir</code>, <code>cycle_player_form</code>, etc.)
+emit the correct <code>TRIG_ACT_*</code> constant but require your <b>C template</b> to
+implement the matching case in <code>ngpng_trigger_execute_action()</code>. They are
+available in the engine as hooks to wire up.</p>
+
+<h3>Available guard conditions (88)</h3>
+<p>Same vocabulary as scene triggers and entity type events.
+Organised in 9 groups in the dialog:</p>
+<table>
+  <tr><th>Group</th><th>Examples</th></tr>
+  <tr><td>Player — buttons</td><td>btn_a, btn_b, btn_held_ge…</td></tr>
+  <tr><td>Player — state</td><td>health_le, on_jump, on_land, score_ge, player_has_item, item_count_ge…</td></tr>
+  <tr><td>Camera / Scroll</td><td>cam_x_ge, cam_y_ge, enter_region, leave_region</td></tr>
+  <tr><td>Timer / Wave</td><td>timer_ge, timer_every, wave_ge, scene_first_enter…</td></tr>
+  <tr><td>Flags / Variables</td><td>flag_set, flag_clear, variable_ge, variable_eq…</td></tr>
+  <tr><td>Entities — global</td><td>enemy_count_le, entity_alive, entity_contact…</td></tr>
+  <tr><td>Entities — by type</td><td>entity_type_all_dead, entity_type_count_ge…</td></tr>
+  <tr><td>Quest / Narrative</td><td>quest_stage_eq, dialogue_done, cutscene_done…</td></tr>
+  <tr><td>Resources / Random</td><td>resource_ge, chance</td></tr>
+</table>
+
+<h3>C export — ngpc_custom_events.h</h3>
+<pre>#define CEV_BOSS_PHASE_2    0u
+#define CEV_KEY_COLLECTED   1u
+#define CUSTOM_EVENT_COUNT      3   /* action rows */
+#define CUSTOM_EVENT_COND_COUNT 1   /* guard condition rows */
+
+/* Guard condition struct */
+typedef struct {
+    u8 event_id; u8 cond; u8 index; u16 value; u8 group_id; u8 negate;
+} NgpngCevCond;
+/* group_id = 0xFF → primary AND group, 0..N → OR group N */
+
+static const NgpngCevCond g_cev_conds[] = {
+    { CEV_BOSS_PHASE_2, 22u, 0u, 0u, 0xFFu, 0u }, /* flag_set[0] AND */
+};
+
+typedef struct {
+    u8 event_id; u8 action; u8 a0; u8 a1; u8 once;
+} NgpngEventAction;
+
+static const NgpngEventAction g_custom_events[] = {
+    { CEV_BOSS_PHASE_2,  2u, 2u, 0u, 0u },  /* start_bgm 2 */
+    { CEV_BOSS_PHASE_2, 15u, 3u, 0u, 0u },  /* screen_shake 3 */
+    { CEV_KEY_COLLECTED,31u, 0u, 0u, 0u },  /* inc_variable[0] */
+};</pre>
+<p>The runtime evaluates guards first, then actions:</p>
+<pre>void ngpc_emit_event(u8 id) {
+    /* 1. Evaluate guard conditions (AND + OR groups) */
+    if (!ngpng_cev_guard_passes(id)) return;
+    /* 2. Execute all actions bound to this id */
+    for (u8 i = 0; i &lt; CUSTOM_EVENT_COUNT; ++i)
+        if (g_custom_events[i].event_id == id)
+            ngpng_exec_action(&amp;g_custom_events[i]);
+}</pre>
+<p><b>Tree-shaking:</b> if <code>CUSTOM_EVENT_COUNT == 0</code> (no events defined), the
+table is empty and no dead symbols are emitted.</p>
 """
 
 
@@ -3135,7 +3644,9 @@ def _fr_level_editor() -> str:
 à organiser des <b>vagues</b>, et à générer une <b>carte de collision</b> via le Procgen.</p>
 <p><b>Tailles (NGPC)</b> : l’écran visible est 20×19 tiles (160×152 px) et une tilemap BG hardware est limitée à 32×32 tiles (256×256 px).
 Le tool affiche ce rappel près du champ <b>Taille</b>.</p>
-<p><b>Profil de jeu</b> : le sélecteur <b>Profil</b> applique des presets rapides (mode carte, scroll/loop, tailles par défaut) selon le genre.
+<p><b>Profil de jeu</b> : le sélecteur <b>Profil</b> applique des presets rapides (mode carte, scroll/loop, tailles par défaut) selon le genre :
+<b>Platformer</b>, <b>Shmup vertical</b>, <b>Top-down open world</b>, <b>Metroidvania</b>, <b>Dungeon floor</b>, <b>RPG tactical</b>,
+<b>Arcade score</b>, <b>Fighting</b>, <b>Beat 'em up</b>, <b>Run'n gun</b> et <b>Roguelite (room-by-room)</b>.
 Vous pouvez ensuite tout modifier manuellement.</p>
 <p><b>Splitters</b> : dans les onglets <b>Vagues</b> et <b>Procgen</b>, vous pouvez redimensionner la zone du haut et du bas (et la taille est mémorisée).</p>
 <p><b>Diagnostics</b> : un panneau liste les warnings utiles de la scène (player manquant, col_map absente/taille invalide, mapping visuel procgen incomplet, caméra hors map, régions/paths invalides, triggers cassés…). Il ajoute aussi des <b>hints guidés par profil</b> : par exemple <i>Shmup</i> sans forced scroll, <i>Fighting</i> sans Lock Y, ou <i>Beat ’em up</i> sans Ground band.</p>
@@ -3357,9 +3868,10 @@ Les régions sont exportées en C (<code>NgpngRegion</code> : x, y, w, h, kind).
 
 <h2>Triggers</h2>
 <p>L’onglet <b>Triggers</b> associe des <b>conditions</b> à des <b>actions</b>.
-<b>63 conditions</b> (régions, seuils caméra, timer, vagues, boutons, santé, ennemis, vies, flags, variables, états joueur, physique…) et
+<b>87 conditions</b> dont 18 conditions par type d’entité (régions, seuils caméra, timer, vagues, boutons, santé, ennemis, flags, variables, états joueur, physique, type d’entité…) et
 <b>73 actions</b> (audio, spawn, scroll, shake, scènes, anim, flags/variables, téléportation, fondu, inventaire…) + groupes OR.</p>
 <p>Fonctionnalités clés : <b>⧉ Dup</b> (dupliquer un trigger), <b>Conditions ET</b> (plusieurs conditions simultanées), <b>once</b> (ne se déclenche qu’une fois).</p>
+<p>Les <b>conditions par type d’entité</b> (<code>entity_type_*</code>) sont détaillées dans le topic <b>Globals</b>.</p>
 <p>→ <b>Référence complète (toutes les conditions, actions, exports, patterns) : topic <i>Triggers &amp; Régions</i></b></p>
 
 <h2>Chemins (Paths)</h2>
@@ -3536,7 +4048,7 @@ pour relier plus facilement le runtime au <b>Profil</b> choisi dans l'éditeur.<
 <h2>Régions / Triggers / Paths (détails)</h2>
 <ul>
   <li><b>Régions</b> : rectangles en tiles. <code>no_spawn</code> empêche Procgen d’y placer des entités. <code>danger_zone</code> = hazard runtime.</li>
-  <li><b>Triggers</b> : 63 conditions × 73 actions + groupes OR. Voir topic <b>Triggers &amp; Régions</b> pour la référence complète.</li>
+  <li><b>Triggers</b> : 87 conditions × 73 actions + groupes OR (dont 18 par type d'entité). Voir topics <b>Triggers &amp; Régions</b> et <b>Globals</b>.</li>
   <li><b>Paths</b> : routes en points tile (patrouilles, rails). <b>Loop</b> boucle le trajet.</li>
 </ul>
 
@@ -3586,6 +4098,85 @@ pour relier plus facilement le runtime au <b>Profil</b> choisi dans l'éditeur.<
   <li><b>Tilemaps PNG : rendu inattendu</b> : le mapping “Rôle → tile visuel” pointe vers un mauvais index de tile dans l’atlas. Corrigez les index et régénérez.</li>
   <li><b>BG qui “ne correspond pas” à l’export</b> : l’export tilemap peut produire des variantes <code>_scr1/_scr2</code> (dual-layer). Assurez-vous d’avoir les bons fichiers et le bon plane.</li>
 </ul>
+
+<h2>Procgen runtime — sous-onglets Dungeon DFS et Cave</h2>
+<p>L’onglet <b>Procgen</b> contient désormais <b>trois sous-onglets</b> :</p>
+<ul>
+  <li><b>Design Map</b> — génération design-time existante (BSP, scatter, etc.). Produit une <code>col_map</code> statique exportée en C.</li>
+  <li><b>Dungeon DFS</b> — configuration du module <code>ngpc_procgen</code> pour une génération <em>runtime</em> dans le jeu.</li>
+  <li><b>Cave</b> — configuration du module <code>ngpc_cavegen</code> (automate cellulaire 32×32 tiles) pour une génération <em>runtime</em>.</li>
+</ul>
+<p><b>Activation par scène :</b> chaque sous-onglet (Dungeon DFS et Cave) possède une <b>case à cocher principale</b> en haut
+(<i>Enable Dungeon DFS runtime generation for this scene</i> / <i>Enable Cave runtime generation for this scene</i>).
+Tant que la case est décochée, tous les paramètres sont grisés et <b>rien n’est sauvegardé ni exporté</b> pour ce module.
+Cocher la case active les paramètres et les inclut dans le <code>.ngpcraft</code> lors de la prochaine sauvegarde.</p>
+
+<h2>Sous-onglet Dungeon DFS — paramètres runtime</h2>
+<p>Configure le module <code>ngpc_procgen</code> (DFS récursif sur grille N×M de rooms).</p>
+<table>
+  <tr><th>Paramètre</th><th>Plage</th><th>Description</th><th>→ <code>#define</code></th></tr>
+  <tr><td>Grid W / H</td><td>2–8</td><td>Dimensions de la grille de rooms. RAM : ~72 B + W×H octets.</td><td><code>PROCGEN_GRID_W/H</code></td></tr>
+  <tr><td>Max enemies per room</td><td>0–12</td><td>Nombre max d’ennemis placés par room à la génération.</td><td><code>PROCGEN_MAX_ENEMIES</code></td></tr>
+  <tr><td>Item chance</td><td>0–100 %</td><td>Probabilité qu’un item apparaisse dans une room.</td><td><code>PROCGEN_ITEM_CHANCE</code></td></tr>
+  <tr><td>Loop injection</td><td>0–80 %</td><td>Couloirs supplémentaires ajoutés après le DFS pour créer des boucles. 0 = donjon pur arbre.</td><td><code>PROCGEN_LOOP_PCT</code></td></tr>
+  <tr><td>Max active enemies</td><td>1–40</td><td>Plafond global d’ennemis vivants simultanément dans toutes les rooms.</td><td><code>PROCGEN_MAX_ACTIVE</code></td></tr>
+  <tr><td>Player start mode</td><td>3 options</td><td>Corner (0,0) / Random room / Furthest from exit.</td><td><code>PROCGEN_START_MODE</code></td></tr>
+</table>
+<p><b>Table de difficulté (5 tiers) :</b> chaque colonne correspond à un palier de difficulté (tier = <code>FLOOR / 5</code>, plafonné à 4).
+Les 4 lignes sont : max enemies, item chance%, loop pct%, max active.
+Valeurs éditables directement dans le tableau.</p>
+<p><b>Multi-floor :</b> cochez <i>Enable multi-floor</i> pour activer les paramètres de progression :</p>
+<ul>
+  <li><b>Floor variable index (0–7)</b> : slot de <code>game_vars[]</code> qui stocke l’étage actuel.</li>
+  <li><b>Max floors (0 = infini)</b> : au-delà, redirection vers la scène boss/fin.</li>
+  <li><b>Boss/end scene</b> : scène goto quand <code>FLOOR ≥ max_floors</code>.</li>
+  <li><b>Reload scene</b> : scène cible pour le prochain étage (vide = self-reload).</li>
+</ul>
+<p><b>Bouton Export :</b> génère <code>GraphX/gen/procgen_config.h</code> avec tous les <code>#define</code> et les macros de tiers. À inclure <em>avant</em> <code>ngpc_procgen.h</code> dans votre code C.</p>
+
+<h2>Sous-onglet Cave — paramètres runtime</h2>
+<p>Configure le module <code>ngpc_cavegen</code> (automate cellulaire 32×32 tiles, 1 024 octets RAM).</p>
+<table>
+  <tr><th>Paramètre</th><th>Plage</th><th>Description</th><th>→ <code>#define</code></th></tr>
+  <tr><td>Initial wall %</td><td>30–70 %</td><td>Densité initiale de murs. 40–50% = cavernes organiques, &gt;55% = couloirs étroits.</td><td><code>CAVEGEN_WALL_PCT</code></td></tr>
+  <tr><td>CA iterations</td><td>1–10</td><td>Passes de lissage. Plus = cavernes rondes, coût init plus élevé.</td><td><code>CAVEGEN_ITERATIONS</code></td></tr>
+  <tr><td>Max enemies</td><td>0–16</td><td>Ennemis placés dans les cellules sol libres.</td><td><code>CAVEGEN_MAX_ENEMIES</code></td></tr>
+  <tr><td>Max items</td><td>0–8</td><td>Pickups placés directement sur le sol — le procgen spawn l'entity type <em>pickup</em> avec le sprite de l'item tiré de l'item pool.</td><td><code>CAVEGEN_MAX_ITEMS</code></td></tr>
+  <tr><td>Pickup entity type index</td><td>0–255</td><td>Index de l'entity type générique "pickup" (rôle <code>item</code>). Le runtime l'utilise pour spawner les items. Son sprite est écrasé par <code>g_item_table[idx].sprite_id</code>.</td><td><code>CAVEGEN_PICKUP_TYPE</code></td></tr>
+</table>
+<p><b>Table de difficulté (5 tiers) :</b> 3 lignes × 5 colonnes (wall%, max enemies, max items par tier).</p>
+<p><b>Multi-floor :</b> identique au DFS — floor variable, max floors, boss/end scene.</p>
+<p><b>Bouton Export :</b> génère <code>GraphX/gen/cavegen_config.h</code>. À inclure <em>avant</em> <code>ngpc_cavegen.h</code>.</p>
+
+<h2>Persistance des paramètres procgen par scène</h2>
+<p>Les paramètres des trois sous-onglets (Design Map, Dungeon DFS, Cave) sont sauvegardés <b>par scène</b> dans le <code>.ngpcraft</code> :</p>
+<pre>scenes[].procgen_params    ← Design Map (seed, mode, densités…)
+scenes[].rt_dfs_params     ← Dungeon DFS (grille, tiers, multi-floor…)  — uniquement si activé
+scenes[].rt_cave_params    ← Cave (wall_pct, iterations, tiers, multi-floor…) — uniquement si activé</pre>
+<p><b>Important :</b> <code>rt_dfs_params</code> et <code>rt_cave_params</code> ne sont écrits dans le JSON
+<em>que si la case à cocher principale du sous-onglet est cochée</em>.
+Si vous décochez la case et sauvegardez, la clé est supprimée du <code>.ngpcraft</code>.
+Le pipeline d’export (<b>Export project</b> dans l’onglet Projet) ne génère <code>procgen_config.h</code> / <code>cavegen_config.h</code>
+que pour les scènes où le module est activé.</p>
+<p>Changer de scène restaure automatiquement l’état de la case à cocher et les paramètres correspondants.
+La duplication de scène (bouton <b>⧉</b> dans l’onglet Projet) copie aussi ces paramètres et leur état d’activation.</p>
+
+<h2>Intégration C — procgen_config.h</h2>
+<pre>#include “GraphX/gen/procgen_config.h”  /* avant ngpc_procgen.h */
+#include “ngpc_procgen.h”
+
+static ProcgenMap g_dungeon;
+
+void game_init(void) {
+    u8 floor = ngpc_gv_get_var(PROCGEN_FLOOR_VAR);
+    u8 tier  = (floor / 5u &gt; 4u) ? 4u : floor / 5u;
+    u8 mx_e  = PROCGEN_TIER_MAX_ENEMIES[tier];
+    u8 lp    = PROCGEN_TIER_LOOP_PCT[tier];
+    ngpc_procgen_generate_ex(&amp;g_dungeon, ngpc_rng_next(),
+                             PROCGEN_GRID_W, PROCGEN_GRID_H, lp);
+    ngpc_procgen_gen_content(&amp;g_dungeon, mx_e,
+                             PROCGEN_TIER_ITEM_CHANCE[tier]);
+}</pre>
 """
 
 
@@ -4088,7 +4679,9 @@ def _en_level_editor() -> str:
 and generate a <b>collision map</b> using Procgen.</p>
 <p><b>Sizes (NGPC)</b>: the visible screen is 20×19 tiles (160×152 px) and the hardware BG map is limited to 32×32 tiles (256×256 px).
 The tool now shows this reminder next to the <b>Size</b> field.</p>
-<p><b>Game profile</b>: the <b>Profile</b> selector applies quick presets (map mode, scroll/loop, default sizes) depending on the genre.
+<p><b>Game profile</b>: the <b>Profile</b> selector applies quick presets (map mode, scroll/loop, default sizes) depending on the genre:
+<b>Platformer</b>, <b>Vertical Shmup</b>, <b>Top-down open world</b>, <b>Metroidvania</b>, <b>Dungeon floor</b>, <b>RPG tactical</b>,
+<b>Arcade score</b>, <b>Fighting</b>, <b>Beat 'em up</b>, <b>Run'n gun</b>, and <b>Roguelite (room-by-room)</b>.
 You can still override everything manually afterwards.</p>
 <p><b>Splitters</b>: in the <b>Waves</b> and <b>Procgen</b> tabs, you can resize the top/bottom areas (and the size is saved).</p>
 <p><b>Diagnostics</b>: a panel lists useful scene warnings (missing player, missing/invalid col_map, incomplete Procgen visual mapping, camera outside the map, invalid regions/paths, broken triggers…). It also adds <b>profile-guided hints</b>: for example a <i>Shmup</i> without forced scroll, a <i>Fighting</i> setup without Lock Y, or a <i>Beat 'em up</i> without Ground band.</p>
@@ -4280,9 +4873,10 @@ Regions are exported to C (<code>NgpngRegion</code>: x, y, w, h, kind).</p>
 
 <h2>Triggers</h2>
 <p>The <b>Triggers</b> tab maps <b>conditions</b> to <b>actions</b>.
-<b>63 conditions</b> (regions, camera thresholds, timer, waves, buttons, health, enemies, lives, flags, variables, player states, physics…) and
+<b>87 conditions</b> including 18 entity-type conditions (regions, camera thresholds, timer, waves, buttons, health, enemies, flags, variables, player states, physics, entity type…) and
 <b>73 actions</b> (audio, spawn, scroll, shake, scene transitions, anim, flags/variables, teleport, fade, inventory…) + OR groups.</p>
 <p>Key features: <b>⧉ Dup</b> (duplicate a trigger), <b>AND conditions</b> (multiple simultaneous conditions), <b>OR groups</b> (alternative condition sets), <b>once</b> (fires only once).</p>
+<p>The <b>entity type conditions</b> (<code>entity_type_*</code>) are detailed in the <b>Globals</b> topic.</p>
 <p>→ <b>Full reference (all conditions, actions, exports, patterns): see the <i>Triggers &amp; Regions</i> topic</b></p>
 
 <h2>Paths</h2>
@@ -4456,7 +5050,7 @@ defines so a runtime can branch more easily from the <b>Profile</b> chosen in th
 <h2>Regions / Triggers / Paths (details)</h2>
 <ul>
   <li><b>Regions</b>: rectangles in tile coords. <code>no_spawn</code> blocks Procgen. <code>danger_zone</code> = runtime hazard.</li>
-  <li><b>Triggers</b>: 63 conditions × 73 actions + OR groups. See the <b>Triggers &amp; Regions</b> topic for the full reference.</li>
+  <li><b>Triggers</b>: 87 conditions × 73 actions + OR groups (incl. 18 entity-type conditions). See <b>Triggers &amp; Regions</b> and <b>Globals</b> topics.</li>
   <li><b>Paths</b>: routes made of tile points (patrols, rails). <b>Loop</b> closes the route.</li>
 </ul>
 
@@ -4506,6 +5100,86 @@ defines so a runtime can branch more easily from the <b>Profile</b> chosen in th
   <li><b>Tilemap PNGs: unexpected look</b>: “Role → visual tile” points to the wrong tile index in the atlas. Fix indices and regenerate.</li>
   <li><b>BG preview differs from export</b>: tilemap export may generate <code>_scr1/_scr2</code> variants (dual-layer). Make sure you reference the correct files/plane.</li>
 </ul>
+
+<h2>Runtime procgen — Dungeon DFS and Cave sub-tabs</h2>
+<p>The <b>Procgen</b> tab now has <b>three sub-tabs</b>:</p>
+<ul>
+  <li><b>Design Map</b> — existing design-time generation (BSP, scatter, etc.). Produces a static <code>col_map</code> exported to C.</li>
+  <li><b>Dungeon DFS</b> — configures the <code>ngpc_procgen</code> module for <em>in-game runtime</em> dungeon generation.</li>
+  <li><b>Cave</b> — configures the <code>ngpc_cavegen</code> module (32×32 cellular automaton cave) for <em>runtime</em> generation.</li>
+</ul>
+<p><b>Per-scene activation:</b> each sub-tab (Dungeon DFS and Cave) has a <b>master checkbox</b> at the top
+(<i>Enable Dungeon DFS runtime generation for this scene</i> / <i>Enable Cave runtime generation for this scene</i>).
+While unchecked, all parameters are grayed out and <b>nothing is saved or exported</b> for that module.
+Checking the box enables the parameters and includes them in the <code>.ngpcraft</code> on next save.</p>
+
+<h2>Dungeon DFS sub-tab — runtime parameters</h2>
+<p>Configures <code>ngpc_procgen</code> (recursive DFS on an N×M grid of rooms).</p>
+<table>
+  <tr><th>Parameter</th><th>Range</th><th>Description</th><th>→ <code>#define</code></th></tr>
+  <tr><td>Grid W / H</td><td>2–8</td><td>Room grid dimensions. RAM: ~72 B base + W×H bytes.</td><td><code>PROCGEN_GRID_W/H</code></td></tr>
+  <tr><td>Max enemies per room</td><td>0–12</td><td>Maximum enemies placed per room during generation.</td><td><code>PROCGEN_MAX_ENEMIES</code></td></tr>
+  <tr><td>Item chance</td><td>0–100 %</td><td>Probability that an item spawns in a room.</td><td><code>PROCGEN_ITEM_CHANCE</code></td></tr>
+  <tr><td>Loop injection</td><td>0–80 %</td><td>Extra corridors added after DFS to create loops. 0 = pure tree dungeon.</td><td><code>PROCGEN_LOOP_PCT</code></td></tr>
+  <tr><td>Max active enemies</td><td>1–40</td><td>Global cap on simultaneously live enemies across all rooms.</td><td><code>PROCGEN_MAX_ACTIVE</code></td></tr>
+  <tr><td>Player start mode</td><td>3 options</td><td>Corner (0,0) / Random room / Furthest from exit.</td><td><code>PROCGEN_START_MODE</code></td></tr>
+</table>
+<p><b>Difficulty tier table (5 tiers):</b> each column is a difficulty level (tier = <code>FLOOR / 5</code>, clamped to 4).
+The 4 rows are: max enemies, item chance%, loop pct%, max active.
+Values are editable directly in the table.</p>
+<p><b>Multi-floor:</b> check <i>Enable multi-floor</i> to activate progression parameters:</p>
+<ul>
+  <li><b>Floor variable index (0–7)</b>: which <code>game_vars[]</code> slot tracks the current floor number.</li>
+  <li><b>Max floors (0 = infinite)</b>: when exceeded, redirect to the boss/end scene.</li>
+  <li><b>Boss/end scene</b>: scene to go to when <code>FLOOR ≥ max_floors</code>.</li>
+  <li><b>Reload scene</b>: target scene for the next floor (blank = self-reload).</li>
+</ul>
+<p><b>Export button:</b> writes <code>GraphX/gen/procgen_config.h</code> with all <code>#define</code>s and tier macros. Include it <em>before</em> <code>ngpc_procgen.h</code> in your C code.</p>
+
+<h2>Cave sub-tab — runtime parameters</h2>
+<p>Configures <code>ngpc_cavegen</code> (32×32 cellular automaton cave, 1 024 bytes RAM).</p>
+<table>
+  <tr><th>Parameter</th><th>Range</th><th>Description</th><th>→ <code>#define</code></th></tr>
+  <tr><td>Initial wall %</td><td>30–70 %</td><td>Initial wall seed density. 40–50% = organic caves, &gt;55% = narrow corridors.</td><td><code>CAVEGEN_WALL_PCT</code></td></tr>
+  <tr><td>CA iterations</td><td>1–10</td><td>Smoothing passes. More = rounder caves, heavier init cost.</td><td><code>CAVEGEN_ITERATIONS</code></td></tr>
+  <tr><td>Max enemies</td><td>0–16</td><td>Enemies placed in open floor cells.</td><td><code>CAVEGEN_MAX_ENEMIES</code></td></tr>
+  <tr><td>Max items</td><td>0–8</td><td>Item pickups placed directly on the floor — the procgen spawns the <em>pickup</em> entity type with the sprite from the item pool.</td><td><code>CAVEGEN_MAX_ITEMS</code></td></tr>
+  <tr><td>Pickup entity type index</td><td>0–255</td><td>Index of the generic "pickup" entity type (role <code>item</code>). Used by the runtime to spawn items. Its sprite is overridden by <code>g_item_table[idx].sprite_id</code>.</td><td><code>CAVEGEN_PICKUP_TYPE</code></td></tr>
+</table>
+<p><b>Difficulty tier table (5 tiers):</b> 3 rows × 5 columns (wall%, max enemies, max items per tier).</p>
+<p><b>Multi-floor:</b> same as DFS — floor variable, max floors, boss/end scene.</p>
+<p><b>Export button:</b> writes <code>GraphX/gen/cavegen_config.h</code>. Include it <em>before</em> <code>ngpc_cavegen.h</code>.</p>
+
+<h2>Per-scene parameter persistence</h2>
+<p>All three sub-tab parameters (Design Map, Dungeon DFS, Cave) are saved <b>per scene</b> in the <code>.ngpcraft</code> file:</p>
+<pre>scenes[].procgen_params    ← Design Map (seed, mode, densities…)
+scenes[].rt_dfs_params     ← Dungeon DFS (grid, tiers, multi-floor…)  — only when enabled
+scenes[].rt_cave_params    ← Cave (wall_pct, iterations, tiers, multi-floor…) — only when enabled</pre>
+<p><b>Important:</b> <code>rt_dfs_params</code> and <code>rt_cave_params</code> are only written to the JSON
+<em>when the sub-tab's master checkbox is checked</em>.
+Unchecking and saving removes the key from the <code>.ngpcraft</code>.
+The project export pipeline (<b>Export project</b> in the Project tab) only generates
+<code>procgen_config.h</code> / <code>cavegen_config.h</code> for scenes where the module is enabled.</p>
+<p>Switching scenes automatically restores the checkbox state and matching parameters.
+The <b>⧉ Duplicate scene</b> button (Project tab) deep-copies all procgen parameters and their activation state.</p>
+
+<h2>C integration — procgen_config.h</h2>
+<pre>#include "GraphX/gen/procgen_config.h"  /* before ngpc_procgen.h */
+#include "ngpc_procgen.h"
+
+static ProcgenMap g_dungeon;
+
+void game_init(void) {
+    u8 floor = ngpc_gv_get_var(PROCGEN_FLOOR_VAR);
+    u8 tier  = (floor / 5u &gt; 4u) ? 4u : floor / 5u;
+    u8 mx_e  = PROCGEN_TIER_MAX_ENEMIES[tier];
+    u8 lp    = PROCGEN_TIER_LOOP_PCT[tier];
+    ngpc_procgen_generate_ex(&amp;g_dungeon, ngpc_rng_next(),
+                             PROCGEN_GRID_W, PROCGEN_GRID_H, lp);
+    ngpc_procgen_gen_content(&amp;g_dungeon, mx_e,
+                             PROCGEN_TIER_ITEM_CHANCE[tier]);
+}
+</pre>
 """
 
 
@@ -5830,7 +6504,7 @@ Cela permet déjà de faire des locks imbriqués sans système de priorité manu
   <tr><td>19</td><td><code>lives_le</code></td><td>Non</td><td>Oui (nb)</td><td>Vies restantes ≤ valeur. Avertissement "dernière vie", difficulté dynamique</td></tr>
   <tr><td>20</td><td><code>lives_ge</code></td><td>Non</td><td>Oui (nb)</td><td>Vies restantes ≥ valeur. Débloquer bonus ou comportements spéciaux</td></tr>
   <tr><td>21</td><td><code>collectible_count_ge</code></td><td>Non</td><td>Oui (nb)</td><td>Nombre de collectibles ramassés ≥ valeur. Ouvre porte, valide objectif de collecte</td></tr>
-  <tr><td>22</td><td><code>flag_set</code></td><td>Non</td><td>Non</td><td>Flag booléen[index] == 1. "Index" = champ <b>Index</b> (0–7). Utile progression inter-scènes, déverrouillages</td></tr>
+  <tr><td>22</td><td><code>flag_set</code></td><td>Non</td><td>Non</td><td>Flag booléen[index] == 1. "Index" = champ <b>Index</b> (0–15). Utile progression inter-scènes, déverrouillages</td></tr>
   <tr><td>23</td><td><code>flag_clear</code></td><td>Non</td><td>Non</td><td>Flag booléen[index] == 0. Inverse de flag_set</td></tr>
   <tr><td>24</td><td><code>variable_ge</code></td><td>Non</td><td>Oui (seuil)</td><td>Variable u8[index] ≥ valeur. Compteur de clés, points de quête, niveau difficulté</td></tr>
   <tr><td>25</td><td><code>variable_eq</code></td><td>Non</td><td>Oui (cible)</td><td>Variable u8[index] == valeur. Etat exact (état boss, phase de puzzle)</td></tr>
@@ -5843,7 +6517,8 @@ Cela permet déjà de faire des locks imbriqués sans système de priorité manu
   <tr><td>32</td><td><code>on_ice</code></td><td>Non</td><td>Non</td><td>Joueur sur une tile de glace</td></tr>
   <tr><td>33</td><td><code>on_conveyor</code></td><td>Non</td><td>Non</td><td>Joueur sur une tile convoyeur</td></tr>
   <tr><td>34</td><td><code>on_spring</code></td><td>Non</td><td>Non</td><td>Joueur sur une tile ressort</td></tr>
-  <tr><td>35</td><td><code>player_has_item</code></td><td>Non</td><td>Oui (item_id)</td><td>Le joueur possède l'item d'index value dans son inventaire</td></tr>
+  <tr><td>35</td><td><code>player_has_item</code></td><td>Non</td><td>Oui (item_id)</td><td>Le joueur possède l'item sélectionné dans son inventaire. Sélecteur item dans l'UI.</td></tr>
+  <tr><td>88</td><td><code>item_count_ge</code></td><td>Non</td><td>Oui (count)</td><td>Le joueur possède au moins <em>value</em> exemplaires de l'item sélectionné. Sélecteur item + spinner quantité. Utile pour craft/échange.</td></tr>
   <tr><td>36</td><td><code>npc_talked_to</code></td><td>Non</td><td>Oui (entity_id)</td><td>Le PNJ d'index value a reçu une interaction de dialogue</td></tr>
   <tr><td>37</td><td><code>count_eq</code></td><td>Non</td><td>Oui (count)</td><td>Compteur d'entités du type flag_var_index == value. Ex : ennemis restants, collectibles d'un type</td></tr>
   <tr><td>63</td><td><code>all_switches_on</code></td><td>Non</td><td>Non</td><td>Tous les interrupteurs de la scène sont activés. Puzzle "activer toutes les cases"</td></tr>
@@ -5892,14 +6567,14 @@ Cela permet déjà de faire des locks imbriqués sans système de priorité manu
 <h2>Actions — santé, vies, entités, timer, score (IDs 51–62)</h2>
 <table>
   <tr><th>ID</th><th>Nom</th><th>a0</th><th>a1</th><th>Description</th></tr>
-  <tr><td>51</td><td><code>dec_variable</code></td><td>var_idx (0–7)</td><td>floor cap (0=libre)</td><td>Décrémente variable u8[index]. Si cap > 0, plancher à cette valeur.</td></tr>
+  <tr><td>51</td><td><code>dec_variable</code></td><td>var_idx (0–15)</td><td>floor cap (0=libre)</td><td>Décrémente variable u8[index]. Si cap > 0, plancher à cette valeur.</td></tr>
   <tr><td>52</td><td><code>add_health</code></td><td>amount (u8)</td><td>—</td><td>Ajoute amount PV au joueur (plafonné au max)</td></tr>
   <tr><td>53</td><td><code>set_health</code></td><td>value (u8)</td><td>—</td><td>Définit les PV du joueur à exactement value</td></tr>
   <tr><td>54</td><td><code>add_lives</code></td><td>amount (u8)</td><td>—</td><td>Donne amount vies supplémentaires au joueur</td></tr>
   <tr><td>55</td><td><code>set_lives</code></td><td>value (u8)</td><td>—</td><td>Définit le compteur de vies à exactement value</td></tr>
   <tr><td>56</td><td><code>destroy_entity</code></td><td>entity_idx (u8)</td><td>—</td><td>Retire l'entité d'index a0 de la scène (mort instantanée)</td></tr>
   <tr><td>57</td><td><code>teleport_player</code></td><td>region_idx (u8)</td><td>—</td><td>Téléporte le joueur au centre de la région spawn a0</td></tr>
-  <tr><td>58</td><td><code>toggle_flag</code></td><td>flag_idx (0–7)</td><td>—</td><td>Bascule le flag booléen[a0] (0→1, 1→0)</td></tr>
+  <tr><td>58</td><td><code>toggle_flag</code></td><td>flag_idx (0–15)</td><td>—</td><td>Bascule le flag booléen[a0] (0→1, 1→0)</td></tr>
   <tr><td>59</td><td><code>set_score</code></td><td>score_hi (u8)</td><td>score_lo (u8)</td><td>Définit le score = (a0×256)+a1 (max 65535)</td></tr>
   <tr><td>60</td><td><code>set_timer</code></td><td>frames (u8)</td><td>—</td><td>Remet le timer de scène à a0 frames</td></tr>
   <tr><td>61</td><td><code>pause_timer</code></td><td>—</td><td>—</td><td>Fige le timer de scène (utile pendant une cinématique)</td></tr>
@@ -5948,7 +6623,7 @@ Cela permet déjà de faire des locks imbriqués sans système de priorité manu
 <h2>Actions — table complète</h2>
 <table>
   <tr><th>ID</th><th>Nom</th><th>a0</th><th>a1</th><th>Description</th></tr>
-  <tr><td>0</td><td><code>emit_event</code></td><td>event (u8)</td><td>param (u8)</td><td>Émet un événement générique. Routez-le dans votre runtime.</td></tr>
+  <tr><td>0</td><td><code>emit_event</code></td><td>id événement</td><td>—</td><td>Déclenche un événement personnalisé. L'id est choisi dans le combo nommé (<code>CEV_*</code>). Les actions liées sont définies dans <b>Globals → Événements</b> et exportées dans <code>ngpc_custom_events.h</code>.</td></tr>
   <tr><td>1</td><td><code>play_sfx</code></td><td>sfx_id (u8)</td><td>—</td><td>Joue un SFX gameplay. Nécessite votre mapping SFX.</td></tr>
   <tr><td>2</td><td><code>start_bgm</code></td><td>song_idx (u8)</td><td>—</td><td>Lance un BGM (index Sound Creator).</td></tr>
   <tr><td>3</td><td><code>stop_bgm</code></td><td>—</td><td>—</td><td>Coupe le BGM immédiatement.</td></tr>
@@ -5975,10 +6650,10 @@ Cela permet déjà de faire des locks imbriqués sans système de priorité manu
   <tr><td>25</td><td><code>respawn_player</code></td><td>—</td><td>—</td><td>Force immédiatement un respawn joueur sur le checkpoint courant. Sans checkpoint valide, le runtime retombe sur le spawn d'entrée.</td></tr>
   <tr><td>26</td><td><code>pause_entity_path</code></td><td>entity_idx (u8)</td><td>—</td><td>Met en pause le suivi de path d'une entité statique, utile pour une plateforme mobile ou un lift.</td></tr>
   <tr><td>27</td><td><code>resume_entity_path</code></td><td>entity_idx (u8)</td><td>—</td><td>Relance le suivi de path d'une entité statique liée à un <code>Path</code>.</td></tr>
-  <tr><td>28</td><td><code>set_flag</code></td><td>flag_idx (0–7)</td><td>—</td><td>Met le flag booléen[index] à 1. L'index est dans le champ <b>Index</b> de l'UI trigger.</td></tr>
-  <tr><td>29</td><td><code>clear_flag</code></td><td>flag_idx (0–7)</td><td>—</td><td>Remet le flag booléen[index] à 0.</td></tr>
-  <tr><td>30</td><td><code>set_variable</code></td><td>var_idx (0–7)</td><td>valeur (u8)</td><td>Assigne directement variable u8[index] = valeur (champ <b>Valeur</b>).</td></tr>
-  <tr><td>31</td><td><code>inc_variable</code></td><td>var_idx (0–7)</td><td>cap (0=libre)</td><td>Incrémente variable u8[index]. Si cap &gt; 0, plafonne à cette valeur.</td></tr>
+  <tr><td>28</td><td><code>set_flag</code></td><td>flag_idx (0–15)</td><td>—</td><td>Met le flag booléen[index] à 1. L'index est dans le champ <b>Index</b> de l'UI trigger.</td></tr>
+  <tr><td>29</td><td><code>clear_flag</code></td><td>flag_idx (0–15)</td><td>—</td><td>Remet le flag booléen[index] à 0.</td></tr>
+  <tr><td>30</td><td><code>set_variable</code></td><td>var_idx (0–15)</td><td>valeur (u8)</td><td>Assigne directement variable u8[index] = valeur (champ <b>Valeur</b>).</td></tr>
+  <tr><td>31</td><td><code>inc_variable</code></td><td>var_idx (0–15)</td><td>cap (0=libre)</td><td>Incrémente variable u8[index]. Si cap &gt; 0, plafonne à cette valeur.</td></tr>
   <tr><td>32</td><td><code>warp_to</code></td><td>scene_idx (u8)</td><td>spawn_idx (u8)</td><td>Change de scène <i>et</i> place le joueur au centre de la région <code>spawn</code> numéro spawn_idx de la scène cible.</td></tr>
   <tr><td>33</td><td><code>lock_player_input</code></td><td>—</td><td>—</td><td>Zéroïse <code>ngpc_pad_held</code> et <code>ngpc_pad_pressed</code> chaque frame jusqu'à unlock. Utile pour cinématiques ou dialogues.</td></tr>
   <tr><td>34</td><td><code>unlock_player_input</code></td><td>—</td><td>—</td><td>Relâche le verrou posé par <code>lock_player_input</code>. Le joueur récupère le contrôle dès la frame suivante.</td></tr>
@@ -5987,8 +6662,10 @@ Cela permet déjà de faire des locks imbriqués sans système de priorité manu
   <tr><td>37</td><td><code>reset_scene</code></td><td>—</td><td>—</td><td>Recharge la scène courante depuis zéro (positions, entités, timer). Utile mort du joueur, puzzle raté.</td></tr>
   <tr><td>38</td><td><code>show_dialogue</code></td><td>dlg_idx (u8)</td><td>—</td><td>Affiche le dialogue d'index a0. L'index est résolu depuis l'ID de dialogue de l'onglet <b>Dialogues</b> (stable après réorganisation). Génère <code>g_dlg_*[]</code> dans <code>scene_*_dialogs.h</code>.</td></tr>
   <tr><td>74</td><td><code>set_npc_dialogue</code></td><td>entity_idx (u8)</td><td>dlg_idx (u8)</td><td>Change le dialogue du NPC a0 pour le dialogue a1. Permet à un PNJ de donner une réplique différente selon l'avancement. Sélecteurs entité + dialogue dans l'UI.</td></tr>
-  <tr><td>39</td><td><code>give_item</code></td><td>item_id (u8)</td><td>—</td><td>Ajoute l'item d'index item_id à l'inventaire du joueur.</td></tr>
-  <tr><td>40</td><td><code>remove_item</code></td><td>item_id (u8)</td><td>—</td><td>Retire l'item d'index item_id de l'inventaire du joueur.</td></tr>
+  <tr><td>39</td><td><code>give_item</code></td><td>item_id (u8)</td><td>—</td><td>Ajoute l'item sélectionné directement à l'inventaire du joueur (sans visuel sur la map). Sélecteur item dans l'UI.</td></tr>
+  <tr><td>40</td><td><code>remove_item</code></td><td>item_id (u8)</td><td>—</td><td>Retire l'item sélectionné de l'inventaire du joueur. Sélecteur item dans l'UI.</td></tr>
+  <tr><td>78</td><td><code>drop_item</code></td><td>item_id (u8)</td><td>—</td><td>Fait apparaître un pickup visuel de l'item sélectionné à la position de l'entité. Le runtime utilise <code>g_item_table[a0].sprite_id</code> pour l'affichage. Cas classique : <code>on_death → drop_item</code> pour qu'un monstre lâche un item. Sélecteur item dans l'UI.</td></tr>
+  <tr><td>79</td><td><code>drop_random_item</code></td><td>—</td><td>—</td><td>Fait apparaître un pickup visuel d'un item aléatoire tiré de <code>CAVEGEN_ITEM_POOL</code> (ou de tous les items si le pool est vide). Utile pour un monstre générique qui peut lâcher n'importe quoi.</td></tr>
   <tr><td>41</td><td><code>unlock_door</code></td><td>door_id (u8)</td><td>—</td><td>Déverrouille la porte d'index door_id (entité de type porte dans la scène).</td></tr>
   <tr><td>42</td><td><code>enable_wall_grab</code></td><td>—</td><td>—</td><td>Active l'agrippement de mur pour le joueur.</td></tr>
   <tr><td>43</td><td><code>disable_wall_grab</code></td><td>—</td><td>—</td><td>Désactive l'agrippement de mur.</td></tr>
@@ -6202,7 +6879,7 @@ This already gives usable nested locks without a dedicated manual priority syste
   <tr><td>19</td><td><code>lives_le</code></td><td>No</td><td>Yes (count)</td><td>Lives remaining ≤ value. "Last life" warning, dynamic difficulty</td></tr>
   <tr><td>20</td><td><code>lives_ge</code></td><td>No</td><td>Yes (count)</td><td>Lives remaining ≥ value. Unlock bonuses or special behaviour</td></tr>
   <tr><td>21</td><td><code>collectible_count_ge</code></td><td>No</td><td>Yes (count)</td><td>Collected item count ≥ value. Open door, validate collection goal</td></tr>
-  <tr><td>22</td><td><code>flag_set</code></td><td>No</td><td>No</td><td>Boolean flag[index] == 1. "Index" = the <b>Index</b> field (0–7). Cross-scene progression, unlocks</td></tr>
+  <tr><td>22</td><td><code>flag_set</code></td><td>No</td><td>No</td><td>Boolean flag[index] == 1. "Index" = the <b>Index</b> field (0–15). Cross-scene progression, unlocks</td></tr>
   <tr><td>23</td><td><code>flag_clear</code></td><td>No</td><td>No</td><td>Boolean flag[index] == 0. Inverse of flag_set</td></tr>
   <tr><td>24</td><td><code>variable_ge</code></td><td>No</td><td>Yes (threshold)</td><td>u8 variable[index] ≥ value. Key counters, quest points, difficulty level</td></tr>
   <tr><td>25</td><td><code>variable_eq</code></td><td>No</td><td>Yes (target)</td><td>u8 variable[index] == value. Exact state check (boss phase, puzzle state)</td></tr>
@@ -6215,7 +6892,8 @@ This already gives usable nested locks without a dedicated manual priority syste
   <tr><td>32</td><td><code>on_ice</code></td><td>No</td><td>No</td><td>Player is standing on an ice tile</td></tr>
   <tr><td>33</td><td><code>on_conveyor</code></td><td>No</td><td>No</td><td>Player is standing on a conveyor tile</td></tr>
   <tr><td>34</td><td><code>on_spring</code></td><td>No</td><td>No</td><td>Player is on a spring tile</td></tr>
-  <tr><td>35</td><td><code>player_has_item</code></td><td>No</td><td>Yes (item_id)</td><td>Player holds the item at index value in their inventory</td></tr>
+  <tr><td>35</td><td><code>player_has_item</code></td><td>No</td><td>Yes (item_id)</td><td>Player holds the selected item in their inventory. Item combo selector in UI.</td></tr>
+  <tr><td>88</td><td><code>item_count_ge</code></td><td>No</td><td>Yes (count)</td><td>Player holds at least <em>value</em> copies of the selected item. Item combo + count spinner in UI. Useful for crafting or trade.</td></tr>
   <tr><td>36</td><td><code>npc_talked_to</code></td><td>No</td><td>Yes (entity_id)</td><td>The NPC at entity index value has received a dialogue interaction</td></tr>
   <tr><td>37</td><td><code>count_eq</code></td><td>No</td><td>Yes (count)</td><td>Entity count of type flag_var_index == value. E.g. remaining enemies, collectibles of a type</td></tr>
   <tr><td>63</td><td><code>all_switches_on</code></td><td>No</td><td>No</td><td>All switches in the scene are activated. Classic "hit all switches" puzzle condition</td></tr>
@@ -6264,14 +6942,14 @@ This already gives usable nested locks without a dedicated manual priority syste
 <h2>Actions — health, lives, entities, timer, score (IDs 51–62)</h2>
 <table>
   <tr><th>ID</th><th>Name</th><th>a0</th><th>a1</th><th>Description</th></tr>
-  <tr><td>51</td><td><code>dec_variable</code></td><td>var_idx (0–7)</td><td>floor cap (0=none)</td><td>Decrements u8 variable[index]. If cap > 0, the variable is floor-clamped to that value.</td></tr>
+  <tr><td>51</td><td><code>dec_variable</code></td><td>var_idx (0–15)</td><td>floor cap (0=none)</td><td>Decrements u8 variable[index]. If cap > 0, the variable is floor-clamped to that value.</td></tr>
   <tr><td>52</td><td><code>add_health</code></td><td>amount (u8)</td><td>—</td><td>Adds amount HP to the player (capped at max)</td></tr>
   <tr><td>53</td><td><code>set_health</code></td><td>value (u8)</td><td>—</td><td>Sets player HP to exactly value</td></tr>
   <tr><td>54</td><td><code>add_lives</code></td><td>amount (u8)</td><td>—</td><td>Gives the player amount extra lives</td></tr>
   <tr><td>55</td><td><code>set_lives</code></td><td>value (u8)</td><td>—</td><td>Sets the lives counter to exactly value</td></tr>
   <tr><td>56</td><td><code>destroy_entity</code></td><td>entity_idx (u8)</td><td>—</td><td>Removes the entity at index a0 from the scene immediately</td></tr>
   <tr><td>57</td><td><code>teleport_player</code></td><td>region_idx (u8)</td><td>—</td><td>Teleports the player to the centre of spawn region a0</td></tr>
-  <tr><td>58</td><td><code>toggle_flag</code></td><td>flag_idx (0–7)</td><td>—</td><td>Flips boolean flag[a0] (0→1, 1→0)</td></tr>
+  <tr><td>58</td><td><code>toggle_flag</code></td><td>flag_idx (0–15)</td><td>—</td><td>Flips boolean flag[a0] (0→1, 1→0)</td></tr>
   <tr><td>59</td><td><code>set_score</code></td><td>score_hi (u8)</td><td>score_lo (u8)</td><td>Sets score = (a0×256)+a1 (max 65535)</td></tr>
   <tr><td>60</td><td><code>set_timer</code></td><td>frames (u8)</td><td>—</td><td>Resets the scene timer to a0 frames</td></tr>
   <tr><td>61</td><td><code>pause_timer</code></td><td>—</td><td>—</td><td>Freezes the scene timer (useful during cutscenes)</td></tr>
@@ -6320,7 +6998,7 @@ This already gives usable nested locks without a dedicated manual priority syste
 <h2>Actions — full table</h2>
 <table>
   <tr><th>ID</th><th>Name</th><th>a0</th><th>a1</th><th>Description</th></tr>
-  <tr><td>0</td><td><code>emit_event</code></td><td>event (u8)</td><td>param (u8)</td><td>Emits a generic event. Route it in your runtime.</td></tr>
+  <tr><td>0</td><td><code>emit_event</code></td><td>event id</td><td>—</td><td>Fires a custom event. The id is picked from the named combo (<code>CEV_*</code>). Bound actions are defined in <b>Globals → Events</b> and exported to <code>ngpc_custom_events.h</code>.</td></tr>
   <tr><td>1</td><td><code>play_sfx</code></td><td>sfx_id (u8)</td><td>—</td><td>Play a gameplay SFX. Requires your SFX mapping.</td></tr>
   <tr><td>2</td><td><code>start_bgm</code></td><td>song_idx (u8)</td><td>—</td><td>Start a BGM (Sound Creator song index).</td></tr>
   <tr><td>3</td><td><code>stop_bgm</code></td><td>—</td><td>—</td><td>Stop BGM immediately.</td></tr>
@@ -6347,10 +7025,10 @@ This already gives usable nested locks without a dedicated manual priority syste
   <tr><td>25</td><td><code>respawn_player</code></td><td>—</td><td>—</td><td>Force an immediate player respawn on the current checkpoint. Without a valid checkpoint, autorun falls back to the normal entry spawn.</td></tr>
   <tr><td>26</td><td><code>pause_entity_path</code></td><td>entity_idx (u8)</td><td>—</td><td>Pause path following on a static entity, useful for moving platforms and lifts.</td></tr>
   <tr><td>27</td><td><code>resume_entity_path</code></td><td>entity_idx (u8)</td><td>—</td><td>Resume path following on a static entity linked to a <code>Path</code>.</td></tr>
-  <tr><td>28</td><td><code>set_flag</code></td><td>flag_idx (0–7)</td><td>—</td><td>Set boolean flag[index] = 1. The index is set in the trigger UI <b>Index</b> field.</td></tr>
-  <tr><td>29</td><td><code>clear_flag</code></td><td>flag_idx (0–7)</td><td>—</td><td>Clear boolean flag[index] = 0.</td></tr>
-  <tr><td>30</td><td><code>set_variable</code></td><td>var_idx (0–7)</td><td>value (u8)</td><td>Directly assign u8 variable[index] = value (set in the <b>Value</b> field).</td></tr>
-  <tr><td>31</td><td><code>inc_variable</code></td><td>var_idx (0–7)</td><td>cap (0=none)</td><td>Increment u8 variable[index]. If cap &gt; 0, the variable is clamped to that maximum.</td></tr>
+  <tr><td>28</td><td><code>set_flag</code></td><td>flag_idx (0–15)</td><td>—</td><td>Set boolean flag[index] = 1. The index is set in the trigger UI <b>Index</b> field.</td></tr>
+  <tr><td>29</td><td><code>clear_flag</code></td><td>flag_idx (0–15)</td><td>—</td><td>Clear boolean flag[index] = 0.</td></tr>
+  <tr><td>30</td><td><code>set_variable</code></td><td>var_idx (0–15)</td><td>value (u8)</td><td>Directly assign u8 variable[index] = value (set in the <b>Value</b> field).</td></tr>
+  <tr><td>31</td><td><code>inc_variable</code></td><td>var_idx (0–15)</td><td>cap (0=none)</td><td>Increment u8 variable[index]. If cap &gt; 0, the variable is clamped to that maximum.</td></tr>
   <tr><td>32</td><td><code>warp_to</code></td><td>scene_idx (u8)</td><td>spawn_idx (u8)</td><td>Switch scene <i>and</i> place the player at the centre of the <code>spawn</code> region #spawn_idx in the target scene.</td></tr>
   <tr><td>33</td><td><code>lock_player_input</code></td><td>—</td><td>—</td><td>Zeroes <code>ngpc_pad_held</code> and <code>ngpc_pad_pressed</code> every frame until unlocked. Useful for cutscenes or dialogues.</td></tr>
   <tr><td>34</td><td><code>unlock_player_input</code></td><td>—</td><td>—</td><td>Releases the lock set by <code>lock_player_input</code>. The player regains control from the next frame.</td></tr>
@@ -6359,8 +7037,10 @@ This already gives usable nested locks without a dedicated manual priority syste
   <tr><td>37</td><td><code>reset_scene</code></td><td>—</td><td>—</td><td>Reloads the current scene from scratch (positions, entities, timer). Useful on player death or failed puzzle.</td></tr>
   <tr><td>38</td><td><code>show_dialogue</code></td><td>dlg_idx (u8)</td><td>—</td><td>Shows the dialogue at index a0. Index is resolved from the dialogue ID set in the <b>Dialogues</b> tab (stable across reorders). Generates <code>g_dlg_*[]</code> in <code>scene_*_dialogs.h</code>.</td></tr>
   <tr><td>74</td><td><code>set_npc_dialogue</code></td><td>entity_idx (u8)</td><td>dlg_idx (u8)</td><td>Changes the dialogue of NPC a0 to dialogue a1. Lets an NPC give a different reply based on quest progress. Entity + dialogue combo selectors in UI.</td></tr>
-  <tr><td>39</td><td><code>give_item</code></td><td>item_id (u8)</td><td>—</td><td>Adds the item at index item_id to the player's inventory.</td></tr>
-  <tr><td>40</td><td><code>remove_item</code></td><td>item_id (u8)</td><td>—</td><td>Removes the item at index item_id from the player's inventory.</td></tr>
+  <tr><td>39</td><td><code>give_item</code></td><td>item_id (u8)</td><td>—</td><td>Adds the selected item directly to the player's inventory (no visual on map). Item combo selector in UI.</td></tr>
+  <tr><td>40</td><td><code>remove_item</code></td><td>item_id (u8)</td><td>—</td><td>Removes the selected item from the player's inventory. Item combo selector in UI.</td></tr>
+  <tr><td>78</td><td><code>drop_item</code></td><td>item_id (u8)</td><td>—</td><td>Spawns a visible pickup for the selected item at the entity's current position. The runtime uses <code>g_item_table[a0].sprite_id</code> for display. Classic use: <code>on_death → drop_item</code> to make an enemy drop loot. Item combo selector in UI.</td></tr>
+  <tr><td>79</td><td><code>drop_random_item</code></td><td>—</td><td>—</td><td>Spawns a visible pickup for a random item drawn from <code>CAVEGEN_ITEM_POOL</code> (or all items if the pool is empty). Useful for generic enemies that can drop anything.</td></tr>
   <tr><td>41</td><td><code>unlock_door</code></td><td>door_id (u8)</td><td>—</td><td>Unlocks the door entity at index door_id in the scene.</td></tr>
   <tr><td>42</td><td><code>enable_wall_grab</code></td><td>—</td><td>—</td><td>Enables wall-grab/wall-slide for the player.</td></tr>
   <tr><td>43</td><td><code>disable_wall_grab</code></td><td>—</td><td>—</td><td>Disables wall-grab/wall-slide.</td></tr>

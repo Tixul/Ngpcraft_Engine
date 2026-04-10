@@ -421,6 +421,21 @@ def _anim_speed(meta: dict) -> int:
     return 6
 
 
+# All entity-type scene conditions — used in 3 trigger-export loops to route
+# cond_type_name → seen_types index into the C `region` field.
+_ENTITY_TYPE_CONDS: frozenset[str] = frozenset({
+    "entity_type_all_dead",    "entity_type_count_ge",
+    "entity_type_collected",   "entity_type_alive_le",
+    "entity_type_collected_ge","entity_type_all_collected",
+    "entity_type_activated",   "entity_type_all_activated",
+    "entity_type_any_alive",   "entity_type_btn_a",
+    "entity_type_btn_b",       "entity_type_btn_opt",
+    "entity_type_contact",     "entity_type_near_player",
+    "entity_type_hit",         "entity_type_hit_ge",
+    "entity_type_spawned",     "entity_type_spawned_ge",
+})
+
+
 def _collect_entity_types(scene: dict) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -1479,7 +1494,27 @@ def make_scene_level_h(
             "dialogue_done":   65,
             "choice_result":   66,
             "menu_result":     67,
-            "entity_contact":  68,
+            "entity_contact":       68,
+            "entity_type_all_dead":      69,
+            "entity_type_count_ge":      70,
+            "entity_type_collected":     71,
+            "entity_type_alive_le":      72,
+            "entity_type_collected_ge":  73,
+            "entity_type_all_collected": 74,
+            "entity_type_activated":     75,
+            "entity_type_all_activated": 76,
+            "entity_type_any_alive":     77,
+            "entity_type_btn_a":         78,
+            "entity_type_btn_b":         79,
+            "entity_type_btn_opt":       80,
+            "entity_type_contact":       81,
+            "entity_type_near_player":   82,
+            "entity_type_hit":           83,
+            "entity_type_hit_ge":        84,
+            "entity_type_spawned":       85,
+            "entity_type_spawned_ge":    86,
+            "on_custom_event":           87,
+            "item_count_ge":             88,
         }
 
         act_to_id = {
@@ -1561,6 +1596,8 @@ def make_scene_level_h(
             "open_menu":        75,
             "flip_sprite_h":   76,
             "flip_sprite_v":   77,
+            "drop_item":       78,
+            "drop_random_item":79,
         }
 
         lines += [sep, "/* Triggers (conditions -> actions)                                    */", sep]
@@ -1820,6 +1857,48 @@ def make_scene_level_h(
                         region_idx = int(cmidx) & 0xFF
                 value = int(t.get("menu_item_idx", 0) or 0) & 0xFFFF
                 value_expr = f"(u16){value}"
+            # player_has_item: value = item index resolved from item_id name
+            elif cond == "player_has_item":
+                item_id = str(t.get("item_id", "") or "").strip()
+                item_list = project_data.get("item_table", []) or [] if isinstance(project_data, dict) else []
+                item_idx = next(
+                    (i for i, it in enumerate(item_list)
+                     if isinstance(it, dict) and str(it.get("name", "") or "").strip() == item_id),
+                    int(t.get("event", 0) or 0),
+                )
+                value = int(item_idx) & 0xFFFF
+                value_expr = f"(u16){value}"
+            # item_count_ge: region = item_idx, value = count threshold (from t["value"])
+            elif cond == "item_count_ge":
+                item_id = str(t.get("item_id", "") or "").strip()
+                item_list = project_data.get("item_table", []) or [] if isinstance(project_data, dict) else []
+                item_idx = next(
+                    (i for i, it in enumerate(item_list)
+                     if isinstance(it, dict) and str(it.get("name", "") or "").strip() == item_id),
+                    int(t.get("event", 0) or 0),
+                )
+                region_idx = int(item_idx) & 0xFF
+                # value already read from t["value"] (count threshold) — no override needed
+            # on_custom_event: region = custom event index resolved from cev_id string
+            elif cond == "on_custom_event":
+                cev_id = str(t.get("cev_id", "") or "").strip()
+                cev_list = project_data.get("custom_events", []) or [] if isinstance(project_data, dict) else []
+                cev_idx = next(
+                    (i for i, ev in enumerate(cev_list)
+                     if isinstance(ev, dict) and str(ev.get("id", "") or "").strip() == cev_id),
+                    255,
+                )
+                region_idx = int(cev_idx) & 0xFF
+            # entity type conditions: region = type index in seen_types
+            elif cond in _ENTITY_TYPE_CONDS:
+                ctn = str(t.get("cond_type_name", "") or "").strip()
+                region_idx = seen_types.index(ctn) if ctn in seen_types else 255
+                # value-based conditions: read explicit threshold from JSON
+                if cond in ("entity_type_count_ge", "entity_type_alive_le",
+                            "entity_type_collected_ge", "entity_type_hit_ge",
+                            "entity_type_spawned_ge"):
+                    value = int(t.get("value", 1) or 1) & 0xFFFF
+                    value_expr = f"(u16){value}"
             act = str(t.get("action", "") or "").strip().lower()
             if not act:
                 # Back-compat: old projects had only event/param (emit_event).
@@ -1859,9 +1938,24 @@ def make_scene_level_h(
                         a0 = (0 if resolved is None else int(resolved)) & 0xFF
                     else:
                         a0 = int(t.get("a0", 0) or 0) & 0xFF
+                elif act in ("give_item", "remove_item", "drop_item"):
+                    # a0 = item index resolved from item_id name
+                    # drop_item: spawns a pickup entity at self position using g_item_table[a0].sprite_id
+                    item_id = str(t.get("item_id", "") or "").strip()
+                    item_list = project_data.get("item_table", []) or [] if isinstance(project_data, dict) else []
+                    if item_id:
+                        resolved = next(
+                            (i for i, it in enumerate(item_list)
+                             if isinstance(it, dict) and str(it.get("name", "") or "").strip() == item_id),
+                            None,
+                        )
+                        a0 = (int(t.get("event", 0) or 0) if resolved is None else int(resolved)) & 0xFF
+                    else:
+                        a0 = int(t.get("event", 0) or 0) & 0xFF
+                    # drop_random_item: a0 unused (runtime picks from CAVEGEN_ITEM_POOL)
                 elif act in ("set_flag", "clear_flag", "set_variable", "inc_variable",
                              "dec_variable", "toggle_flag"):
-                    # a0 = flag/var index (0..7)
+                    # a0 = flag/var index (0..15)
                     # Must match needs_fv_action in level_tab.py.
                     a0 = int(t.get("flag_var_index", 0) or 0) & 0xFF
                 elif act in ("show_entity", "hide_entity", "move_entity_to",
@@ -1970,8 +2064,12 @@ def make_scene_level_h(
                 for ec in ecs:
                     ec_cond = str(ec.get("cond", "enter_region") or "enter_region")
                     ec_cid = int(cond_to_id.get(ec_cond, 0))
-                    ec_rid = str(ec.get("region_id", "") or "").strip()
-                    ec_ridx = int(rid_to_idx.get(ec_rid, 255))
+                    if ec_cond in _ENTITY_TYPE_CONDS:
+                        ec_ctn = str(ec.get("cond_type_name", "") or "").strip()
+                        ec_ridx = seen_types.index(ec_ctn) if ec_ctn in seen_types else 255
+                    else:
+                        ec_rid = str(ec.get("region_id", "") or "").strip()
+                        ec_ridx = int(rid_to_idx.get(ec_rid, 255))
                     ec_val = int(ec.get("value", 0) or 0) & 0xFFFF
                     flat_conds.append((ec_cid, ec_ridx, ec_val))
 
@@ -2018,8 +2116,12 @@ def make_scene_level_h(
                     for ec in og:
                         ec_cond = str(ec.get("cond", "enter_region") or "enter_region")
                         ec_cid = int(cond_to_id.get(ec_cond, 0))
-                        ec_rid = str(ec.get("region_id", "") or "").strip()
-                        ec_ridx = int(rid_to_idx.get(ec_rid, 255))
+                        if ec_cond in _ENTITY_TYPE_CONDS:
+                            ec_ctn = str(ec.get("cond_type_name", "") or "").strip()
+                            ec_ridx = seen_types.index(ec_ctn) if ec_ctn in seen_types else 255
+                        else:
+                            ec_rid = str(ec.get("region_id", "") or "").strip()
+                            ec_ridx = int(rid_to_idx.get(ec_rid, 255))
                         ec_val = int(ec.get("value", 0) or 0) & 0xFFFF
                         flat_or_conds.append((ec_cid, ec_ridx, ec_val))
             lines.append(f"static const NgpngCond g_{sym_use}_trig_or_conds[] = {{")

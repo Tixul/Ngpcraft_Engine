@@ -58,7 +58,9 @@ New features will come later, once the core is stable.
 | Tilemap PNGs | `*_map.c/h` — scroll maps + collision grid |
 | Frame slices + hitboxes | `*_hitbox.h`, `*_ctrl.h`, `*_props.h`, `*_anims.h`, `*_motion.h` |
 | Entity placements + AI rules | Spawn tables, path tables, wave tables |
-| Trigger rules (visual) | 68 conditions × 76 actions → `g_scene_trig_*[]` C arrays |
+| Trigger rules (visual) | 89 conditions × 79 actions + OR-groups → `g_scene_trig_*[]` C arrays |
+| Entity type events (global) | `ngpc_entity_type_events.h` — 16 events per archetype, tree-shaken |
+| Custom events bus | `ngpc_custom_events.h` — named events, AND/OR guards, 57 actions |
 | Dialogue banks | Per-scene lines, choices, menus → `scene_*_dialogs.h` |
 | Audio manifest | `sound_data.c/h`, `Sfx_Play()` wrapper, BGM per scene |
 | Global vars / flags / entity types | `game_vars.h` (tree-shaken), `entity_types.h` (ROM-only table) |
@@ -80,13 +82,13 @@ One click on **Export (template-ready)** produces a project that compiles and ru
 - Tile budget checker with live warnings
 
 **Globals tab — project-wide data**
-- 8 boolean flags + 8 integer variables with optional names — referenced by index in triggers
+- 16 boolean flags + 16 u8 variables with optional names — referenced by index in triggers
 - Tree-shaking: only named or used vars/flags get a `#define` alias in the generated `game_vars.h`
 - 16 user-defined constants (`CONST_NAME = value`) emitted as `#define` — no runtime cost
-- 8 SFX slots with names, tail-trimming (only export up to the last used entry)
-- Entity type library: define archetypes (role, behavior, AI params, direction) once at project level,
-  reuse across scenes via **Save as type** / **Apply type** in the Level tab
-- ROM-only `entity_types.h`: `static const EntityTypeDef et_table[]` — zero RAM, zero CPU overhead
+- 8 SFX slots with names, tail-trimming
+- Entity type library: define archetypes (role, behavior, AI params) once, reuse across scenes
+- ROM-only `entity_types.h` + global event dispatch table `entity_type_events.h` (tree-shaken)
+- **Custom Events** — named global event bus: `ngpc_emit_event(id)` → AND/OR guard conditions → 57 actions in 11 groups. Searchable combos. Exported to `ngpc_custom_events.h`.
 
 **Visual level editor**
 - Entity placement: role, AI behavior (speed, aggro range, patrol cadence), physics props
@@ -98,10 +100,10 @@ One click on **Export (template-ready)** produces a project that compiles and ru
   each one reorders conditions, actions, and presets to surface what matters for that genre
 
 **Trigger system — visual scripting**
-- 68 conditions: `on_jump/land/hurt/death`, player in region, HP, timer, flags, variables,
-  wave state, quest stage, enemy count, `dialogue_done`, `choice_result`, `chance`, push-block-on-tile…
-- 76 actions: BGM/SFX, spawn, scene transition, move entity to exact tile, set flag/variable,
-  give item, toggle tile, flash screen, camera lock, fade in/out, save game…
+- 89 conditions: `on_jump/land/hurt/death`, player in region, HP, timer, flags, variables,
+  wave state, quest stage, enemy count, entity-type state, `item_count_ge`, `chance`…
+- 79 actions: BGM/SFX, spawn, scene transition, move entity to exact tile, set flag/variable,
+  give/remove/drop item, toggle tile, flash screen, camera lock, fade in/out, save game…
 - Multi-condition AND chains + OR groups
 - All exported as plain C89 arrays — zero runtime overhead for unused features
 - Flag/var spinboxes show the name from the Globals tab inline, no context switching needed
