@@ -301,6 +301,10 @@ void ngpng_player_collide_damage_props(const NgpSceneDef *sc, NgpngPropActor *pr
     s16 player_world_x, s16 player_world_y, s8 *player_vx, s8 *player_vy,
     s8 player_hb_x, s8 player_hb_y, u8 player_hb_w, u8 player_hb_h,
     u8 *hp, u8 *invul);
+void ngpng_player_collide_solid_props(const NgpngPropActor *props, u8 prop_count,
+    s16 cam_px, s16 cam_py,
+    s16 *px, s16 *py, s8 *vx, s8 *vy,
+    s8 hb_x, s8 hb_y, u8 hb_w, u8 hb_h);
 void ngpng_player_bump_blocks(const NgpSceneDef *sc, NgpngPropActor *props, u8 prop_count,
     s16 prev_world_x, s16 prev_world_y, s16 cam_px, s16 cam_py,
     s16 *px, s16 *py, s8 *vy, s8 hb_x, s8 hb_y, u8 hb_w, u8 hb_h,

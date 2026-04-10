@@ -3052,6 +3052,27 @@ class LevelTab(QWidget):
                 ent["id"] = eid
             seen.add(eid)
 
+    def _prop_src_idx_for_sprite_name(self, sprite_name: str) -> int | None:
+        """Return the runtime src_idx for a prop/NPC sprite type.
+
+        The runtime assigns src_idx = i where i is the entity's position in the
+        placed entities array (self._entities). PLAYER / ENEMY / TRIGGER entities
+        are skipped by the runtime loader but their indices still count, so the
+        src_idx of a prop equals its raw index in _entities regardless of how
+        many players precede it.
+
+        Returns None if no placed entity of that sprite type exists.
+        """
+        for i, ent in enumerate(self._entities):
+            if not isinstance(ent, dict):
+                continue
+            if str(ent.get("type", "") or "").strip() == sprite_name:
+                # Only count types that the runtime loads as props
+                role = str(self._entity_roles.get(sprite_name, "prop") or "prop").strip().lower()
+                if role not in ("player", "enemy", "trigger"):
+                    return i
+        return None
+
     def _entity_target_id_for_index(self, idx: int) -> str:
         """Resolve a legacy entity index to the current stable identifier."""
         if 0 <= idx < len(self._entities):
@@ -5351,6 +5372,27 @@ class LevelTab(QWidget):
         self._chk_td_ca.setVisible(False)
         ptv.addWidget(self._chk_td_ca)
 
+        # Output size (scatter only) — min = 1 screen, max = 32×32 (hardware window)
+        self._td_scatter_widget = QWidget()
+        scat_sz_row = QHBoxLayout(self._td_scatter_widget)
+        scat_sz_row.setContentsMargins(0, 0, 0, 0)
+        scat_sz_row.addWidget(QLabel(tr("level.procgen_td_scatter_out_size") + ":"))
+        self._spin_td_scatter_out_w = QSpinBox()
+        self._spin_td_scatter_out_w.setRange(_SCREEN_W, 32)
+        self._spin_td_scatter_out_w.setValue(_SCREEN_W)
+        self._spin_td_scatter_out_w.setToolTip(tr("level.procgen_td_scatter_out_size_tt"))
+        self._spin_td_scatter_out_w.setPrefix("W ")
+        scat_sz_row.addWidget(self._spin_td_scatter_out_w)
+        self._spin_td_scatter_out_h = QSpinBox()
+        self._spin_td_scatter_out_h.setRange(_SCREEN_H, 32)
+        self._spin_td_scatter_out_h.setValue(_SCREEN_H)
+        self._spin_td_scatter_out_h.setToolTip(tr("level.procgen_td_scatter_out_size_tt"))
+        self._spin_td_scatter_out_h.setPrefix("H ")
+        scat_sz_row.addWidget(self._spin_td_scatter_out_h)
+        scat_sz_row.addStretch()
+        self._td_scatter_widget.setVisible(False)
+        ptv.addWidget(self._td_scatter_widget)
+
         # BSP depth / loop / output-size (BSP only)
         self._td_bsp_widget = QWidget()
         bsp_v = QVBoxLayout(self._td_bsp_widget)
@@ -6585,6 +6627,7 @@ class LevelTab(QWidget):
         self._open_density_widget.setVisible(False)
         self._td_mode_widget.setVisible(False)
         self._chk_td_ca.setVisible(False)
+        self._td_scatter_widget.setVisible(False)
         self._td_bsp_widget.setVisible(False)
         self._chk_dir_walls.setVisible(False)
         self._topdown_features_widget.setVisible(False)
@@ -7565,17 +7608,20 @@ class LevelTab(QWidget):
                 if s.get("file")
             ]
             if name in scene_sprites:
-                src_idx = scene_sprites.index(name)
+                sprite_pos = scene_sprites.index(name)
                 if role == "player":
                     form_idx = sum(
-                        1 for n in scene_sprites[:src_idx]
+                        1 for n in scene_sprites[:sprite_pos]
                         if str(self._entity_roles.get(n, "prop")) == "player"
                     )
                     idx_badge = f" [form {form_idx}]"
                     tooltip_extra = f"\nForme index {form_idx} — utiliser dans set_player_form / cycle_player_form"
                 elif role in ("npc", "prop", "item", "trigger"):
-                    idx_badge = f" [id {src_idx}]"
-                    tooltip_extra = f"\nsrc_idx {src_idx} — utiliser dans npc_talked_to / entity_contact"
+                    # Use the real runtime src_idx (entity placement index), not sprite list index
+                    real_src_idx = self._prop_src_idx_for_sprite_name(name)
+                    if real_src_idx is not None:
+                        idx_badge = f" [id {real_src_idx}]"
+                        tooltip_extra = f"\nsrc_idx {real_src_idx} — utiliser dans npc_talked_to / entity_contact"
         except (ValueError, AttributeError, TypeError):
             pass
 
@@ -7598,6 +7644,35 @@ class LevelTab(QWidget):
         if not p:
             return None
         return _load_bg_pixmap(_resolve_bg_plane_variant(p, plane))
+
+    @staticmethod
+    def _pixmap_is_large_map(pm: Optional["QPixmap"]) -> bool:
+        """Return True if the pixmap dimensions exceed the 32×32 tile hardware window."""
+        if pm is None or pm.isNull():
+            return False
+        return (pm.width() > 32 * _TILE_PX) or (pm.height() > 32 * _TILE_PX)
+
+    def _check_dual_stream(self, new_pm: Optional["QPixmap"], new_plane: str,
+                           other_pm: Optional["QPixmap"], other_plane: str) -> bool:
+        """Return True (and show error) if loading new_pm on new_plane would create a
+        dual-stream conflict (both planes > 32×32 tiles simultaneously)."""
+        if not self._pixmap_is_large_map(new_pm):
+            return False
+        if not self._pixmap_is_large_map(other_pm):
+            return False
+        # Both are large — conflict
+        from PyQt6.QtWidgets import QMessageBox
+        nw = new_pm.width() // _TILE_PX if new_pm else 0
+        nh = new_pm.height() // _TILE_PX if new_pm else 0
+        ow = other_pm.width() // _TILE_PX if other_pm else 0
+        oh = other_pm.height() // _TILE_PX if other_pm else 0
+        body = tr("level.dual_stream_body").format(
+            w=32, h=32,
+            plane=new_plane.upper(), other_plane=other_plane.upper(),
+            ow=ow, oh=oh,
+        )
+        QMessageBox.warning(self, tr("level.dual_stream_title"), body)
+        return True
 
     def _refresh_bg_fit_btn(self) -> None:
         has = (self._bg_pixmap_scr1 is not None) or (self._bg_pixmap_scr2 is not None)
@@ -7632,21 +7707,37 @@ class LevelTab(QWidget):
             self._col_map_tilemap_cache = None
 
     def _on_bg_scr1_changed(self, idx: int) -> None:
-        self._bg_pixmap_scr1 = self._load_bg_at(idx, "scr1")
+        candidate = self._load_bg_at(idx, "scr1")
+        if self._check_dual_stream(candidate, "SCR1", self._bg_pixmap_scr2, "SCR2"):
+            # Revert combo to "none" without re-triggering this handler
+            self._combo_bg_scr1.blockSignals(True)
+            self._combo_bg_scr1.setCurrentIndex(0)
+            self._combo_bg_scr1.blockSignals(False)
+            return
+        self._bg_pixmap_scr1 = candidate
         self._refresh_bg_fit_btn()
         self._rebuild_tilemap_collision_cache()
         self._canvas.update()
         if self._map_mode in _MAP_MODE_ROLES:
             self._rebuild_tile_role_ui(self._map_mode)
+        self._update_size_limits_ui()
         self._refresh_bg_cards()
 
     def _on_bg_scr2_changed(self, idx: int) -> None:
-        self._bg_pixmap_scr2 = self._load_bg_at(idx, "scr2")
+        candidate = self._load_bg_at(idx, "scr2")
+        if self._check_dual_stream(candidate, "SCR2", self._bg_pixmap_scr1, "SCR1"):
+            # Revert combo to "none" without re-triggering this handler
+            self._combo_bg_scr2.blockSignals(True)
+            self._combo_bg_scr2.setCurrentIndex(0)
+            self._combo_bg_scr2.blockSignals(False)
+            return
+        self._bg_pixmap_scr2 = candidate
         self._refresh_bg_fit_btn()
         self._rebuild_tilemap_collision_cache()
         self._canvas.update()
         if self._map_mode in _MAP_MODE_ROLES:
             self._rebuild_tile_role_ui(self._map_mode)
+        self._update_size_limits_ui()
         self._refresh_bg_cards()
 
     def _on_bg_front_changed(self, _idx: int) -> None:
@@ -8981,6 +9072,7 @@ class LevelTab(QWidget):
     def _on_td_gen_mode_changed(self, _idx: int = 0) -> None:
         is_bsp = self._combo_td_gen_mode.currentData() == "bsp"
         self._chk_td_ca.setVisible(not is_bsp)
+        self._td_scatter_widget.setVisible(not is_bsp)
         self._td_bsp_widget.setVisible(is_bsp)
         self._wall_dens_widget.setVisible(not is_bsp)
 
@@ -9117,15 +9209,18 @@ class LevelTab(QWidget):
                 e_free = (cx < gw-1)  and col[cy][cx+1] == _TCOL_PASS
                 open_count = sum([n_free, s_free, w_free, e_free])
                 if open_count == 1:
-                    # One open face → directional wall
+                    # One open face → directional wall.
+                    # WALL_X = "entry from X is blocked" (runtime semantics).
+                    # s_free: open space is south, player enters from south → block southward entry = WALL_S.
+                    # n_free: open space is north, player enters from north → block northward entry = WALL_N.
                     if s_free:
-                        col[cy][cx] = _TCOL_WALL_N
-                    elif n_free:
                         col[cy][cx] = _TCOL_WALL_S
+                    elif n_free:
+                        col[cy][cx] = _TCOL_WALL_N
                     elif e_free:
-                        col[cy][cx] = _TCOL_WALL_W
-                    elif w_free:
                         col[cy][cx] = _TCOL_WALL_E
+                    elif w_free:
+                        col[cy][cx] = _TCOL_WALL_W
                 elif open_count == 2 and not (n_free and s_free) and not (e_free and w_free):
                     # Two perpendicular open faces → corner tile
                     if n_free and e_free:
@@ -9661,6 +9756,20 @@ class LevelTab(QWidget):
             if over32:
                 tip = tip + "\n" + tr("level.size_limits_warn")
             self._lbl_size_limits.setToolTip(tip)
+            # SCR2 constraint hint: when SCR1 is in stream mode, warn that SCR2 must stay ≤ 32×32
+            scr1_is_large = self._pixmap_is_large_map(getattr(self, "_bg_pixmap_scr1", None))
+            lbl_scr2_hint = getattr(self, "_lbl_scr2_stream_hint", None)
+            if lbl_scr2_hint is not None:
+                if over32 and scr1_is_large:
+                    lbl_scr2_hint.setText(tr("level.scr2_limited_hint"))
+                    lbl_scr2_hint.setStyleSheet("color: #ff9800; font-size: 10px;")
+                    lbl_scr2_hint.setVisible(True)
+                else:
+                    lbl_scr2_hint.setVisible(False)
+            elif over32 and scr1_is_large:
+                # Fallback: append to the size-limits label tooltip
+                extra = "\n" + tr("level.scr2_limited_hint")
+                self._lbl_size_limits.setToolTip(tip + extra)
             # Show/hide large-map row
             large_row = getattr(self, "_large_map_row", None)
             if large_row is not None:
@@ -11223,8 +11332,14 @@ class LevelTab(QWidget):
                     self._spin_gh.blockSignals(False)
                     self._on_size_changed()
             else:
+                _scat_w = int(self._spin_td_scatter_out_w.value())
+                _scat_h = int(self._spin_td_scatter_out_h.value())
+                # Clamp to hardware safe range: [screen, 32]
+                _scat_w = max(_SCREEN_W, min(32, _scat_w))
+                _scat_h = max(_SCREEN_H, min(32, _scat_h))
+                scat_gw, scat_gh = _scat_w, _scat_h
                 col = self._gen_topdown(
-                    rng, gw, gh,
+                    rng, scat_gw, scat_gh,
                     dir_walls=False,        # applied below after flood-fix
                     wall_dens=self._spin_wall_dens.value() / 100.0,
                     gen_int_walls=bool(self._chk_td_int_walls.isChecked()),
@@ -11232,7 +11347,17 @@ class LevelTab(QWidget):
                     border_n=_bn, border_s=_bs, border_e=_be, border_w=_bw,
                 )
                 if self._chk_td_ca.isChecked():
-                    self._td_cellular_smooth(col, gw, gh)
+                    self._td_cellular_smooth(col, scat_gw, scat_gh)
+                if scat_gw != gw or scat_gh != gh:
+                    gw, gh = scat_gw, scat_gh
+                    self._grid_w, self._grid_h = gw, gh
+                    self._spin_gw.blockSignals(True)
+                    self._spin_gh.blockSignals(True)
+                    self._spin_gw.setValue(gw)
+                    self._spin_gh.setValue(gh)
+                    self._spin_gw.blockSignals(False)
+                    self._spin_gh.blockSignals(False)
+                    self._on_size_changed()
 
             # Shared post-processing for both modes
             _flood_cw = _corridor_w if _td_mode == "bsp" else 1
@@ -12165,17 +12290,22 @@ class LevelTab(QWidget):
         cmb.blockSignals(True)
         try:
             cmb.clear()
-            for src_idx, sp in enumerate(scene_sprites):
+            for sp in scene_sprites:
                 name = Path(sp.get("file", "")).stem
                 role = str(self._entity_roles.get(name, "prop") or "prop").strip().lower()
                 if role in ("npc", "prop", "item", "trigger"):
+                    # src_idx MUST match the runtime value: index of the entity in the
+                    # placed entities array (entities[] in JSON), not the sprite list index.
+                    src_idx = self._prop_src_idx_for_sprite_name(name)
+                    if src_idx is None:
+                        continue  # sprite declared but no placed entity — skip
                     if cond == "npc_talked_to":
                         label = f"{name}  [id {src_idx}] — adjacent+A"
                     else:
                         label = f"{name}  [id {src_idx}] — contact"
                     cmb.addItem(label, src_idx)
             if cmb.count() == 0:
-                cmb.addItem("(aucun NPC/prop dans cette scène)", 0)
+                cmb.addItem("(aucun NPC/prop placé dans cette scène)", 0)
         finally:
             cmb.blockSignals(False)
 
@@ -12943,6 +13073,14 @@ class LevelTab(QWidget):
                 npc_cmb.blockSignals(True)
                 src_idx_val = int(t.get("value", 0) or 0)
                 ni = npc_cmb.findData(src_idx_val)
+                if ni < 0 and npc_cmb.count() > 0:
+                    # Stored value doesn't match any placed entity (stale or never set).
+                    # Default to first item and immediately sync t["value"] so the JSON
+                    # reflects what the user sees.
+                    ni = 0
+                    actual = npc_cmb.itemData(0)
+                    if actual is not None:
+                        t["value"] = int(actual)
                 npc_cmb.setCurrentIndex(ni if ni >= 0 else 0)
                 npc_cmb.blockSignals(False)
             self._spin_trig_event.setValue(int(t.get("event", 0) or 0))

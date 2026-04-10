@@ -310,6 +310,7 @@ def write_scenes_autogen(*, project_data: dict, export_dir: Path) -> tuple[Path 
     hl.append("#define SCENE_FLAG_HAS_BLOCKS   0x80u /* scene has at least one NGPNG_ROLE_BLOCK */\n")
     hl.append("#define SCENE_FLAG_HAS_DAMAGE_PROPS 0x0100u /* scene has a damaging NGPNG_ROLE_PROP */\n")
     hl.append("#define SCENE_FLAG_HAS_WATER    0x0200u /* TILE_WATER (9) present */\n")
+    hl.append("#define SCENE_FLAG_HAS_SOLID_PROPS 0x0400u /* scene has NGPNG_ROLE_NPC or solid NGPNG_ROLE_PROP with hurtbox */\n")
     hl.append("\n")
     hl.append("typedef struct NgpSceneDef {\n")
     hl.append("    const char* id;      /* safe id (lowercase) */\n")

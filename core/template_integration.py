@@ -2897,6 +2897,9 @@ def write_autorun_main_c(
     c.append("#endif\n")
     c.append("#ifndef SCENE_FLAG_HAS_DAMAGE_PROPS\n")
     c.append("#define SCENE_FLAG_HAS_DAMAGE_PROPS 0x0100u\n")
+    c.append("#endif\n")
+    c.append("#ifndef SCENE_FLAG_HAS_SOLID_PROPS\n")
+    c.append("#define SCENE_FLAG_HAS_SOLID_PROPS 0x0400u\n")
     c.append("#endif\n\n")
     c.append("#ifndef NGPNG_ROLE_PROP\n")
     c.append("#define NGPNG_ROLE_PROP    0\n")
@@ -4810,6 +4813,10 @@ def write_autorun_main_c(
                 c.append(f"            if (s_{n}.vy != _td_vy_pre) s_td_speed = 0;\n")
             else:
                 c.append(f"            ngpng_player_clamp_tilecol_topdown(_sc_tilecol, _sc_map_w, _sc_map_h, cam_px, cam_py, &s_{n}.x, &s_{n}.y, &s_{n}.vx, &s_{n}.vy, player_body_x, player_body_y, player_body_w, player_body_h);\n")
+            if has_prop_actor:
+                c.append("            if (sc->scene_flags & SCENE_FLAG_HAS_SOLID_PROPS) {\n")
+                c.append(f"                ngpng_player_collide_solid_props(props, prop_count, cam_px, cam_py, &s_{n}.x, &s_{n}.y, &s_{n}.vx, &s_{n}.vy, player_body_x, player_body_y, player_body_w, player_body_h);\n")
+                c.append("            }\n")
         else:
             if has_prop_actor:
                 c.append("            if (sc->scene_flags & SCENE_FLAG_HAS_PLATFORMS) {\n")
@@ -5277,7 +5284,7 @@ def write_autorun_main_c(
             c.append("                _ey  = (s16)(props[rj].world_y + props[rj].hb_y);\n")
             c.append("                _ex2 = (s16)(_ex + props[rj].hb_w);\n")
             c.append("                _ey2 = (s16)(_ey + props[rj].hb_h);\n")
-            c.append("                if (_px < _ex2 && _px2 > _ex && _py < _ey2 && _py2 > _ey)\n")
+            c.append("                if (_px <= _ex2 && _px2 >= _ex && _py <= _ey2 && _py2 >= _ey)\n")
             c.append("                    entity_contact = (u16)(entity_contact | (u16)(1u << props[rj].src_idx));\n")
             c.append("                if (ngpc_pad_pressed & PAD_A) {\n")
             c.append("                    _dx = (s16)(props[rj].world_x - _pcx);\n")

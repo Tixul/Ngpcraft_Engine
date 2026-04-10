@@ -2083,6 +2083,65 @@ void ngpng_player_collide_damage_props(const NgpSceneDef *sc, NgpngPropActor *pr
     *invul = (sc && sc->hazard_invul > 0u) ? sc->hazard_invul : 30u;
 }
 
+void ngpng_player_collide_solid_props(const NgpngPropActor *props, u8 prop_count,
+    s16 cam_px, s16 cam_py,
+    s16 *px, s16 *py, s8 *vx, s8 *vy,
+    s8 hb_x, s8 hb_y, u8 hb_w, u8 hb_h)
+{
+    u8  i;
+    s16 ax;
+    s16 ay;
+    s16 bx;
+    s16 by;
+    s16 pa_r;
+    s16 pa_b;
+    s16 pb_r;
+    s16 pb_b;
+    s16 ovx;
+    s16 ovy;
+    if (!props || !px || !py || !vx || !vy) return;
+    ax = (s16)(cam_px + *px + (s16)hb_x);
+    ay = (s16)(cam_py + *py + (s16)hb_y);
+    for (i = 0u; i < prop_count && i < (u8)NGPNG_AUTORUN_MAX_PROPS; ++i) {
+        if (!props[i].active) continue;
+        if (!props[i].visible) continue;
+        if (props[i].role != NGPNG_ROLE_NPC && props[i].role != NGPNG_ROLE_PROP) continue;
+        if (props[i].hb_w == 0u) continue;
+        if (props[i].hb_h == 0u) continue;
+        bx   = (s16)(props[i].world_x + (s16)props[i].hb_x);
+        by   = (s16)(props[i].world_y + (s16)props[i].hb_y);
+        pa_r = (s16)(ax + (s16)hb_w);
+        pa_b = (s16)(ay + (s16)hb_h);
+        pb_r = (s16)(bx + (s16)props[i].hb_w);
+        pb_b = (s16)(by + (s16)props[i].hb_h);
+        if (ax >= pb_r) continue;
+        if (pa_r <= bx) continue;
+        if (ay >= pb_b) continue;
+        if (pa_b <= by) continue;
+        ovx = (s16)((pa_r < pb_r ? pa_r : pb_r) - (ax > bx ? ax : bx));
+        ovy = (s16)((pa_b < pb_b ? pa_b : pb_b) - (ay > by ? ay : by));
+        if (ovx <= ovy) {
+            if ((s16)(ax + (s16)(hb_w >> 1)) < (s16)(bx + (s16)(props[i].hb_w >> 1))) {
+                *px = (s16)(*px - ovx);
+                ax  = (s16)(ax  - ovx);
+            } else {
+                *px = (s16)(*px + ovx);
+                ax  = (s16)(ax  + ovx);
+            }
+            *vx = 0;
+        } else {
+            if ((s16)(ay + (s16)(hb_h >> 1)) < (s16)(by + (s16)(props[i].hb_h >> 1))) {
+                *py = (s16)(*py - ovy);
+                ay  = (s16)(ay  - ovy);
+            } else {
+                *py = (s16)(*py + ovy);
+                ay  = (s16)(ay  + ovy);
+            }
+            *vy = 0;
+        }
+    }
+}
+
 void ngpng_player_bump_blocks(const NgpSceneDef *sc, NgpngPropActor *props, u8 prop_count,
     s16 prev_world_x, s16 prev_world_y, s16 cam_px, s16 cam_py,
     s16 *px, s16 *py, s8 *vy, s8 hb_x, s8 hb_y, u8 hb_w, u8 hb_h,

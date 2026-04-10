@@ -2514,6 +2514,11 @@ def make_scene_level_h(
             _sc_flags |= 0x80  # SCENE_FLAG_HAS_BLOCKS
         elif role_name == "prop" and typ in damage_prop_types:
             _sc_flags |= 0x0100  # SCENE_FLAG_HAS_DAMAGE_PROPS
+        if role_name in ("npc", "prop") and not (_sc_flags & 0x0400):
+            _meta = sprite_meta.get(typ) or {}
+            _hb = first_hurtbox(_meta, int(_meta.get("frame_w", 8) or 8), int(_meta.get("frame_h", 8) or 8))
+            if box_enabled(_hb, True) and int(_hb.get("w", 0) or 0) > 0 and int(_hb.get("h", 0) or 0) > 0:
+                _sc_flags |= 0x0400  # SCENE_FLAG_HAS_SOLID_PROPS
 
     if isinstance(col_map, list) and col_map:
         ok = (
