@@ -183,6 +183,7 @@ _LEVEL_PROFILES: list[str] = [
     "visual_novel",
     "rhythm",
     "race",
+    "roguelite_room",
 ]
 _PROFILE_TO_C: dict[str, int] = {
     name: idx for idx, name in enumerate(_LEVEL_PROFILES)
@@ -199,7 +200,8 @@ _PROFILE_PRESETS: dict[str, dict[str, object]] = {
     "puzzle":       {"map_mode": "none",       "scroll_x": False, "scroll_y": False, "forced": False, "loop_x": False, "loop_y": False, "gw": 20, "gh": 19},
     "visual_novel": {"map_mode": "none",       "scroll_x": False, "scroll_y": False, "forced": False, "loop_x": False, "loop_y": False, "gw": 20, "gh": 19},
     "rhythm":       {"map_mode": "none",       "scroll_x": False, "scroll_y": True,  "forced": True,  "loop_x": False, "loop_y": True, "speed_x": 0, "speed_y": 1, "gw": 20, "gh": 19},
-    "race":         {"map_mode": "race",       "scroll_x": True,  "scroll_y": True,  "forced": False, "loop_x": True,  "loop_y": True},
+    "race":          {"map_mode": "race",    "scroll_x": True,  "scroll_y": True,  "forced": False, "loop_x": True,  "loop_y": True},
+    "roguelite_room": {"map_mode": "topdown", "scroll_x": False, "scroll_y": False, "forced": False, "loop_x": False, "loop_y": False, "gw": 20, "gh": 19},
 }
 
 

@@ -26,6 +26,7 @@ SCENE_PRESETS: tuple[tuple[str, str], ...] = (
     ("tactical_grid",      "proj.scene_preset.tactical"),
     ("intro_skipable",     "proj.scene_preset.intro"),
     ("menu_single",        "proj.scene_preset.menu"),
+    ("roguelite_room",     "proj.scene_preset.roguelite_room"),
 )
 
 
@@ -61,6 +62,7 @@ def apply_scene_preset(scene: dict, preset_key: str) -> bool:
         "tactical_grid":      _apply_tactical_grid,
         "intro_skipable":     _apply_intro_skipable,
         "menu_single":        _apply_menu_single,
+        "roguelite_room":     _apply_roguelite_room,
     }
     fn = dispatch.get(key)
     _ensure_scene_lists(scene)
@@ -1057,5 +1059,65 @@ def _apply_menu_single(scene: dict) -> bool:
                   extra_conds=[{"cond": "flag_set",   "flag_var_index": 0, "value": 0}]),
             # Menu enter SFX
             _trig("scene_sfx",     "scene_first_enter", "play_sfx", once=True),
+        ]
+    return True
+
+
+# ---------------------------------------------------------------------------
+# 14 — Roguelite room (20×19 → 32×32, no streaming)
+# ---------------------------------------------------------------------------
+
+def _apply_roguelite_room(scene: dict) -> bool:
+    """Apply a roguelite room-by-room preset.
+
+    Default 20×19 (single-screen, no scroll).  Users can resize the room
+    up to 32×32 via Layout → Room size — the camera then follows the player
+    within the room bounds.  No map streaming needed: the hardware BG
+    tilemap is 32×32 tiles and fits entirely in VRAM.
+    """
+    _ensure_scene_size(scene, 20, 19)
+    scene["level_profile"] = "roguelite_room"
+    scene["map_mode"] = "topdown"
+
+    _ensure_scroll(scene).update({
+        "scroll_x": False, "scroll_y": False,
+        "forced": False, "speed_x": 0, "speed_y": 0,
+        "loop_x": False, "loop_y": False,
+    })
+    _ensure_layout(scene).update({
+        "cam_mode": "single_screen", "bounds_auto": True, "clamp": True,
+        "follow_deadzone_x": 12, "follow_deadzone_y": 10, "follow_drop_margin_y": 0,
+    })
+    rules = _apply_rule_defaults(
+        scene,
+        hud_enabled=True,
+        hud_show_hp=True,
+        hud_show_score=True,
+        hud_show_collect=True,
+        hud_show_timer=False,
+        hud_show_lives=True,
+        hud_pos="top",
+        hud_font_mode="system",
+        start_lives=3,
+        start_continues=2,
+        goal_collectibles=0,
+        time_limit_sec=0,
+    )
+    rules["start_lives"]     = max(0, int(rules.get("start_lives",     3) or 3))
+    rules["start_continues"] = max(0, int(rules.get("start_continues", 2) or 2))
+    layers = _ensure_layers(scene)
+    _set_layer_defaults(layers)
+
+    if _regions_empty(scene):
+        scene["regions"] = [
+            _reg("player_spawn", "spawn",     8, 8, 3, 3),
+            _reg("room_exit",    "exit_goal", 14, 14, 3, 3),
+        ]
+    if _triggers_empty(scene):
+        scene["triggers"] = [
+            _trig("room_cleared", "entity_type_all_dead", "play_sfx", once=True),
+            _trig("exit_reached", "enter_region",         "goto_scene", once=True,
+                  extra_conds=[{"cond": "entity_type_all_dead", "value": 0}]),
+            _trig("death_respawn", "on_death",            "respawn_player", once=False),
         ]
     return True

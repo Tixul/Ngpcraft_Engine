@@ -124,6 +124,8 @@ def make_procgen_config_h(*, scene: dict) -> str:
 
     grid_w          = _int(dp.get("grid_w"),           4)
     grid_h          = _int(dp.get("grid_h"),           4)
+    room_w          = max(20, min(32, _int(dp.get("room_w"),          20)))
+    room_h          = max(19, min(32, _int(dp.get("room_h"),          19)))
     max_enemies     = _int(dp.get("max_enemies"),      4)
     item_chance     = _int(dp.get("item_chance"),     25)
     loop_pct        = _int(dp.get("loop_pct"),        20)
@@ -155,6 +157,8 @@ def make_procgen_config_h(*, scene: dict) -> str:
         "",
         f"#define PROCGEN_GRID_W          {grid_w}u",
         f"#define PROCGEN_GRID_H          {grid_h}u",
+        f"#define PROCGEN_ROOM_W          {room_w}u",
+        f"#define PROCGEN_ROOM_H          {room_h}u",
         f"#define PROCGEN_MAX_ENEMIES     {max_enemies}u",
         f"#define PROCGEN_ITEM_CHANCE     {item_chance}u",
         f"#define PROCGEN_LOOP_PCT        {loop_pct}u",

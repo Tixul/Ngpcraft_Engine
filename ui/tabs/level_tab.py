@@ -807,7 +807,8 @@ _PROFILE_PRESETS: dict[str, dict] = {
     "menu":         {"map_mode": "none",       "scroll_x": False, "scroll_y": False, "forced": False, "loop_x": False, "loop_y": False, "gw": 20, "gh": 19},
     "visual_novel": {"map_mode": "none",       "scroll_x": False, "scroll_y": False, "forced": False, "loop_x": False, "loop_y": False, "gw": 20, "gh": 19},
     "rhythm":       {"map_mode": "none",       "scroll_x": False, "scroll_y": True,  "forced": True,  "loop_x": False, "loop_y": True, "speed_x": 0, "speed_y": 1, "gw": 20, "gh": 19},
-    "race":         {"map_mode": "race",       "scroll_x": True,  "scroll_y": True,  "forced": False, "loop_x": True,  "loop_y": True},
+    "race":          {"map_mode": "race",    "scroll_x": True,  "scroll_y": True,  "forced": False, "loop_x": True,  "loop_y": True},
+    "roguelite_room": {"map_mode": "topdown", "scroll_x": False, "scroll_y": False, "forced": False, "loop_x": False, "loop_y": False, "gw": 20, "gh": 19},
 }
 
 _TILE_SRC_CHOICES: list[tuple[str, str]] = [
@@ -7121,6 +7122,8 @@ class LevelTab(QWidget):
             try:
                 self._spin_dfs_grid_w.setValue(int(dp.get("grid_w", 4)))
                 self._spin_dfs_grid_h.setValue(int(dp.get("grid_h", 4)))
+                self._spin_dfs_room_w.setValue(max(20, min(32, int(dp.get("room_w", 20)))))
+                self._spin_dfs_room_h.setValue(max(19, min(32, int(dp.get("room_h", 19)))))
                 self._spin_dfs_max_enemies.setValue(int(dp.get("max_enemies", 4)))
                 self._spin_dfs_item_chance.setValue(int(dp.get("item_chance", 25)))
                 self._spin_dfs_loop_pct.setValue(int(dp.get("loop_pct", 20)))
@@ -11517,7 +11520,31 @@ class LevelTab(QWidget):
         grid_row.addWidget(self._spin_dfs_grid_h)
         grid_row.addStretch()
         grid_v.addLayout(grid_row)
-        ram_note = QLabel("RAM: ~72 B base + W×H cells")
+
+        room_row = QHBoxLayout()
+        room_row.addWidget(QLabel("Room size (tiles):"))
+        self._spin_dfs_room_w = QSpinBox()
+        self._spin_dfs_room_w.setRange(20, 32)
+        self._spin_dfs_room_w.setValue(20)
+        self._spin_dfs_room_w.setToolTip(
+            "PROCGEN_ROOM_W — width of each room in tiles (20–32).\n"
+            "20 = full screen, no camera scroll. 21–32 = follow cam inside the room.\n"
+            "Max hardware BG tilemap is 32×32 — fits in VRAM without streaming.")
+        room_row.addWidget(self._spin_dfs_room_w)
+        room_row.addWidget(QLabel("×"))
+        self._spin_dfs_room_h = QSpinBox()
+        self._spin_dfs_room_h.setRange(19, 32)
+        self._spin_dfs_room_h.setValue(19)
+        self._spin_dfs_room_h.setToolTip(
+            "PROCGEN_ROOM_H — height of each room in tiles (19–32).\n"
+            "19 = full screen, no camera scroll. 20–32 = follow cam inside the room.\n"
+            "Max hardware BG tilemap is 32×32 — fits in VRAM without streaming.")
+        room_row.addWidget(self._spin_dfs_room_h)
+        room_row.addWidget(QLabel("tiles"))
+        room_row.addStretch()
+        grid_v.addLayout(room_row)
+
+        ram_note = QLabel("RAM: ~72 B base + W×H cells  •  Room 20×19 = single screen / 32×32 = HW max (no streaming)")
         ram_note.setStyleSheet("color:#aaa;font-size:10px;")
         grid_v.addWidget(ram_note)
         v.addWidget(grp_grid)
@@ -16487,6 +16514,8 @@ class LevelTab(QWidget):
                     "enabled":     True,
                     "grid_w":      int(self._spin_dfs_grid_w.value()),
                     "grid_h":      int(self._spin_dfs_grid_h.value()),
+                    "room_w":      int(self._spin_dfs_room_w.value()),
+                    "room_h":      int(self._spin_dfs_room_h.value()),
                     "max_enemies": int(self._spin_dfs_max_enemies.value()),
                     "item_chance": int(self._spin_dfs_item_chance.value()),
                     "loop_pct":    int(self._spin_dfs_loop_pct.value()),
