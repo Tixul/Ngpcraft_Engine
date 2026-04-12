@@ -513,8 +513,13 @@ void ngpng_player_clamp_tilecol_topdown(
     u8  hw;
     u8  hh;
 
-    if (!tc || !actor_x || !actor_y || !vx || !vy) return;
-    if (map_w == 0u || map_h == 0u) return;
+    if (!actor_x || !actor_y || !vx || !vy) return;
+    /* No tilemap: apply velocity directly, no tile collision. */
+    if (!tc || map_w == 0u || map_h == 0u) {
+        *actor_x = (s16)(*actor_x + *vx);
+        *actor_y = (s16)(*actor_y + *vy);
+        return;
+    }
 
     hw = (u8)(hb_w > 0u ? hb_w - 1u : 0u);
     hh = (u8)(hb_h > 0u ? hb_h - 1u : 0u);

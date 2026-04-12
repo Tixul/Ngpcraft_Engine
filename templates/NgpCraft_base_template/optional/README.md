@@ -454,14 +454,14 @@ La détection est flexible : les frames neutres entre deux steps sont ignorés.
 | `NGPC_MOTION_FINAL_WINDOW` | Fenêtre (frames) pour matcher le dernier step (défaut : 4) |
 
 ```c
-/* Définir les patterns en ROM */
-static const u8 _qcf_steps[]   = { MDIR_D, MDIR_DR, MDIR_R | MBTN_A };
-static const u8 _dp_steps[]    = { MDIR_R, MDIR_D, MDIR_DR | MBTN_A };
-static const u8 _dtap_steps[]  = { MDIR_R, MDIR_N, MDIR_R };
+/* Définir les patterns en ROM (NGP_FAR obligatoire — données cart 0x200000+) */
+static const u8 NGP_FAR _qcf_steps[]   = { MDIR_D, MDIR_DR, MDIR_R | MBTN_A };
+static const u8 NGP_FAR _dp_steps[]    = { MDIR_R, MDIR_D, MDIR_DR | MBTN_A };
+static const u8 NGP_FAR _dtap_steps[]  = { MDIR_R, MDIR_N, MDIR_R };
 
-static const NgpcMotionPattern QCF_A  = { _qcf_steps,  3, 20 };
-static const NgpcMotionPattern DP_A   = { _dp_steps,   3, 20 };
-static const NgpcMotionPattern DTAP_R = { _dtap_steps, 3, 15 };
+static const NgpcMotionPattern NGP_FAR QCF_A  = { _qcf_steps,  3, 20 };
+static const NgpcMotionPattern NGP_FAR DP_A   = { _dp_steps,   3, 20 };
+static const NgpcMotionPattern NGP_FAR DTAP_R = { _dtap_steps, 3, 15 };
 
 static NgpcMotionBuf motion_buf;
 ngpc_motion_init(&motion_buf);
@@ -1258,6 +1258,122 @@ void cave_update(void) {
 
 ---
 
+## `ngpc_dungeongen` — Générateur de salle de donjon scrollable ✅ Validé
+**Type :** .h + .c · **RAM :** ~30 octets (state interne) · **Makefile :** `OBJS += $(OBJ_DIR)/optional/ngpc_dungeongen/ngpc_dungeongen.rel $(OBJ_DIR)/GraphX/tiles_procgen.rel $(OBJ_DIR)/GraphX/sprites_lab.rel` · **Dépend de :** ngpc_gfx, ngpc_sprite, ngpc_rtc
+
+Génère et dessine des **salles de donjon riches et scrollables** (jusqu'à 16×16 metatiles, soit 32×32 tiles NGPC).
+Complémentaire de `ngpc_procgen` (navigation DFS multi-room) et `ngpc_cavegen` (cave cellulaire) :
+ce module gère le **contenu visuel d'une salle** — la navigation entre salles reste dans le code appelant.
+
+**Différences avec les autres modules procgen :**
+
+| | `ngpc_procgen` | `ngpc_cavegen` | `ngpc_dungeongen` |
+|---|---|---|---|
+| Scope | Graphe de rooms | Cave 32×32 tiles | Salle unique scrollable |
+| Scroll | ✗ (1 écran = 1 room) | ✓ viewport glissant | ✓ jusqu'à 16×16 cellules |
+| Sprites | Via callback | ✗ | ✓ ennemis + item intégrés |
+| Assets | Tiles utilisateur | Tiles utilisateur | `tiles_procgen` + `sprites_lab` |
+
+**Seed :** déterministe par `room_idx` — même index = même salle. Session aléatoire via `ngpc_dungeongen_set_rtc_seed()` (XOR RTC).
+
+**Styles de sorties (exits) :** 7 combinaisons de 0 à 4 sorties (N/S/E/W), cyclables par `room_idx` ou forcés.
+
+**Population automatique :**
+- Sol mixte pondéré (3 variantes, `DUNGEONGEN_GROUND_PCT_1/2/3`)
+- Bande d'eau traversante + pont (rooms ≤ 2 sorties), `DUNGEONGEN_EAU_FREQ`
+- Fosse (vide) 2×2, `DUNGEONGEN_VIDE_FREQ`
+- Tonneau(x) contre un mur, `DUNGEONGEN_TONNEAU_FREQ / _MAX`
+- Escalier, `DUNGEONGEN_ESCALIER_FREQ`
+- Murs intérieurs (absent si eau), densité proportionnelle à la taille
+
+**Entités (couche GFX_SPR) :**
+- Ennemis : ENE1 16×16 ou ENE2 8×8, densité auto (`surface / DUNGEONGEN_ENEMY_DENSITY`), borné par `DUNGEONGEN_ENEMY_MIN/MAX`
+- Item 16×16, `DUNGEONGEN_ITEM_FREQ`
+- Sync caméra chaque frame via `ngpc_dungeongen_sync_sprites(cam_x, cam_y)`
+
+**Taille de cellule configurable :**
+Par défaut 2×2 tiles NGPC = metatile 16×16px. Passez `-DDUNGEONGEN_CELL_W_TILES=1 -DDUNGEONGEN_CELL_H_TILES=1` pour des tiles 8×8px.
+
+**Assets requis (générés par les scripts export) :**
+
+| Fichier | Script | Contenu |
+|---|---|---|
+| `GraphX/tiles_procgen.c/.h` | `tools/export_procgen_tiles.py` | 27 metatiles terrain (sol, murs ext/int, eau, pont, éléments) |
+| `GraphX/sprites_lab.c/.h` | `tools/export_sprites_lab.py` | ENE1 4 tiles, ENE2 1 tile, ITEM 4 tiles + palettes |
+
+**Paramètres injectables (tous avec `#ifndef`) :**
+
+| Define | Défaut | Description |
+|---|---|---|
+| `DUNGEONGEN_GROUND_PCT_1/2/3` | 70/20/10 | Mix sol (doit sommer à 100) |
+| `DUNGEONGEN_EAU_FREQ` | 40 | % bande d'eau par salle |
+| `DUNGEONGEN_VIDE_FREQ` | 30 | % fosse par salle |
+| `DUNGEONGEN_TONNEAU_FREQ` | 50 | % tonneau par salle |
+| `DUNGEONGEN_TONNEAU_MAX` | 2 | Max tonneaux (1 ou 2) |
+| `DUNGEONGEN_ESCALIER_FREQ` | 40 | % escalier par salle |
+| `DUNGEONGEN_VIDE_MARGIN` | 3 | Marge cellules autour des sorties |
+| `DUNGEONGEN_ENEMY_MIN/MAX` | 0/3 | Bornes ennemis par salle |
+| `DUNGEONGEN_ENEMY_DENSITY` | 16 | Cellules intérieures par ennemi |
+| `DUNGEONGEN_ITEM_FREQ` | 50 | % item par salle (0=désactivé) |
+| `DUNGEONGEN_ROOM_MW_MIN/MAX` | 10/16 | Largeur salle en cellules |
+| `DUNGEONGEN_ROOM_MH_MIN/MAX` | 10/16 | Hauteur salle en cellules |
+| `DUNGEONGEN_MAX_EXITS` | 4 | Nb max de sorties (0..4) |
+| `DUNGEONGEN_CELL_W_TILES` | 2 | Largeur cellule en tiles NGPC |
+| `DUNGEONGEN_CELL_H_TILES` | 2 | Hauteur cellule en tiles NGPC |
+
+**API publique :**
+
+| Fonction | Description |
+|---|---|
+| `ngpc_dungeongen_set_rtc_seed()` | Seed session RTC — appeler une fois au boot |
+| `ngpc_dungeongen_init()` | Charge tiles + sprites en VRAM, configure palettes |
+| `ngpc_dungeongen_enter(room_idx, style_idx)` | Génère et dessine la salle. `style_idx=0xFF` = auto |
+| `ngpc_dungeongen_n_styles()` | Nombre de styles disponibles (= `DUNGEONGEN_N_STYLES`) |
+| `ngpc_dungeongen_spawn()` | Spawne ennemis + item en sprites |
+| `ngpc_dungeongen_sync_sprites(cam_x, cam_y)` | Sync positions sprites → écran (chaque frame) |
+
+**Salle courante (`ngpc_dgroom`) :**
+```c
+NgpcDungeonRoom ngpc_dgroom;  /* extern, mis à jour par enter() et spawn() */
+
+ngpc_dgroom.room_w / room_h    /* dimensions en cellules */
+ngpc_dgroom.exits              /* bitmask DGN_EXIT_N/S/E/W */
+ngpc_dgroom.style_idx          /* style actif (source de vérité pour cycler) */
+ngpc_dgroom.scroll_max_x/y     /* scroll max en pixels (0 si salle = écran) */
+ngpc_dgroom.has_water          /* 1 si bande d'eau présente */
+ngpc_dgroom.enemy_count        /* ennemis spawnés */
+ngpc_dgroom.item_active        /* 1 si item présent */
+```
+
+**Installation :**
+```makefile
+# build_utils.py inclut déjà 'optional' et 'GraphX' dans les -I
+OBJS += $(OBJ_DIR)/optional/ngpc_dungeongen/ngpc_dungeongen.rel
+OBJS += $(OBJ_DIR)/GraphX/tiles_procgen.rel
+OBJS += $(OBJ_DIR)/GraphX/sprites_lab.rel
+```
+```c
+#include "ngpc_dungeongen/ngpc_dungeongen.h"
+```
+
+**Usage minimal :**
+```c
+ngpc_dungeongen_set_rtc_seed();     /* 1 fois au boot */
+ngpc_dungeongen_init();             /* après ngpc_init() */
+ngpc_dungeongen_enter(0u, 0xFFu);   /* room 0, style auto */
+ngpc_dungeongen_spawn();            /* ennemis + item */
+
+/* Boucle principale : */
+ngpc_dungeongen_sync_sprites(cam_x, cam_y);  /* chaque frame */
+
+/* Cycler le style (bouton A) : */
+u8 next = (u8)((ngpc_dgroom.style_idx + 1u) % ngpc_dungeongen_n_styles());
+ngpc_dungeongen_enter(room_idx, next);
+ngpc_dungeongen_spawn();
+```
+
+---
+
 ---
 
 ## `ngpc_seq` — Séquenceur PSG minimal
@@ -1658,4 +1774,4 @@ for (u8 i = 0; i < PUZZLE01_PUSH_BLOCK_COUNT; i++) {
 | **Course (top-down)** | `ngpc_vehicle` ✓, `ngpc_tilecol` ✓, `ngpc_fixed` ✓, `ngpc_camera` ✓, `ngpc_anim` ✓, `ngpc_timer` ✓, `ngpc_hud` ✓, `ngpc_score` ✓, `ngpc_soam` ✓, `ngpc_transition` ✓, `ngpc_seq` ✓ (musique/SFX) |
 | **Action top-down** | `ngpc_actor` ✓, `ngpc_bullet` ✓, `ngpc_fsm` ✓, `ngpc_aabb` ✓, `ngpc_anim` ✓, `ngpc_particle` ✓, `ngpc_entity` ✓, `ngpc_path` ✓, `ngpc_wave` ✓, `ngpc_score` ✓, `ngpc_inventory` ✓, `ngpc_hud` ✓, `ngpc_soam` ✓, `ngpc_seq` ✓ (SFX séquencés) |
 | **Fighting / Beat'em up** | `ngpc_motion` ✓ (quarter-circle, DP, double-tap), `ngpc_anim` ✓, `ngpc_aabb` ✓, `ngpc_fsm` ✓, `ngpc_pool` ✓, `ngpc_timer` ✓, `ngpc_hud` ✓, `ngpc_soam` ✓, `ngpc_score` ✓, `ngpc_transition` ✓, `ngpc_seq` ✓ (SFX coups) |
-| **Roguelite / Donjon** | `ngpc_procgen` ✓, `ngpc_cavegen` ✓, `ngpc_rng` ✓, `ngpc_room` ✓, `ngpc_transition` ✓, `ngpc_pool` ✓, `ngpc_aabb` ✓, `ngpc_entity` ✓, `ngpc_fsm` ✓, `ngpc_anim` ✓, `ngpc_inventory` ✓, `ngpc_score` ✓, `ngpc_soam` ✓, `ngpc_hud` ✓, `ngpc_seq` ✓ (fanfares niveau) |
+| **Roguelite / Donjon** | `ngpc_procgen` ✓, `ngpc_cavegen` ✓, `ngpc_dungeongen` ✓ (salles scrollables riches), `ngpc_rng` ✓, `ngpc_room` ✓, `ngpc_transition` ✓, `ngpc_pool` ✓, `ngpc_aabb` ✓, `ngpc_entity` ✓, `ngpc_fsm` ✓, `ngpc_anim` ✓, `ngpc_inventory` ✓, `ngpc_score` ✓, `ngpc_soam` ✓, `ngpc_hud` ✓, `ngpc_seq` ✓ (fanfares niveau) |
