@@ -1112,13 +1112,18 @@ def make_scene_level_h(
         lines.append(f"#define {sym_use.upper()}_ENTITY_PATH_TABLE 1")
         lines.append("")
 
-        ent_flags = [int(ent.get("flags", 0) or 0) & 0xFF for ent in entities]
+        ent_flags = []
+        for ent in entities:
+            f = int(ent.get("flags", 0) or 0) & 0xFF
+            if ent.get("respawn", False):
+                f |= 4  # NGPNG_ENT_FLAG_RESPAWN
+            ent_flags.append(f)
         if any(flag != 0 for flag in ent_flags):
             lines.append(f"#define {sym_use.upper()}_ENTITY_FLAG_TABLE 1")
             _write_u8_table(
                 f"g_{sym_use}_ent_flags",
                 ent_flags,
-                "Instance flags per entity (bit0=clamp within map)",
+                "Instance flags per entity (bit0=clamp, bit2=respawn on zone re-entry)",
             )
     else:
         lines.append(f"#define {sym_use.upper()}_ENTITY_COUNT 0")

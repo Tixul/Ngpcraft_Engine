@@ -864,6 +864,7 @@ def patch_makefile_for_autogen(*, template_root: Path, export_dir_rel: str, enab
         has_fx=has_fx,
         has_prop_actor=has_prop_actor,
         project_data=project_data,
+        enemy_slot_count_override=(_ps["max_enemies"] * _enemy_parts_max) if (has_enemy and _ps) else None,
     )
     _perf7_slot_layout = _compute_sprite_layout(
         player_slot_count=player_slot_count if player_slot_count > 0 else (4 if has_player_actors else 0),
@@ -1100,6 +1101,22 @@ def patch_makefile_for_autogen(*, template_root: Path, export_dir_rel: str, enab
             block.append("else")
             block.append("CDEFS += -DNGPNG_PERF7_LEGACY_REDRAW=1")
             block.append("endif")
+
+    # --- World entity activation system ---
+    if project_data and has_enemy:
+        _pd = project_data if isinstance(project_data, dict) else {}
+        _radius = int((_pd.get("activation_radius_tiles") or 0))
+        if _radius > 0:
+            block.append("# World entity proximity activation")
+            block.append("CDEFS := $(filter-out -DNGPNG_WORLD_ACTIVATION=%,$(CDEFS))")
+            block.append("CDEFS := $(filter-out -DNGPNG_ACTIVATION_RADIUS_TILES=%,$(CDEFS))")
+            block.append("CDEFS := $(filter-out -DNGPNG_MAX_WORLD_ENTITIES=%,$(CDEFS))")
+            block.append("CDEFS += -DNGPNG_WORLD_ACTIVATION=1")
+            block.append(f"CDEFS += -DNGPNG_ACTIVATION_RADIUS_TILES={_radius}")
+            # MAX_WORLD_ENTITIES = total enemies across all scenes (max per scene) + buffer
+            _max_we = (_ps["max_enemies"] if _ps else 16) + 4
+            block.append(f"CDEFS += -DNGPNG_MAX_WORLD_ENTITIES={_max_we}")
+
     block.append(_MK_END)
     block_s = "\n".join(block) + "\n"
 
@@ -5022,6 +5039,9 @@ def write_autorun_main_c(
             c.append(f"        s_{players[0]['name']}.vx = ngpng_clamp_s8_range(s_{players[0]['name']}.vx, -{player_hspeed_cap}, {player_hspeed_cap});\n")
             c.append(f"        if (s_{players[0]['name']}.vy < -{player_jump_up_cap}) s_{players[0]['name']}.vy = -{player_jump_up_cap};\n")
     if has_enemy:
+        c.append("#if NGPNG_WORLD_ACTIVATION\n")
+        c.append("        ngpng_world_tick(sc, enemies, &enemy_active_count, &enemy_alloc_idx, cam_px, cam_py);\n")
+        c.append("#endif\n")
         if players:
             p0 = players[0]["name"]
             c.append(f"        ngpng_enemies_update(sc, _sc_tilecol, _sc_map_w, _sc_map_h, enemies, &enemy_active_count, cam_px, cam_py, (s16)(cam_px + s_{p0}.x), (s16)(cam_py + s_{p0}.y), (u8)timer);\n")

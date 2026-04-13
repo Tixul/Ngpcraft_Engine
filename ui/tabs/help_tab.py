@@ -3809,6 +3809,21 @@ Ces valeurs génèrent des tables C parallèles uniquement si nécessaires — l
 <p><b>Data (u8)</b> : champ libre par entité (0–255), exporté tel quel dans <code>_scene.h</code>.
 Exemples : variante d’ennemi, ID d’item, paramètre d’event, direction, etc.</p>
 <p><b>Bloquer dans la map</b> : chaque instance peut aussi activer ce flag pour demander au runtime template-ready de la clamp aux limites du monde. C’est utile pour un player ou un enemy qui ne doit jamais sortir de la map, sans imposer cette contrainte à tous les types.</p>
+<p><b>Respawn à la réentrée</b> : si le <b>Rayon d’activation</b> est activé dans les réglages du projet (valeur &gt; 0), cette option permet à une entité tuée de <b>réapparaître</b> quand la caméra revient dans sa zone après en être sortie. Sans ce flag, un ennemi tué reste mort définitivement pour la session. Utile pour les zones de farm, gardes de couloir, mobs de remplissage, ou tout gameplay où la densité doit rester constante. Les <b>items collectés</b> ne réapparaissent jamais, même avec ce flag.</p>
+
+<h2>Rayon d’activation (World Activation)</h2>
+<p>Réglage dans <b>Project Settings</b> (en haut du panneau projet) : <b>Rayon d’activation (tiles)</b>. Valeur 0 = désactivé.</p>
+<p>Quand activé, seuls les ennemis dans un rayon donné autour de la caméra sont réellement actifs chaque frame.
+Les ennemis hors rayon sont <b>gelés</b> (ni mis à jour, ni dessinés) mais restent en mémoire.
+Quand la caméra revient dans leur zone, ils réapparaissent à leur position initiale.</p>
+<ul>
+  <li><b>0</b> : désactivé — tous les ennemis de la scène tournent en permanence (comportement par défaut)</li>
+  <li><b>6–10</b> : recommandé — ennemis actifs 48–80 px au-delà du bord écran, crédible côté gameplay</li>
+  <li><b>16</b> : maximum — presque toujours actif même sur grandes maps</li>
+</ul>
+<p>Le gain de performance est significatif : une scène avec 6 ennemis mais seulement 2–3 visibles n’exécute que 2–3 logiques IA par frame au lieu de 6. Le scan de proximité coûte ~60 cycles (6 comparaisons simples) — négligeable.</p>
+<p><b>Comportement à la mort :</b> un ennemi tué (collision joueur, bullet, etc.) est marqué <code>DEAD</code>. Sans le flag <b>Respawn</b>, il ne réapparaît jamais. Avec le flag, il repasse à <code>ALIVE</code> dès que la caméra quitte sa zone — ainsi il faut vraiment sortir de la zone puis y revenir pour le voir respawn (pas de respawn instantané sur place).</p>
+<p><b>Note technique :</b> le rayon est une constante de compilation (<code>NGPNG_ACTIVATION_RADIUS_TILES</code>), ce qui garantit un coût runtime minimal sur NGPC.</p>
 
 <h2>Contraintes (Rules)</h2>
 <p>L'onglet <b>Rules</b> sert surtout à <b>faciliter le placement dans l'éditeur</b>. Il ne donne pas un comportement intelligent aux ennemis à lui seul.</p>
@@ -4837,6 +4852,21 @@ Enemies also die on <code>DAMAGE</code> / <code>FIRE</code> / <code>VOID</code> 
 <p><b>Data (u8)</b>: per-entity free byte (0–255), exported as-is in <code>_scene.h</code>.
 Examples: enemy variant, item ID, event parameter, direction, etc.</p>
 <p><b>Clamp to map</b>: each instance can also enable this flag so the template-ready runtime clamps it to world bounds. This is useful for a player or enemy that must never leave the map, without forcing the same rule on every type.</p>
+<p><b>Respawn on re-entry</b>: when the <b>Activation radius</b> is enabled in Project Settings (value &gt; 0), this per-entity flag allows a killed entity to <b>respawn</b> when the camera re-enters its zone after having left it. Without this flag, a killed enemy stays dead for the entire session. Useful for farming zones, corridor guards, filler mobs, or any gameplay where density should remain constant. <b>Collected items</b> never respawn, regardless of this flag.</p>
+
+<h2>World Activation (activation radius)</h2>
+<p>Setting in <b>Project Settings</b> (top of the project panel): <b>Activation radius (tiles)</b>. Value 0 = disabled.</p>
+<p>When enabled, only enemies within a given radius around the camera are actually updated each frame.
+Enemies outside the radius are <b>frozen</b> (not updated, not drawn) but remain in memory.
+When the camera returns to their zone, they reappear at their initial position.</p>
+<ul>
+  <li><b>0</b>: disabled — all scene enemies run every frame (default behavior)</li>
+  <li><b>6–10</b>: recommended — enemies stay active 48–80 px beyond the screen edge, which feels credible gameplay-wise</li>
+  <li><b>16</b>: maximum — enemies are almost always active even on large maps</li>
+</ul>
+<p>The performance gain is significant: a scene with 6 enemies where only 2–3 are visible will only run 2–3 AI logic loops per frame instead of 6. The proximity scan costs ~60 cycles (6 simple comparisons) — negligible.</p>
+<p><b>On death:</b> a killed enemy is marked <code>DEAD</code>. Without the <b>Respawn</b> flag, it never comes back. With it, it resets to <code>ALIVE</code> as soon as the camera leaves its zone — so the player must genuinely leave and return to trigger the respawn (no instant on-the-spot re-spawning).</p>
+<p><b>Technical note:</b> the radius is a compile-time constant (<code>NGPNG_ACTIVATION_RADIUS_TILES</code>), guaranteeing minimal runtime cost on NGPC.</p>
 
 <h2>Rules (constraints)</h2>
 <p>The <b>Rules</b> tab mainly helps with <b>editor placement</b>. By itself, it does not give enemies smart runtime behavior.</p>

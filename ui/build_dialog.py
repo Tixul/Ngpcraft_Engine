@@ -56,6 +56,7 @@ class BuildDialog(QDialog):
         parent: QWidget | None = None,
         auto_start: bool = False,
         run_after: bool = False,
+        force_rebuild: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(tr("build.title"))
@@ -66,6 +67,7 @@ class BuildDialog(QDialog):
         self._on_run_requested = on_run_requested
         self._auto_start = auto_start
         self._force_run_after = run_after
+        self._force_rebuild = force_rebuild
 
         self._proc = QProcess(self)
         self._proc.setWorkingDirectory(str(project_dir))
@@ -81,6 +83,14 @@ class BuildDialog(QDialog):
 
         if self._force_run_after:
             self._chk_run.setChecked(True)
+        if self._force_rebuild:
+            # Force "Rebuild" plan (make clean + make) so patched CDEFs are compiled in.
+            rebuild_idx = next(
+                (i for i, p in enumerate(self._plans) if p.steps == [["make", "clean"], ["make"]]),
+                None,
+            )
+            if rebuild_idx is not None:
+                self._target.setCurrentIndex(rebuild_idx)
         if self._auto_start:
             QTimer.singleShot(100, self._start_selected)
 

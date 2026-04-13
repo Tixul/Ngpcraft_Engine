@@ -56,6 +56,153 @@ u8 g_ngpng_entity_prio = (u8)SPR_FRONT;
 #endif
 
 /* ==========================================================================
+ * World entity activation system (NGPNG_WORLD_ACTIVATION)
+ * Globals, init, tick and kill-notification functions.
+ * Gated so zero overhead when feature is disabled.
+ * ========================================================================== */
+#if NGPNG_WORLD_ACTIVATION
+
+/* Forward declarations — functions defined later in this file */
+u8   ngpng_entity_role(const NgpSceneDef *sc, u8 type);
+void ngpng_enemy_kill(NgpngEnemy *enemies, u8 *active_count, u8 idx);
+void ngpng_enemy_hide(NgpngEnemy *enemies, u8 idx);
+void ngpng_enemy_spawn(const NgpSceneDef *sc, NgpngEnemy *enemies,
+    u8 *active_count, u8 *alloc_idx,
+    const NgpngEnt *src, u8 ent_idx, u8 assigned_path_idx, u8 assigned_behavior, u8 assigned_flags);
+
+NgpngWorldEnt g_ngpng_world_ents[NGPNG_MAX_WORLD_ENTITIES];
+u8            g_ngpng_world_ent_count = 0u;
+
+/* Set to 1 during world_tick deactivation so ngpng_enemy_kill does NOT also
+ * mark the world entity as DEAD (it is merely frozen, not killed). */
+static u8 s_world_deactivating = 0u;
+
+void ngpng_world_init(const NgpSceneDef *sc)
+{
+    u8 i;
+    u8 raw_flags;
+    g_ngpng_world_ent_count = 0u;
+    if (!sc || !sc->entities) return;
+    for (i = 0u; i < sc->entity_count && g_ngpng_world_ent_count < (u8)NGPNG_MAX_WORLD_ENTITIES; ++i) {
+        const NgpngEnt *e = &sc->entities[i];
+        u8 role = ngpng_entity_role(sc, e->type);
+        NgpngWorldEnt *we;
+        if (role != NGPNG_ROLE_ENEMY) continue;   /* enemies only for now */
+        we = &g_ngpng_world_ents[g_ngpng_world_ent_count];
+        we->world_x    = (s16)((s16)e->x * 8);
+        we->world_y    = (s16)((s16)e->y * 8);
+        we->type       = e->type;
+        we->role       = role;
+        we->data       = e->data;
+        we->ent_idx    = i;
+        we->state      = NGPNG_WE_ALIVE;
+        we->active_idx = 0xFFu;
+        raw_flags      = (sc->entity_flags && i < sc->entity_count) ? sc->entity_flags[i] : 0u;
+        we->flags      = (raw_flags & NGPNG_ENT_FLAG_RESPAWN) ? NGPNG_WE_FLAG_RESPAWN : 0u;
+        we->_pad       = 0u;
+        g_ngpng_world_ent_count = (u8)(g_ngpng_world_ent_count + 1u);
+    }
+}
+
+void ngpng_world_on_enemy_killed(u8 pool_idx)
+{
+    u8 i;
+    if (s_world_deactivating) return;  /* zone exit, not a real kill */
+    for (i = 0u; i < g_ngpng_world_ent_count; ++i) {
+        if (g_ngpng_world_ents[i].active_idx == pool_idx) {
+            g_ngpng_world_ents[i].state      = NGPNG_WE_DEAD;
+            g_ngpng_world_ents[i].active_idx = 0xFFu;
+            return;
+        }
+    }
+}
+
+void ngpng_world_tick(const NgpSceneDef *sc,
+    NgpngEnemy *enemies, u8 *enemy_active_count, u8 *enemy_alloc_idx,
+    s16 cam_px, s16 cam_py)
+{
+    u8  i;
+    s16 border;
+    s16 lx;
+    s16 rx;
+    s16 ty;
+    s16 by;
+
+    if (!sc || !sc->entities) return;
+    border = NGPNG_ACTIVATION_RADIUS_PX;
+    lx = (s16)(cam_px - border);
+    rx = (s16)(cam_px + 160 + border);
+    ty = (s16)(cam_py - border);
+    by = (s16)(cam_py + 152 + border);
+
+    for (i = 0u; i < g_ngpng_world_ent_count; ++i) {
+        NgpngWorldEnt *we = &g_ngpng_world_ents[i];
+        u8 in_radius;
+
+        /* COLLECTED = permanently gone, never respawn */
+        if (we->state == NGPNG_WE_COLLECTED) continue;
+
+        in_radius = (we->world_x >= lx && we->world_x < rx &&
+                     we->world_y >= ty && we->world_y < by) ? 1u : 0u;
+
+        if (in_radius && we->active_idx == 0xFFu) {
+            /* --- Activate --- */
+            u8 prev_alloc;
+            u8 ent_path;
+            u8 ent_behavior;
+            u8 ent_flags;
+            u8 prev_count;
+
+            /* Permanently dead and no respawn flag: skip */
+            if (we->state == NGPNG_WE_DEAD && !(we->flags & NGPNG_WE_FLAG_RESPAWN)) continue;
+
+            ent_path     = (sc->entity_paths)     ? sc->entity_paths[we->ent_idx]                           : 0xFFu;
+            ent_behavior = (sc->entity_behaviors) ? sc->entity_behaviors[we->ent_idx]                       : 0u;
+            /* Strip RESPAWN bit from runtime ent_flags — it is a lifecycle flag, not a spawn flag */
+            ent_flags    = (sc->entity_flags)     ? (u8)(sc->entity_flags[we->ent_idx] & ~NGPNG_ENT_FLAG_RESPAWN) : 0u;
+
+            prev_count = *enemy_active_count;
+            prev_alloc = *enemy_alloc_idx;
+            ngpng_enemy_spawn(sc, enemies, enemy_active_count, enemy_alloc_idx,
+                &sc->entities[we->ent_idx], we->ent_idx, ent_path, ent_behavior, ent_flags);
+
+            if (*enemy_active_count > prev_count) {
+                /* Slot used = alloc_idx - 1 (with wrap) */
+                u8 assigned = (*enemy_alloc_idx == 0u) ?
+                    (u8)((u8)NGPNG_AUTORUN_MAX_ENEMIES - 1u) :
+                    (u8)(*enemy_alloc_idx - 1u);
+                we->active_idx = assigned;
+                we->state      = NGPNG_WE_ALIVE;
+            }
+            (void)prev_alloc;
+
+        } else if (!in_radius && we->active_idx != 0xFFu) {
+            /* --- Deactivate (freeze, not a kill) --- */
+            s_world_deactivating = 1u;
+            ngpng_enemy_kill(enemies, enemy_active_count, we->active_idx);
+            s_world_deactivating = 0u;
+            /* If RESPAWN flag: reset ALIVE now so re-entry will spawn it again */
+            we->state      = NGPNG_WE_ALIVE;
+            we->active_idx = 0xFFu;
+        }
+    }
+}
+
+#else  /* !NGPNG_WORLD_ACTIVATION — stub no-ops so callers always compile */
+
+void ngpng_world_init(const NgpSceneDef *sc)      { (void)sc; }
+void ngpng_world_on_enemy_killed(u8 pool_idx)     { (void)pool_idx; }
+void ngpng_world_tick(const NgpSceneDef *sc,
+    NgpngEnemy *enemies, u8 *enemy_active_count, u8 *enemy_alloc_idx,
+    s16 cam_px, s16 cam_py)
+{
+    (void)sc; (void)enemies; (void)enemy_active_count;
+    (void)enemy_alloc_idx; (void)cam_px; (void)cam_py;
+}
+
+#endif /* NGPNG_WORLD_ACTIVATION */
+
+/* ==========================================================================
  * Shared type / anim helpers (compiled when enemies or props are present)
  * ========================================================================== */
 #if NGPNG_HAS_ENEMY || NGPNG_HAS_PROP_ACTOR || NGPNG_HAS_PLAYER
@@ -807,6 +954,7 @@ void ngpng_enemy_kill(NgpngEnemy *enemies, u8 *active_count, u8 idx)
     enemies[idx].active = 0u;
     ngpng_enemy_hide(enemies, idx);
     if (*active_count > 0u) *active_count = (u8)(*active_count - 1u);
+    ngpng_world_on_enemy_killed(idx);  /* no-op when NGPNG_WORLD_ACTIVATION=0 */
 }
 
 void ngpng_enemy_spawn(const NgpSceneDef *sc, NgpngEnemy *enemies,
@@ -916,21 +1064,28 @@ void ngpng_enemy_spawn(const NgpSceneDef *sc, NgpngEnemy *enemies,
 void ngpng_enemies_reset_scene(const NgpSceneDef *sc, NgpngEnemy *enemies,
     u8 *enemy_active_count, u8 *enemy_alloc_idx)
 {
-    u8 i;
     ngpng_enemies_clear(enemies, enemy_active_count, enemy_alloc_idx);
     /* Wave sequencer (NgpcWaveSeq) is restarted by the caller via ngpc_wave_start(). */
-    if (!sc->entities) return;
-    for (i = 0; i < sc->entity_count; ++i) {
-        const NgpngEnt *e = &sc->entities[i];
-        u8 ent_path     = 0xFFu;
-        u8 ent_behavior = 0u;
-        u8 ent_flags    = 0u;
-        if (ngpng_entity_role(sc, e->type) != NGPNG_ROLE_ENEMY) continue;
-        if (sc->entity_paths)     ent_path     = sc->entity_paths[i];
-        if (sc->entity_behaviors) ent_behavior = sc->entity_behaviors[i];
-        if (sc->entity_flags)     ent_flags    = sc->entity_flags[i];
-        ngpng_enemy_spawn(sc, enemies, enemy_active_count, enemy_alloc_idx, e, i, ent_path, ent_behavior, ent_flags);
+#if NGPNG_WORLD_ACTIVATION
+    /* Populate world entity registry; ngpng_world_tick() handles proximity spawning. */
+    ngpng_world_init(sc);
+#else
+    {
+        u8 i;
+        if (!sc->entities) return;
+        for (i = 0u; i < sc->entity_count; ++i) {
+            const NgpngEnt *e = &sc->entities[i];
+            u8 ent_path     = 0xFFu;
+            u8 ent_behavior = 0u;
+            u8 ent_flags    = 0u;
+            if (ngpng_entity_role(sc, e->type) != NGPNG_ROLE_ENEMY) continue;
+            if (sc->entity_paths)     ent_path     = sc->entity_paths[i];
+            if (sc->entity_behaviors) ent_behavior = sc->entity_behaviors[i];
+            if (sc->entity_flags)     ent_flags    = sc->entity_flags[i];
+            ngpng_enemy_spawn(sc, enemies, enemy_active_count, enemy_alloc_idx, e, i, ent_path, ent_behavior, ent_flags);
+        }
     }
+#endif
 }
 /* Wave spawning is now driven by NgpcWaveSeq (ngpc_wave module) in the generated
  * main.c: ngpc_wave_update(&wave_seq) returns each NgpcWaveEntry, the caller

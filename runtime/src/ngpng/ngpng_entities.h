@@ -24,8 +24,9 @@
 
 /* ---- Entity flag constants ---- */
 #ifndef NGPNG_ENT_FLAG_CLAMP_MAP
-#define NGPNG_ENT_FLAG_CLAMP_MAP 1u
+#define NGPNG_ENT_FLAG_CLAMP_MAP        1u
 #define NGPNG_ENT_FLAG_ALLOW_LEDGE_FALL 2u
+#define NGPNG_ENT_FLAG_RESPAWN          4u  /* world entity respawns after leaving activation radius */
 #endif
 
 /* ---- Behavior codes ---- */
@@ -43,6 +44,45 @@
 #define NGPNG_ANIM_JUMP  2u
 #define NGPNG_ANIM_FALL  3u
 #define NGPNG_ANIM_DEATH 4u
+#endif
+
+/* ---- World entity activation system ---- */
+#ifndef NGPNG_WORLD_ACTIVATION
+#define NGPNG_WORLD_ACTIVATION 0
+#endif
+#ifndef NGPNG_MAX_WORLD_ENTITIES
+#define NGPNG_MAX_WORLD_ENTITIES 32u
+#endif
+#ifndef NGPNG_ACTIVATION_RADIUS_TILES
+#define NGPNG_ACTIVATION_RADIUS_TILES 8u
+#endif
+/* Activation border in pixels added to each side of the screen rect */
+#define NGPNG_ACTIVATION_RADIUS_PX ((s16)((s16)NGPNG_ACTIVATION_RADIUS_TILES * 8))
+
+/* World entity lifecycle states */
+#define NGPNG_WE_ALIVE     0u
+#define NGPNG_WE_DEAD      1u
+#define NGPNG_WE_COLLECTED 2u
+
+/* World entity flags (stored in NgpngWorldEnt.flags) */
+#define NGPNG_WE_FLAG_RESPAWN 0x01u  /* respawn after zone re-entry if killed */
+
+typedef struct {
+    s16 world_x;     /* initial world X (pixels) */
+    s16 world_y;     /* initial world Y (pixels) */
+    u8  type;        /* entity type index */
+    u8  role;        /* NGPNG_ROLE_xxx */
+    u8  data;        /* entity-specific param */
+    u8  ent_idx;     /* index into sc->entities[] for spawn params */
+    u8  state;       /* NGPNG_WE_ALIVE / DEAD / COLLECTED */
+    u8  active_idx;  /* pool slot index, 0xFF = inactive */
+    u8  flags;       /* NGPNG_WE_FLAG_xxx */
+    u8  _pad;
+} NgpngWorldEnt;
+
+#if NGPNG_WORLD_ACTIVATION
+extern NgpngWorldEnt g_ngpng_world_ents[NGPNG_MAX_WORLD_ENTITIES];
+extern u8            g_ngpng_world_ent_count;
 #endif
 
 /* ---- Structs (gated per feature) ---- */
@@ -252,6 +292,12 @@ void ngpng_enemy_spawn(const NgpSceneDef *sc, NgpngEnemy *enemies, u8 *active_co
 void ngpng_enemies_reset_scene(const NgpSceneDef *sc, NgpngEnemy *enemies,
     u8 *enemy_active_count, u8 *enemy_alloc_idx);
 void ngpng_enemies_force_jump_by_type(NgpngEnemy *enemies, u8 type);
+/* World entity activation system (NGPNG_WORLD_ACTIVATION=1) */
+void ngpng_world_init(const NgpSceneDef *sc);
+void ngpng_world_tick(const NgpSceneDef *sc,
+    NgpngEnemy *enemies, u8 *enemy_active_count, u8 *enemy_alloc_idx,
+    s16 cam_px, s16 cam_py);
+void ngpng_world_on_enemy_killed(u8 pool_idx);
 void ngpng_enemies_update(const NgpSceneDef *sc,
     const u8 *_tc, u16 _mw, u16 _mh,
     NgpngEnemy *enemies,

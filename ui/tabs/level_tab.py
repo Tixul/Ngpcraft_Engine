@@ -510,6 +510,7 @@ _TCOL_CORNER_SW   = 22  # wall corner open to South + West  (inner SW angle)
 
 _ENT_FLAG_CLAMP_MAP = 1
 _ENT_FLAG_ALLOW_LEDGE_FALL = 2
+_ENT_FLAG_RESPAWN = 4
 
 # Canvas overlay colors per collision type
 _TCOL_OVERLAY: dict[int, "QColor"] = {}   # filled after QColor is importable
@@ -3734,6 +3735,10 @@ class LevelTab(QWidget):
         self._chk_ent_allow_ledge_fall.setToolTip(tr("level.prop_allow_ledge_fall_tt"))
         self._chk_ent_allow_ledge_fall.toggled.connect(self._on_ent_allow_ledge_fall_toggled)
         iv.addWidget(self._chk_ent_allow_ledge_fall)
+        self._chk_ent_respawn = QCheckBox(tr("level.prop_respawn"))
+        self._chk_ent_respawn.setToolTip(tr("level.prop_respawn_tt"))
+        self._chk_ent_respawn.toggled.connect(self._on_ent_respawn_toggled)
+        iv.addWidget(self._chk_ent_respawn)
         self._lbl_ent_path_status = QLabel(tr("level.prop_path_help_none_sel"))
         self._lbl_ent_path_status.setWordWrap(True)
         self._lbl_ent_path_status.setStyleSheet("color: #9aa3ad; font-size: 10px;")
@@ -10509,6 +10514,19 @@ class LevelTab(QWidget):
         self._canvas.update()
         self._update_diagnostics()
 
+    def _on_ent_respawn_toggled(self, checked: bool) -> None:
+        if self._updating_props:
+            return
+        idx = self._selected
+        if not (0 <= idx < len(self._entities)):
+            return
+        self._entities[idx]["respawn"] = bool(checked)
+        if not checked:
+            self._entities[idx].pop("respawn", None)
+        self._refresh_entity_runtime_ui()
+        self._canvas.update()
+        self._update_diagnostics()
+
     def _on_ent_path_changed(self, combo_idx: int) -> None:
         if self._updating_props:
             return
@@ -10880,6 +10898,7 @@ class LevelTab(QWidget):
             self._chk_ent_allow_ledge_fall.setChecked(
                 bool(int(ent.get("flags", 0) or 0) & _ENT_FLAG_ALLOW_LEDGE_FALL)
             )
+            self._chk_ent_respawn.setChecked(bool(ent.get("respawn", False)))
             self._updating_props = False
             self._set_props_enabled(True)
             self._refresh_ent_path_status()

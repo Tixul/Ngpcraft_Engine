@@ -635,6 +635,21 @@ class ProjectTab(ProjectPathMixin, QWidget):
         root.addLayout(exp_row)
         self._refresh_export_dir_ui()
 
+        # World activation radius row
+        act_row = QHBoxLayout()
+        _act_lbl = QLabel(tr("proj.activation_radius"))
+        _act_lbl.setStyleSheet("color: #cc3300; font-weight: bold;")
+        _act_lbl.setToolTip(tr("proj.activation_radius_tt"))
+        act_row.addWidget(_act_lbl)
+        self._spin_activation_radius = QSpinBox()
+        self._spin_activation_radius.setRange(0, 16)
+        self._spin_activation_radius.setToolTip(tr("proj.activation_radius_tt"))
+        self._spin_activation_radius.setValue(int(self._data.get("activation_radius_tiles") or 0))
+        self._spin_activation_radius.valueChanged.connect(self._on_activation_radius_changed)
+        act_row.addWidget(self._spin_activation_radius)
+        act_row.addStretch()
+        root.addLayout(act_row)
+
         # Main splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -2924,6 +2939,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
             parent=self,
             auto_start=True,
             run_after=True,
+            force_rebuild=True,
         )
         dlg.exec()
 
@@ -3116,14 +3132,21 @@ class ProjectTab(ProjectPathMixin, QWidget):
         self._scenes_list.setCurrentRow(len(self._data["scenes"]) - 1)
         self._update_global_budget()
 
+    def _on_activation_radius_changed(self, value: int) -> None:
+        if value > 0:
+            self._data["activation_radius_tiles"] = value
+        else:
+            self._data.pop("activation_radius_tiles", None)
+        self._on_save()
+
     def _change_graphx_dir(self) -> None:
         base = str(self._project_dir) if self._project_dir else ""
         d = QFileDialog.getExistingDirectory(self, tr("proj.graphx_dir"), base)
-        if d: 
-            rel = self._rel(Path(d)) 
-            self._data["graphx_dir"] = rel 
-            self._graphx_label.setText(rel) 
-            self._on_save() 
+        if d:
+            rel = self._rel(Path(d))
+            self._data["graphx_dir"] = rel
+            self._graphx_label.setText(rel)
+            self._on_save()
             if hasattr(self, "_asset_browser"):
                 self._asset_browser.set_root(Path(d))
 
