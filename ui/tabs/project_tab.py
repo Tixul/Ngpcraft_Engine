@@ -2802,10 +2802,106 @@ class ProjectTab(ProjectPathMixin, QWidget):
     # Phase 5 — Build / Run integration
     # ------------------------------------------------------------------
 
+    def _patch_makefile_pre_build(self) -> None:
+        """Silently recompute and patch Makefile CDEFS (pool sizes, slot counts)
+        before any build.  No dialogs, no scene export.  Called from both
+        _open_build_dialog and _export_build_run so that adding enemies (or any
+        entity) after the last full export never produces invisible sprites."""
+        if not self._project_dir or not isinstance(self._data, dict):
+            return
+        tpl = detect_template_root(project_dir=self._project_dir, project_data=self._data)
+        if tpl is None:
+            return
+        export_dir_rel = str(self._data.get("export_dir") or "").replace("\\", "/").strip()
+        _export_dir_abs = (Path(tpl) / export_dir_rel) if export_dir_rel else Path(tpl)
+
+        _, song_count, sfx_count = resolve_project_audio_state(
+            self._data,
+            project_dir=self._project_dir,
+            audio_manifest=self._audio_manifest,
+        )
+
+        _re_safe = re.compile(r"[^0-9a-zA-Z_]+")
+        def _safe(s: str) -> str:
+            s = (_re_safe.sub("_", s or "")).strip("_")
+            return ("_" + s) if s and s[0].isdigit() else (s or "sprite")
+
+        player_sprites: list[dict] = []
+        for _sc in (self._data.get("scenes") or []):
+            for _spr in (_sc.get("sprites") or []):
+                if sprite_gameplay_role(_spr) != "player":
+                    continue
+                _n = _safe(sprite_type_name(_spr))
+                if not _n or any(p["name"] == _n for p in player_sprites):
+                    continue
+                _fw = int(_spr.get("frame_w", 8) or 8)
+                _fh = int(_spr.get("frame_h", 8) or 8)
+                _hb0 = first_hurtbox(_spr, _fw, _fh)
+                _hb_en = box_enabled(_hb0, True)
+                _body0 = first_bodybox(_spr, _fw, _fh)
+                _body_en = box_enabled(_body0, True)
+                player_sprites.append({
+                    "name": _n,
+                    "ctrl": _spr.get("ctrl") or {},
+                    "props": _spr.get("props") or {},
+                    "anims": _spr.get("anims") or {},
+                    "frame_count": int(_spr.get("frame_count", 1) or 1),
+                    "anim_duration": int(_spr.get("anim_duration", 6) or 6),
+                    "frame_w": _fw, "frame_h": _fh,
+                    "hb_x": int(_hb0.get("x", 0) or 0),
+                    "hb_y": int(_hb0.get("y", 0) or 0),
+                    "hb_w": int((_hb0.get("w", _fw) if _hb_en else 0) or 0),
+                    "hb_h": int((_hb0.get("h", _fh) if _hb_en else 0) or 0),
+                    "body_x": int(_body0.get("x", 0) or 0),
+                    "body_y": int(_body0.get("y", 0) or 0),
+                    "body_w": int((_body0.get("w", _fw) if _body_en else 0) or 0),
+                    "body_h": int((_body0.get("h", _fh) if _body_en else 0) or 0),
+                })
+
+        _feat = _detect_features(self._data or {})
+        try:
+            patch_makefile_for_autogen(
+                template_root=tpl,
+                export_dir_rel=export_dir_rel,
+                enable_autorun=True,
+                has_player_actors=False,
+                player_slot_count=compute_player_total_slots(player_sprites, _export_dir_abs),
+                has_sound=(song_count > 0 or sfx_count > 0),
+                song_count=song_count,
+                has_enemy=_feat.get("has_enemy", False),
+                has_fx=_feat.get("has_fx", False),
+                has_prop_actor=_feat.get("has_prop_actor", False),
+                has_combat=_feat.get("has_combat", False),
+                has_triggers=_feat.get("has_triggers", False),
+                has_player=_feat.get("has_player", False),
+                has_hud=_feat.get("has_hud", False),
+                has_waves=_feat.get("has_waves", False),
+                has_ladder=_feat.get("has_ladder", False),
+                has_spring=_feat.get("has_spring", False),
+                has_door=_feat.get("has_door", False),
+                has_ice=_feat.get("has_ice", False),
+                has_conveyor=_feat.get("has_conveyor", False),
+                has_deadly_tile=_feat.get("has_deadly_tile", False),
+                has_water=_feat.get("has_water", False),
+                has_topdown_physics=_feat.get("has_topdown_physics", False),
+                has_platform_physics=_feat.get("has_platform_physics", False),
+                project_data=self._data,
+            )
+        except Exception:
+            pass  # Never block the build for a patch failure
+        # Also regenerate assets_autogen.mk so any new .c files in export_dir
+        # (e.g. scenes_autogen.c added by a recent export) appear in OBJS.
+        try:
+            _has_save = bool(self._data.get("enable_flash_save", False))
+            write_assets_autogen_mk(self._project_dir, _export_dir_abs, has_save=_has_save)
+        except Exception:
+            pass
+
     def _open_build_dialog(self) -> None:
         if not self._project_dir:
             return
 
+        self._patch_makefile_pre_build()
         dlg = BuildDialog(
             project_dir=self._project_dir,
             on_run_requested=self._run_emulator,
@@ -2818,6 +2914,10 @@ class ProjectTab(ProjectPathMixin, QWidget):
         self._export_template_ready()
         if not self._project_dir:
             return
+        # Belt-and-suspenders: if _export_template_ready returned early (e.g.
+        # the user cancelled the export options dialog), the Makefile may not
+        # have been patched yet.  Always patch before launching the build.
+        self._patch_makefile_pre_build()
         dlg = BuildDialog(
             project_dir=self._project_dir,
             on_run_requested=self._run_emulator,
