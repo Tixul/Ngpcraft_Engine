@@ -48,10 +48,10 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QKeySequenceEdit,
     QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget, QCheckBox, 
-    QSpinBox,
     QSplitter,
     QTabWidget,
-) 
+)
+from ui.no_scroll import NoScrollSpinBox as QSpinBox, NoScrollComboBox as QComboBox  # noqa: F811
 
 from core.rgb444 import colors_per_tile, quantize_image
 from i18n.lang import tr

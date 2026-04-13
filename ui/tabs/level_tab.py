@@ -69,6 +69,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from ui.no_scroll import NoScrollSpinBox as QSpinBox, NoScrollComboBox as QComboBox  # noqa: F811
 from core.collision_boxes import first_hurtbox
 from core.scene_collision import fit_collision_grid
 
@@ -1572,6 +1573,8 @@ class _LevelCanvas(QWidget):
                      selected: bool, opacity: float,
                      badge: Optional[str],
                      badge_color: QColor | None = None) -> None:
+        if "x" not in ent or "y" not in ent or "type" not in ent:
+            return
         tx, ty = ent["x"], ent["y"]
         x_px, y_px = tx * tp, ty * tp
 
@@ -3073,6 +3076,16 @@ class LevelTab(QWidget):
     def _make_entity(self, type_name: str, x: int, y: int, *, data: int = 0) -> dict:
         """Create a static scene entity with a stable identifier."""
         return {"id": _new_id(), "type": type_name, "x": int(x), "y": int(y), "data": int(data)}
+
+    @staticmethod
+    def _sanitize_entity(e: dict) -> dict:
+        """Ensure an entity dict loaded from JSON has all required keys."""
+        d = dict(e)
+        d.setdefault("type", "")
+        d.setdefault("x", 0)
+        d.setdefault("y", 0)
+        d.setdefault("data", 0)
+        return d
 
     def _clamp_tile_xy(self, x: int, y: int) -> tuple[int, int]:
         return (
@@ -6812,7 +6825,7 @@ class LevelTab(QWidget):
             return
 
         # Load entities, roles, waves
-        self._entities     = [dict(e) for e in scene.get("entities", [])]
+        self._entities     = [self._sanitize_entity(e) for e in scene.get("entities", [])]
         self._ensure_entity_ids()
         self._entity_roles = migrate_scene_sprite_roles(scene)
 
@@ -6834,7 +6847,7 @@ class LevelTab(QWidget):
         raw_waves = scene.get("waves", []) or []
         self._waves = [
             {"delay": int(w.get("delay", 0)),
-              "entities": [dict(e) for e in w.get("entities", [])]}
+              "entities": [self._sanitize_entity(e) for e in w.get("entities", [])]}
             for w in raw_waves
         ]
 
@@ -11283,8 +11296,10 @@ class LevelTab(QWidget):
         if 0 <= self._wave_selected < len(self._waves):
             wave_ents = self._waves[self._wave_selected].get("entities", [])
             for ent in wave_ents:
+                if not isinstance(ent, dict) or "type" not in ent:
+                    continue
                 self._wave_ent_list.addItem(
-                    f"{ent['type']} @ ({ent['x']},{ent['y']})")
+                    f"{ent['type']} @ ({ent.get('x', '?')},{ent.get('y', '?')})")
             self._btn_wave_ent_del.setEnabled(len(wave_ents) > 0)
         else:
             self._btn_wave_ent_del.setEnabled(False)
@@ -16591,6 +16606,7 @@ class LevelTab(QWidget):
         export_scene["regions"] = [dict(r) for r in self._regions]
         export_scene["text_labels"] = [dict(l) for l in self._text_labels]
         export_scene["triggers"] = [dict(t) for t in self._triggers]
+        export_scene["paths"] = copy.deepcopy(self._paths)
 
         core_issues: list[str] = []
         try:

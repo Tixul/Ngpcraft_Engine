@@ -45,6 +45,7 @@ from PyQt6.QtWidgets import (
     QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
     QAbstractItemView,
 )
+from ui.no_scroll import NoScrollSpinBox as QSpinBox, NoScrollComboBox as QComboBox  # noqa: F811
 
 from ui.tabs._project_path_mixin import ProjectPathMixin
 from core.project_model import (
@@ -3823,6 +3824,10 @@ class ProjectTab(ProjectPathMixin, QWidget):
         - scene_<name>.h / scene_<name>_level.h (when export_dir is set)
         - scenes_autogen.c/.h (manifest)
         """
+        # Flush any unsaved level-tab edits (e.g. path point moves) into self._data
+        # before reading self._data["scenes"] below.
+        if self._on_save:
+            self._on_save()
         script = self._find_script()
         if script is None:
             start = script_dialog_start_dir("export_script_path", fallback=self._project_dir)
@@ -4088,9 +4093,12 @@ class ProjectTab(ProjectPathMixin, QWidget):
         self._export_all_scenes_c(options=opts)
 
     def _export_scene_c(self, options: ExportOptions | None = None, show_msg: bool = True) -> None:
-        scene = self._current_scene() 
-        if not scene: 
-            return 
+        # Flush any unsaved level-tab edits into self._data before reading the scene.
+        if self._on_save:
+            self._on_save()
+        scene = self._current_scene()
+        if not scene:
+            return
         script = self._find_script() 
         if script is None: 
             start = script_dialog_start_dir("export_script_path", fallback=self._project_dir)

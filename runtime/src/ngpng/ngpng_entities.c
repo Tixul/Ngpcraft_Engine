@@ -1992,7 +1992,7 @@ void ngpng_player_collide_damage_props(const NgpSceneDef *sc, NgpngPropActor *pr
         type_damage = ngpng_type_u8(sc->type_damage, sc->type_role_count, props[i].type, 0u);
         prop_anim_state = props[i].anim_state;
         if (type_damage > 0u &&
-            ngpng_rects_touch_or_overlap(ax, ay, player_hb_w, player_hb_h,
+            ngpng_rects_overlap(ax, ay, player_hb_w, player_hb_h,
                 (s16)(props[i].world_x + props[i].hb_x), (s16)(props[i].world_y + props[i].hb_y),
                 props[i].hb_w, props[i].hb_h)) {
             if (!best_hit) {
@@ -2065,7 +2065,7 @@ void ngpng_player_collide_damage_props(const NgpSceneDef *sc, NgpngPropActor *pr
             }
             if (atk_w == 0u || atk_h == 0u || atk_damage == 0u) continue;
             if (!ngpng_attack_window_active(anim_frame, atk_active_start, atk_active_len, atk_anim_state, prop_anim_state)) continue;
-            if (!ngpng_rects_touch_or_overlap(ax, ay, player_hb_w, player_hb_h, atk_x, atk_y, atk_w, atk_h)) continue;
+            if (!ngpng_rects_overlap(ax, ay, player_hb_w, player_hb_h, atk_x, atk_y, atk_w, atk_h)) continue;
             if (!best_hit || atk_priority >= best_priority) {
                 best_hit = 1u;
                 best_priority = atk_priority;

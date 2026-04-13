@@ -47,6 +47,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from ui.no_scroll import NoScrollSpinBox as QSpinBox, NoScrollComboBox as QComboBox  # noqa: F811
 
 from ui.tabs._project_path_mixin import ProjectPathMixin
 from core.audio_autogen_mk import (

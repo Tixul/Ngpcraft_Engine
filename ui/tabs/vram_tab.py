@@ -12,10 +12,10 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, QRect, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QFont
 from PyQt6.QtWidgets import (
-    QComboBox,
     QGroupBox, QHBoxLayout, QLabel, QScrollArea,
     QPushButton, QVBoxLayout, QWidget,
 )
+from ui.no_scroll import NoScrollComboBox as QComboBox  # noqa: F811
 
 from core.project_model import (
     TILE_MAX, TILE_RESERVED, TILE_USER_START, PAL_MAX_SPR, PAL_MAX_BG,

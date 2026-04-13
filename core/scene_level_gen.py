@@ -627,7 +627,10 @@ def make_scene_level_h(
     for i, t in enumerate(seen_types):
         role = entity_roles.get(t, "prop")
         role_cmt = f"  /* [{role}] */" if role != "prop" else ""
-        lines.append(f"#define {_type_to_c_const(t):30s} {i}{role_cmt}")
+        c = _type_to_c_const(t)
+        lines.append(f"#ifndef {c}")
+        lines.append(f"#define {c:30s} {i}{role_cmt}")
+        lines.append(f"#endif")
     lines.append("")
 
     role_to_id = {
@@ -915,7 +918,11 @@ def make_scene_level_h(
         w = hb.get("w", 0) if box_enabled(hb, True) else 0
         h = hb.get("h", 0) if box_enabled(hb, True) else 0
         cid = _safe_c_id(t)
+        hb_guard = f"NGPNG_ENT_{cid.upper()}_HITBOX_DEF"
+        lines.append(f"#ifndef {hb_guard}")
+        lines.append(f"#define {hb_guard}")
         lines.append(f"static const NgpngRect g_{cid}_hitbox = {{{int(x)}, {int(y)}, {int(w)}, {int(h)}}};")
+        lines.append(f"#endif")
         any_hb = True
     if not any_hb:
         lines.append("/* (no hitboxes defined) */")
@@ -931,6 +938,9 @@ def make_scene_level_h(
         if not isinstance(props, dict) or not props:
             continue
         cid = _safe_c_id(t)
+        props_guard = f"NGPNG_ENT_{cid.upper()}_PROPS_DEF"
+        prop_block.append(f"#ifndef {props_guard}")
+        prop_block.append(f"#define {props_guard}")
         prop_block.append(f"/* {t} */")
         for k, v in props.items():
             key = _safe_c_id(str(k))
@@ -938,6 +948,7 @@ def make_scene_level_h(
                 prop_block.append(f"static const u8 g_{cid}_{key} = {int(v)};")
             except Exception:
                 continue
+        prop_block.append(f"#endif")
     if prop_block:
         lines += [sep, "/* Sprite props (u8)                                                  */", sep]
         lines.extend(prop_block)

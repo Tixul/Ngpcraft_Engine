@@ -20,9 +20,10 @@ from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox,
     QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
-    QPlainTextEdit, QPushButton, QSizePolicy, QSpinBox,
+    QPlainTextEdit, QPushButton, QSizePolicy,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
+from ui.no_scroll import NoScrollSpinBox as QSpinBox  # noqa: F811
 
 from core.project_model import TILE_MAX, PAL_MAX_SPR, sprite_export_stats, sprite_tile_estimate
 from i18n.lang import tr

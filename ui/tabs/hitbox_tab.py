@@ -48,6 +48,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from ui.no_scroll import NoScrollSpinBox as QSpinBox, NoScrollComboBox as QComboBox  # noqa: F811
 
 from core.entity_roles import sprite_gameplay_role
 from core.entity_templates import (

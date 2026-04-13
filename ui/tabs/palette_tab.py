@@ -36,12 +36,12 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSpinBox,
     QSplitter,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
+from ui.no_scroll import NoScrollSpinBox as QSpinBox  # noqa: F811
 
 from core.layer_split import layers_needed, split_layers
 from core.palette_remap import composite_on_checker, palette_to_fixed_arg
