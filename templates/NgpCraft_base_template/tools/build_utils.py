@@ -115,6 +115,12 @@ def cmd_clean() -> int:
     return 0
 
 
+def cmd_copy(src: str, dst: str) -> int:
+    os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+    shutil.copy2(src, dst)
+    return 0
+
+
 def cmd_move(name: str, output_dir: str) -> int:
     base_name = os.path.basename(name)
     os.makedirs(output_dir, exist_ok=True)
@@ -280,6 +286,11 @@ def main(argv: list[str]) -> int:
             print("Usage: build_utils.py s242ngp <file.s24>", file=sys.stderr)
             return 2
         return cmd_s242ngp(argv[2])
+    if cmd == "copy":
+        if len(argv) != 4:
+            print("Usage: build_utils.py copy <src> <dst>", file=sys.stderr)
+            return 2
+        return cmd_copy(argv[2], argv[3])
 
     print(f"Unknown command: {cmd}", file=sys.stderr)
     return 2

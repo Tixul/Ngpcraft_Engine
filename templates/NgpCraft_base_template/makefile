@@ -153,7 +153,7 @@ endif
 $(TARGET_NGP): makefile ngpc.lcf $(OBJS)
 	$(PYTHON) tools/build_utils.py link $(TARGET_ABS) ngpc.lcf $(OBJS) $(LINK_LIBS)
 	$(PYTHON) tools/build_utils.py s242ngp $(TARGET_S24)
-	$(PYTHON) -c "import os, shutil; os.makedirs('$(OUTPUT_DIR)', exist_ok=True); shutil.copy2('$(TARGET_NGP)', os.path.join('$(OUTPUT_DIR)', '$(NAME).ngc'))"
+	$(PYTHON) tools/build_utils.py copy $(TARGET_NGP) $(OUTPUT_DIR)/$(NAME).ngc
 
 clean:
 	$(PYTHON) tools/build_utils.py clean

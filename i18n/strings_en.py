@@ -422,6 +422,8 @@ STRINGS_EN: dict[str, str] = {
     "proj.rename_scene": "Rename…",
     "proj.delete_scene": "Delete",
     "proj.start_scene": "Start scene:",
+    "proj.pause_quit_scene": "Quit to:",
+    "proj.pause_quit_restart": "(restart current scene)",
     "proj.scene_content": "Content: \'{name}\'",
     "proj.no_scene_selected": "(no scene selected)",
     "proj.scene_status_ready_short": "OK",

@@ -286,6 +286,7 @@ def write_scenes_autogen(*, project_data: dict, export_dir: Path) -> tuple[Path 
     hl.append("#define TRIG_ACT_SPAWN_AT_REGION 70\n")
     hl.append("#define TRIG_ACT_SAVE_GAME       71\n")
     hl.append("#define TRIG_ACT_SET_BGM_VOLUME  72\n")
+    hl.append("#define TRIG_ACT_SET_NPC_DIALOGUE 74\n")
     hl.append("#define TRIG_ACT_FLIP_SPRITE_H   76\n")
     hl.append("#define TRIG_ACT_FLIP_SPRITE_V   77\n")
     hl.append("#define TRIG_ACT_SET_CHECKPOINT 24\n")

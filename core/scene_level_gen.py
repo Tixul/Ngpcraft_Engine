@@ -220,6 +220,16 @@ def _type_to_c_const(name: str) -> str:
     return f"ENT_{clean}" if clean else "ENT_UNKNOWN"
 
 
+def _type_to_c_const_scoped(scene_sym: str, name: str) -> str:
+    """Return a scene-prefixed entity type macro: ENT_{SCENE}_{TYPE}.
+    Scene-scoped macros avoid #ifndef collisions when multiple scene headers
+    are included in the same compilation unit (scenes_autogen.c).
+    """
+    clean = re.sub(r"[^a-zA-Z0-9]+", "_", (name or "")).strip("_").upper()
+    prefix = re.sub(r"[^a-zA-Z0-9]+", "_", (scene_sym or "")).strip("_").upper()
+    return f"ENT_{prefix}_{clean}" if clean else f"ENT_{prefix}_UNKNOWN"
+
+
 def _safe_c_id(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]+", "_", (name or "")).strip("_").lower() or "id"
 
@@ -623,14 +633,14 @@ def make_scene_level_h(
     ]
 
     # ---- Entity type IDs ----
+    # Scene-prefixed macros (ENT_{SCENE}_{TYPE}) avoid #ifndef collisions when
+    # multiple scene_*_level.h headers are included in the same compilation unit.
     lines += [sep, "/* Entity type IDs                                                    */", sep]
     for i, t in enumerate(seen_types):
         role = entity_roles.get(t, "prop")
         role_cmt = f"  /* [{role}] */" if role != "prop" else ""
-        c = _type_to_c_const(t)
-        lines.append(f"#ifndef {c}")
-        lines.append(f"#define {c:30s} {i}{role_cmt}")
-        lines.append(f"#endif")
+        c = _type_to_c_const_scoped(sym_use, t)
+        lines.append(f"#define {c:46s} {i}{role_cmt}")
     lines.append("")
 
     role_to_id = {
@@ -959,7 +969,7 @@ def make_scene_level_h(
         lines += [sep, f"/* Static entity placement -- g_{sym_use}_entities[]                        */", sep]
         lines.append(f"static const NgpngEnt g_{sym_use}_entities[] = {{")
         for ent in entities:
-            c = _type_to_c_const(str(ent.get("type") or ""))
+            c = _type_to_c_const_scoped(sym_use, str(ent.get("type") or ""))
             x, y, d = ent.get("x", 0), ent.get("y", 0), ent.get("data", 0)
             lines.append(f"    {{{c}, {int(x):3d}, {int(y):3d}, {int(d):3d}}},")
         lines.append("    {0}  /* sentinel (type=0) */")
@@ -1143,7 +1153,7 @@ def make_scene_level_h(
             for ent in (wave.get("entities", []) or []):
                 if not isinstance(ent, dict):
                     continue
-                c = _type_to_c_const(str(ent.get("type") or ""))
+                c = _type_to_c_const_scoped(sym_use, str(ent.get("type") or ""))
                 x, y = int(ent.get("x", 0)), int(ent.get("y", 0))
                 d = int(ent.get("data", 0))
                 flat_entries.append((c, x, y, d, delay))

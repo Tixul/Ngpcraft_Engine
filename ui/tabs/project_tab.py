@@ -701,6 +701,13 @@ class ProjectTab(ProjectPathMixin, QWidget):
         self._cmb_start_scene.currentIndexChanged.connect(self._on_start_scene_changed)
         start_row.addWidget(self._cmb_start_scene, 1)
         ll.addLayout(start_row)
+
+        quit_row = QHBoxLayout()
+        quit_row.addWidget(QLabel(tr("proj.pause_quit_scene")))
+        self._cmb_quit_scene = QComboBox()
+        self._cmb_quit_scene.currentIndexChanged.connect(self._on_quit_scene_changed)
+        quit_row.addWidget(self._cmb_quit_scene, 1)
+        ll.addLayout(quit_row)
         splitter.addWidget(left_w)
 
         # --- Right: scene detail ---
@@ -1313,6 +1320,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
                 restore_row = i
         self._scenes_list.blockSignals(False)
         self._populate_start_scene_combo()
+        self._populate_quit_scene_combo()
         count = self._scenes_list.count()
         if count > 0:
             if restore_row < 0:
@@ -2069,7 +2077,42 @@ class ProjectTab(ProjectPathMixin, QWidget):
             pass
         self._on_save()
 
-    def _refresh_detail(self, scene: dict | None) -> None: 
+    def _populate_quit_scene_combo(self) -> None:
+        game = self._data.setdefault("game", {}) if isinstance(self._data, dict) else {}
+        quit_label = str(game.get("pause_quit_scene") or "").strip() if isinstance(game, dict) else ""
+
+        self._cmb_quit_scene.blockSignals(True)
+        self._cmb_quit_scene.clear()
+        # First entry = restart current scene (no target)
+        self._cmb_quit_scene.addItem(tr("proj.pause_quit_restart"), "")
+
+        scenes = self._data.get("scenes", []) if isinstance(self._data, dict) else []
+        for s in scenes:
+            if not isinstance(s, dict):
+                continue
+            label = str(s.get("label", "?")).strip()
+            self._cmb_quit_scene.addItem(label, label)
+
+        idx = self._cmb_quit_scene.findData(quit_label) if quit_label else 0
+        self._cmb_quit_scene.setCurrentIndex(idx if idx >= 0 else 0)
+        self._cmb_quit_scene.blockSignals(False)
+
+    def _on_quit_scene_changed(self, _idx: int) -> None:
+        if not isinstance(self._data, dict):
+            return
+        label = str(self._cmb_quit_scene.currentData() or "").strip()
+        self._data.setdefault("game", {})
+        try:
+            # Empty string = restart current scene (default); omit key to keep JSON clean
+            if label:
+                self._data["game"]["pause_quit_scene"] = label
+            else:
+                self._data["game"].pop("pause_quit_scene", None)
+        except Exception:
+            pass
+        self._on_save()
+
+    def _refresh_detail(self, scene: dict | None) -> None:
         if scene is None: 
             self._scene_title.setText(tr("proj.no_scene_selected")) 
             self._scene_status.setText("")
@@ -2764,6 +2807,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
             self._data["scenes"] = scenes
             self._on_save()
         self._populate_start_scene_combo()
+        self._populate_quit_scene_combo()
 
     def current_scene(self) -> dict | None:
         """Public: currently selected scene (or None)."""

@@ -58,6 +58,15 @@ def _type_to_c_const(name: str) -> str:
     return f"ENT_{clean}" if clean else "ENT_UNKNOWN"
 
 
+def _type_to_c_const_scoped(scene_sym: str, name: str) -> str:
+    """Return a scene-prefixed entity type macro: ENT_{SCENE}_{TYPE}.
+    Matches the scene-prefixed macros emitted by scene_level_gen.py.
+    """
+    clean = _RE_TYPE_SAFE.sub("_", (name or "")).strip("_").upper()
+    prefix = _RE_TYPE_SAFE.sub("_", (scene_sym or "")).strip("_").upper()
+    return f"ENT_{prefix}_{clean}" if clean else f"ENT_{prefix}_UNKNOWN"
+
+
 def _name_to_c_id(name: str) -> str:
     """Return a C-safe identifier from a sprite/entity name (e.g. hyphens → underscores)."""
     return _RE_TYPE_SAFE.sub("_", (name or "")).strip("_")
@@ -1188,7 +1197,7 @@ def write_scene_loader_h(
         for i, t in enumerate(ent_draw_types):
             cid = _name_to_c_id(t)
             prefix = "if" if i == 0 else "else if"
-            lines.append(f"    {prefix} (type == (u8){_type_to_c_const(t)}) {{\n")
+            lines.append(f"    {prefix} (type == (u8){_type_to_c_const_scoped(safe, t)}) {{\n")
             lines.append(f"        anim = {cid}_anim;\n")
             lines.append(f"        count = {cid}_anim_count;\n")
             if t in layer1_draw_types:
@@ -1214,7 +1223,7 @@ def write_scene_loader_h(
         for i, t in enumerate(ent_draw_types):
             cid = _name_to_c_id(t)
             prefix = "if" if i == 0 else "else if"
-            lines.append(f"    {prefix} (type == (u8){_type_to_c_const(t)}) {{\n")
+            lines.append(f"    {prefix} (type == (u8){_type_to_c_const_scoped(safe, t)}) {{\n")
             lines.append(f"        anim = {cid}_anim;\n")
             lines.append(f"        count = {cid}_anim_count;\n")
             lines.append("    }\n")
