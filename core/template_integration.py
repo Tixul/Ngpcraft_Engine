@@ -792,24 +792,42 @@ def patch_makefile_for_autogen(*, template_root: Path, export_dir_rel: str, enab
     content = original_content
 
     # ------------------------------------------------------------------
-    # Patch: upgrade old hardcoded 'PYTHON := py -3' to the auto-detect
-    # block introduced in 0.8.  Silently fixes projects created with 0.5.
+    # Patch: upgrade Python detection to the 'where'-based form that works
+    # in both cmd.exe and MSYS/MinGW make on Windows.
+    #
+    # Three cases handled, oldest to newest:
+    #   0.5-: PYTHON := py -3          (hardcoded, no ifeq)
+    #   0.8 : $(shell py -3 --version >/dev/null ...)   (fails in cmd.exe)
+    #   0.9+: $(shell where py >nul ...)                (correct — skip)
     # ------------------------------------------------------------------
+    _NEW_PYTHON_WIN_LINE = (
+        "    PYTHON := $(shell (where py >nul 2>nul && echo py -3)"
+        " || (where python3 >nul 2>nul && echo python3) || echo python)"
+    )
     _NEW_PYTHON_BLOCK = (
         "# Auto-detect Python: prefer 'py -3' (Windows Launcher), fall back to 'python3', then 'python'\n"
+        "# If auto-detection fails, override here: PYTHON := py -3\n"
         "ifeq ($(OS),Windows_NT)\n"
-        "    PYTHON := $(shell py -3 --version >/dev/null 2>&1 && echo py -3 ||"
-        " (python3 --version >/dev/null 2>&1 && echo python3 || echo python))\n"
+        + _NEW_PYTHON_WIN_LINE + "\n"
         "else\n"
         "    PYTHON := $(shell command -v python3 2>/dev/null && echo python3 || echo python)\n"
         "endif"
     )
-    if "$(shell py -3 --version" not in content:
-        content = re.sub(
-            r"(?m)^PYTHON\s*:=\s*py\s+-3\s*$",
-            _NEW_PYTHON_BLOCK,
-            content,
-        )
+    if "where py >nul" not in content:
+        # Case 0.8: ifeq block with >/dev/null — patch only the Windows line
+        if re.search(r"(?m)^ *PYTHON\s*:=\s*\$\(shell\s+py\s+-3\s+--version\s+>/dev/null", content):
+            content = re.sub(
+                r"(?m)^ *PYTHON\s*:=\s*\$\(shell\s+py\s+-3\s+--version\s+>/dev/null[^\n]*$",
+                _NEW_PYTHON_WIN_LINE,
+                content,
+            )
+        # Case 0.5-: hardcoded PYTHON := py -3 (no ifeq) — replace with full block
+        else:
+            content = re.sub(
+                r"(?m)^PYTHON\s*:=\s*py\s+-3\s*$",
+                _NEW_PYTHON_BLOCK,
+                content,
+            )
 
     # ------------------------------------------------------------------
     # Patch: replace old inline Python copy one-liner with the
@@ -1206,6 +1224,21 @@ def patch_makefile_for_autogen(*, template_root: Path, export_dir_rel: str, enab
         except Exception:
             pass
     mk.write_text(new, encoding="utf-8")
+
+    # Sync build_utils.py from engine template so old projects always have the
+    # latest version (e.g. the "copy" command added in 0.8).
+    _engine_build_utils = (
+        Path(__file__).resolve().parent.parent
+        / "templates" / "NgpCraft_base_template" / "tools" / "build_utils.py"
+    )
+    _proj_build_utils = template_root / "tools" / "build_utils.py"
+    if _engine_build_utils.is_file() and _proj_build_utils.is_file():
+        try:
+            import shutil as _shu
+            _shu.copy2(str(_engine_build_utils), str(_proj_build_utils))
+        except Exception:
+            pass
+
     return (True, f"Patched {mk.name}")
 
 

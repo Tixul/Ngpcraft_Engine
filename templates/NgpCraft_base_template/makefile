@@ -23,8 +23,9 @@ THOME ?=
 export THOME
 
 # Auto-detect Python: prefer 'py -3' (Windows Launcher), fall back to 'python3', then 'python'
+# If auto-detection fails, override here: PYTHON := py -3
 ifeq ($(OS),Windows_NT)
-    PYTHON := $(shell py -3 --version >/dev/null 2>&1 && echo py -3 || (python3 --version >/dev/null 2>&1 && echo python3 || echo python))
+    PYTHON := $(shell (where py >nul 2>nul && echo py -3) || (where python3 >nul 2>nul && echo python3) || echo python)
 else
     PYTHON := $(shell command -v python3 2>/dev/null && echo python3 || echo python)
 endif

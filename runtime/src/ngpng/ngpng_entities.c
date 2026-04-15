@@ -193,7 +193,7 @@ void ngpng_world_tick(const NgpSceneDef *sc,
 void ngpng_world_init(const NgpSceneDef *sc)      { (void)sc; }
 void ngpng_world_on_enemy_killed(u8 pool_idx)     { (void)pool_idx; }
 void ngpng_world_tick(const NgpSceneDef *sc,
-    NgpngEnemy *enemies, u8 *enemy_active_count, u8 *enemy_alloc_idx,
+    void *enemies, u8 *enemy_active_count, u8 *enemy_alloc_idx,
     s16 cam_px, s16 cam_py)
 {
     (void)sc; (void)enemies; (void)enemy_active_count;
