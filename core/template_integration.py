@@ -791,6 +791,38 @@ def patch_makefile_for_autogen(*, template_root: Path, export_dir_rel: str, enab
     original_content = mk.read_text(encoding="utf-8", errors="replace")
     content = original_content
 
+    # ------------------------------------------------------------------
+    # Patch: upgrade old hardcoded 'PYTHON := py -3' to the auto-detect
+    # block introduced in 0.8.  Silently fixes projects created with 0.5.
+    # ------------------------------------------------------------------
+    _NEW_PYTHON_BLOCK = (
+        "# Auto-detect Python: prefer 'py -3' (Windows Launcher), fall back to 'python3', then 'python'\n"
+        "ifeq ($(OS),Windows_NT)\n"
+        "    PYTHON := $(shell py -3 --version >/dev/null 2>&1 && echo py -3 ||"
+        " (python3 --version >/dev/null 2>&1 && echo python3 || echo python))\n"
+        "else\n"
+        "    PYTHON := $(shell command -v python3 2>/dev/null && echo python3 || echo python)\n"
+        "endif"
+    )
+    if "$(shell py -3 --version" not in content:
+        content = re.sub(
+            r"(?m)^PYTHON\s*:=\s*py\s+-3\s*$",
+            _NEW_PYTHON_BLOCK,
+            content,
+        )
+
+    # ------------------------------------------------------------------
+    # Patch: replace old inline Python copy one-liner with the
+    # build_utils.py copy command introduced in 0.8.
+    # Old: $(PYTHON) -c "import os, shutil; os.makedirs('bin'...
+    # New: $(PYTHON) tools/build_utils.py copy $(TARGET_NGP) ...
+    # ------------------------------------------------------------------
+    content = re.sub(
+        r'\$\(PYTHON\)\s+-c\s+"import os,\s*shutil;[^"\n]*"',
+        "$(PYTHON) tools/build_utils.py copy $(TARGET_NGP) $(OUTPUT_DIR)/$(NAME).ngc",
+        content,
+    )
+
     if "NGP_ENABLE_SOUND ?=" not in content:
         if re.search(r"(?m)^NGP_ENABLE_FLASH_SAVE \?= .*$", content):
             content = re.sub(
