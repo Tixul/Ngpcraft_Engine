@@ -3930,11 +3930,54 @@ def write_autorun_main_c(
         c.append("/* N=0 NE=1 E=2 SE=3 S=4 SW=5 W=6 NW=7  (values x16 fixed-point) */\n")
         c.append("static const s8 ngpng_td_sin8[8] = { 0, 11, 16, 11,  0, -11, -16, -11 };\n")
         c.append("static const s8 ngpng_td_cos8[8] = {-16,-11,  0, 11, 16,  11,   0, -11 };\n")
-        c.append("/* Frame index for each angle (SW/W/NW mirror SE/E/NE with H-flip) */\n")
-        c.append("static const u8 ngpng_td_angle_frame[8] = { 0, 1, 2, 3, 4, 3, 2, 1 };\n")
-        c.append("static const u8 ngpng_td_angle_fliph[8] = { 0, 0, 0, 0, 0, 1, 1, 1 };\n")
+        # Detect per-direction walk animations on the first player sprite.
+        # walk_up / walk_down / walk_left / walk_right in sprite "anims" dict
+        # override the static dir-frame table with animated cycling tables.
+        _p0_anims = (players[0].get("anims") or {}) if players else {}
+        _p0_fc    = int((players[0].get("frame_count") or 1) if players else 1)
+        def _td_anim(key: str) -> tuple[int, int, int]:
+            """Return (start, count, spd) for a named anim, or (0, 0, 6) if absent."""
+            a = _p0_anims.get(key) or {}
+            s = max(0, int(a.get("start", 0) or 0))
+            cnt = max(0, int(a.get("count", 0) or 0))
+            spd = max(1, int(a.get("spd", 6) or 6))
+            if s >= _p0_fc: cnt = 0
+            if cnt > 0: cnt = min(cnt, max(0, _p0_fc - s))
+            return s, cnt, spd
+        _wu_s, _wu_c, _wu_spd = _td_anim("walk_up")
+        _wd_s, _wd_c, _wd_spd = _td_anim("walk_down")
+        _wl_s, _wl_c, _wl_spd = _td_anim("walk_left")
+        _wr_s, _wr_c, _wr_spd = _td_anim("walk_right")
+        _has_td_walk_anims = (_wu_c > 0 and _wd_c > 0 and (_wl_c > 0 or _wr_c > 0))
+        if _has_td_walk_anims:
+            # Diagonals: horizontal direction takes priority (NE/SE→right, SW/NW→left).
+            # If walk_left is absent, mirror walk_right (and vice-versa).
+            if _wl_c == 0: _wl_s, _wl_c = _wr_s, _wr_c
+            if _wr_c == 0: _wr_s, _wr_c = _wl_s, _wl_c
+            _td_walk_spd = max(1, min(_wu_spd, _wd_spd))
+            # angle: N=0 NE=1 E=2 SE=3 S=4 SW=5 W=6 NW=7
+            _af = [_wu_s, _wr_s, _wr_s, _wr_s, _wd_s, _wl_s, _wl_s, _wl_s]
+            _ac = [_wu_c, _wr_c, _wr_c, _wr_c, _wd_c, _wl_c, _wl_c, _wl_c]
+            _af_str = ", ".join(str(v) for v in _af)
+            _ac_str = ", ".join(str(v) for v in _ac)
+            c.append(f"/* Walk anim base frame per angle — N→up({_wu_s}), E→right({_wr_s}), S→down({_wd_s}), W→left({_wl_s}) */\n")
+            c.append(f"static const u8 ngpng_td_angle_frame[8]  = {{ {_af_str} }};\n")
+            c.append(f"/* Walk cycle length per angle */\n")
+            c.append(f"static const u8 ngpng_td_angle_fcount[8] = {{ {_ac_str} }};\n")
+            c.append("/* No H-flip: all 4 directions have dedicated frames */\n")
+            c.append("static const u8 ngpng_td_angle_fliph[8]  = { 0, 0, 0, 0, 0, 0, 0, 0 };\n")
+        else:
+            _has_td_walk_anims = False
+            c.append("/* Frame index for each angle (SW/W/NW mirror SE/E/NE with H-flip) */\n")
+            c.append("static const u8 ngpng_td_angle_frame[8] = { 0, 1, 2, 3, 4, 3, 2, 1 };\n")
+            c.append("static const u8 ngpng_td_angle_fliph[8] = { 0, 0, 0, 0, 0, 1, 1, 1 };\n")
         c.append("static u8 s_td_angle = 0u; /* current facing: 0=N..7=NW */\n")
         c.append("static u8 s_td_turn_cd = 0u; /* turn rate cooldown */\n")
+        if _has_td_walk_anims:
+            c.append("static u8 s_td_anim_tick = 0u; /* walk anim frame timer */\n")
+            c.append("static u8 s_td_anim_sub  = 0u; /* frame offset within walk cycle */\n")
+            c.append("static u8 s_td_prev_base = 0u; /* detect direction change */\n")
+            c.append(f"#ifndef TD_WALK_SPD\n#define TD_WALK_SPD {_td_walk_spd}u  /* frames per walk anim step */\n#endif\n")
         if has_topdown_vehicle or has_topdown_advance or _has_mixed_td_vehicle:
             c.append("static s16 s_td_speed = 0;  /* scalar speed x16 */\n")
             c.append("static u8 s_td_decel_cd = 0u; /* decel rate cooldown */\n")
@@ -4953,6 +4996,26 @@ def write_autorun_main_c(
             c.append(f"            }}\n")
         else:
             c.append(f"            {VAR}_CTRL_UPDATE(s_{n});\n")
+        if _has_td_walk_anims and has_topdown_physics:
+            # Animate walk cycle: advance sub-frame counter; reset on direction change or idle.
+            c.append(f"            /* Walk animation cycling */\n")
+            c.append(f"            {{\n")
+            c.append(f"                u8 _td_base = s_{n}.frame;\n")
+            c.append(f"                u8 _td_moving = (u8)(s_{n}.vx != 0 || s_{n}.vy != 0);\n")
+            c.append(f"                if (!_td_moving) {{\n")
+            c.append(f"                    s_td_anim_tick = 0u; s_td_anim_sub = 0u;\n")
+            c.append(f"                }} else {{\n")
+            c.append(f"                    if (_td_base != s_td_prev_base) {{ s_td_anim_tick = 0u; s_td_anim_sub = 0u; }}\n")
+            c.append(f"                    s_td_anim_tick = (u8)(s_td_anim_tick + 1u);\n")
+            c.append(f"                    if (s_td_anim_tick >= (u8)TD_WALK_SPD) {{\n")
+            c.append(f"                        s_td_anim_tick = 0u;\n")
+            c.append(f"                        s_td_anim_sub = (u8)(s_td_anim_sub + 1u);\n")
+            c.append(f"                        if (s_td_anim_sub >= ngpng_td_angle_fcount[s_td_angle]) s_td_anim_sub = 0u;\n")
+            c.append(f"                    }}\n")
+            c.append(f"                }}\n")
+            c.append(f"                s_td_prev_base = _td_base;\n")
+            c.append(f"                s_{n}.frame = (u8)(_td_base + s_td_anim_sub);\n")
+            c.append(f"            }}\n")
         if has_topdown_physics:
             if has_topdown_vehicle or has_topdown_advance:
                 c.append(f"            _td_vx_pre = s_{n}.vx;\n")
