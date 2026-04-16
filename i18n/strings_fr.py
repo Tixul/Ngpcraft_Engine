@@ -4,10 +4,14 @@ STRINGS_FR: dict[str, str] = {
     # Application
     "app.title": "NgpCraft Engine",
     "app.restart_for_lang": "Redémarrez l'application pour appliquer la langue.",
-    "app.mode_simple":    "⬡ Mode Simplifié",
-    "app.mode_simple_tt": "Seuls les onglets asset sont affichés (Projet, Palette, Éditeur, Aide).\nCliquez pour révéler tous les onglets game-dev (Level, Sprite Setup, Bundle…).",
-    "app.mode_full":      "⬡ Mode Complet",
-    "app.mode_full_tt":   "Tous les onglets sont visibles (Éditeur de niveau, Sprite Setup, Bundle, Tilemap, VRAM Map).\nCliquez pour repasser en mode simplifié.",
+    "group.project":    "Projet",
+    "group.project_tt": "Projet, Globals",
+    "group.scene":      "Scène",
+    "group.scene_tt":   "Level, Palette, Tilemap, Dialogues, Sprite Setup",
+    "group.tools":      "Outils",
+    "group.tools_tt":   "Éditeur, VRAM Map, Bundle",
+    "group.help":       "Aide",
+    "group.help_tt":    "Documentation et aide en ligne",
 
     "nav.title": "Navigator",
     "nav.refresh": "Rafraichir",
@@ -116,6 +120,23 @@ STRINGS_FR: dict[str, str] = {
     "tab.help": "Aide",
     "tab.hitbox": "Sprite Setup",
     "tab.globals": "Globals",
+    "tab.font":    "Police",
+    "font.spec_title": "Format PNG attendu",
+    "font.spec_body": (
+        "• 128 × 48 pixels (16 colonnes × 6 lignes)\n"
+        "• 96 tiles de 8×8 px — caractères ASCII 32 → 127  (espace → ~)\n"
+        "• Ordre de lecture : gauche→droite, haut→bas\n"
+        "• Tile (col 0, ligne 0) = ASCII 32 espace\n"
+        "• Tile (col 1, ligne 0) = ASCII 33  !\n"
+        "• Tile (col 0, ligne 1) = ASCII 48  0\n"
+        "• Max 3 couleurs visibles + transparent\n"
+        "• Noir pur (0,0,0) ou alpha < 128 = couleur transparente (index 0)\n"
+        "• Les slots VRAM 32–127 sont occupés — cocher « Désactiver sysfont » est obligatoire."
+    ),
+    "font.preview_label":  "Aperçu (cliquer pour charger)",
+    "font.bg_light":       "Fond clair",
+    "font.bg_dark":        "Fond sombre",
+    "font.bg_toggle_tt":   "Basculer le fond de prévisualisation entre clair et sombre",
     "glob.entity_types_tab": "Types d'entités",
     "proj.scene_audio_group": "Audio scène",
     "glob.vars_hint": "8 slots fixes (0–7). Cliquez sur une cellule pour lui donner un nom. Les flags sont des booléens (0/1) contrôlés par les triggers. Les variables sont des compteurs u8 (0–255).",
@@ -416,6 +437,17 @@ STRINGS_FR: dict[str, str] = {
     "proj.export_dir_auto": "(auto : à côté des PNG)",
     "proj.activation_radius":    "⚠ Rayon d'activation (tiles) — réglage performance :",
     "proj.activation_radius_tt": "Nombre de tiles au-delà du bord de l'écran dans lesquels les ennemis restent actifs.\n\n0 = désactivé (tous les ennemis toujours actifs, peut causer du lag avec beaucoup d'ennemis).\n\nSi la scène lag → réduire cette valeur (ex. 6–8) pour n'activer que les ennemis proches de la caméra.\nValeur trop basse → les ennemis apparaissent brusquement à l'écran.",
+    "proj.dynamic_palettes":     "Recyclage dynamique des palettes (LRU)",
+    "proj.dynamic_palettes_tt":  "Recycle les 16 slots de palette sprite à l'exécution via une politique d'éviction LRU.\n\nUtile quand le projet a plus de 16 types d'entités avec des couleurs différentes.\n\nCoût CPU : quelques dizaines de cycles par spawn/despawn — négligeable dans la plupart des cas.\nDésactivé : les slots palette sont assignés à la compilation (baked dans les données ROM).",
+    "proj.no_sysfont":           "Désactiver la police système BIOS (libère les tiles 32–127)",
+    "proj.no_sysfont_tt":        "Par défaut, le BIOS charge sa police intégrée dans les slots tiles 32–127 (96 tiles × 8 mots).\n\nCocher cette option supprime cet appel et libère ces 96 slots pour tes propres tiles ou une police custom.\n\n⚠ Les fonctions ngpc_text_* utilisent la sysfont. Si tu les utilises, ne pas cocher cette option.\nLes tiles 0–31 restent réservés système quelle que soit l'option.",
+    "proj.custom_font_section":  "Police personnalisée",
+    "proj.custom_font":          "Police custom (PNG 128×48) :",
+    "proj.custom_font_tt":       "PNG tilesheet 128×48 px contenant 96 caractères ASCII (32–127) en ordre croissant.\nLa police est chargée au démarrage à la place de la sysfont BIOS.\nToutes les fonctions ngpc_text_* continuent de fonctionner sans modification.",
+    "proj.custom_font_none":     "(aucune — sysfont BIOS)",
+    "proj.custom_font_browse":   "Parcourir…",
+    "proj.custom_font_clear_tt": "Retirer la police custom (revenir à la sysfont BIOS)",
+    "proj.custom_font_drop":     "Cliquer pour charger une police PNG 128×48…",
     "proj.scenes_title": "Scènes",
     "proj.new_scene": "Nouvelle…",
     "proj.rename_scene": "Renommer…",
@@ -2974,4 +3006,12 @@ STRINGS_FR: dict[str, str] = {
     "level.trigger_cond.entity_type_spawned_ge":    "[type] spawnés ≥ N",
     "level.trigger_cond.on_custom_event":            "Événement personnalisé",
     "level.trigger_cond_entity_type_tt":            "Type d'entité cible",
+
+    # Onglet Carte des scènes
+    "tab.map":              "Carte",
+    "map.fit":              "Ajuster",
+    "map.fit_tt":           "Recentre la vue sur toutes les scènes",
+    "map.auto_layout":      "Auto-disposition",
+    "map.auto_layout_tt":   "Réorganise automatiquement les cartes en grille",
+    "map.hint":             "Double-clic → ouvrir scène  •  Drag → repositionner  •  Molette → zoom",
 }

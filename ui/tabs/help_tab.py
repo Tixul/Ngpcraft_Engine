@@ -153,42 +153,43 @@ dessin (Aseprite) et le pipeline C (ngpc_sprite_export.py, ngpc_tilemap.py).</p>
   <li>Découper automatiquement un sprite multi-couleurs en couches superposées.</li>
 </ul>
 
-<h2>Deux modes d'utilisation</h2>
-<p>Le bouton <b>⬡ Mode Simplifié / Mode Complet</b> en bas à droite de la fenêtre contrôle les onglets visibles.</p>
+<h2>Groupes d'onglets</h2>
+<p>Les onglets sont organisés en <b>quatre groupes</b> sélectionnables via la barre de boutons en haut :</p>
 <table>
-  <tr><th>Mode</th><th>Onglets visibles</th><th>Pour qui</th></tr>
-  <tr><td><b>⬡ Mode Simplifié</b></td><td>Projet · Palette · Éditeur · Aide</td><td>Gestion d'assets, export sprite/BG</td></tr>
-  <tr><td><b>⬡ Mode Complet</b></td><td>Tous les onglets</td><td>Développement jeu no-code complet</td></tr>
+  <tr><th>Groupe</th><th>Onglets</th><th>Usage</th></tr>
+  <tr><td><b>Projet</b></td><td>Projet · Globals</td><td>Gestion du projet et des assets globaux</td></tr>
+  <tr><td><b>Scène</b></td><td>Level · Palette · Tilemap · Dialogues · Sprite Setup</td><td>Édition de la scène active</td></tr>
+  <tr><td><b>Outils</b></td><td>Éditeur · VRAM Map · Bundle</td><td>Retouche pixel, budget VRAM, export batch</td></tr>
+  <tr><td><b>Aide</b></td><td>Aide</td><td>Documentation en ligne</td></tr>
 </table>
-<p>Le mode choisi est mémorisé entre les sessions.<br>
-Raccourci clavier : <code>F12</code> pour basculer sans utiliser la souris.</p>
+<p>Le groupe actif est mémorisé entre les sessions. Le dernier onglet actif dans chaque groupe est aussi restauré.</p>
 
 <h2>Navigation globale</h2>
 <table>
 <tr><th>Touche</th><th>Action</th></tr>
-<tr><td><b>Ctrl+Tab</b></td><td>Onglet suivant (visible)</td></tr>
-<tr><td><b>Ctrl+Shift+Tab</b></td><td>Onglet précédent (visible)</td></tr>
-<tr><td><b>F12</b></td><td>Basculer Mode Simplifié ↔ Mode Complet</td></tr>
+<tr><td><b>Ctrl+Tab</b></td><td>Onglet suivant (dans le groupe actif)</td></tr>
+<tr><td><b>Ctrl+Shift+Tab</b></td><td>Onglet précédent (dans le groupe actif)</td></tr>
 </table>
 
 <h2>Les onglets</h2>
 <table>
-  <tr><th>Onglet</th><th>Rôle</th><th>Mode</th></tr>
-  <tr><td><b>Projet</b></td><td>Vue d'ensemble des assets par scène, budget VRAM, export C</td><td>Les deux</td></tr>
-  <tr><td><b>Palette</b></td><td>Éditeur de palette RGB444 en temps réel, fixed-palette</td><td>Les deux</td></tr>
-  <tr><td><b>Éditeur</b></td><td>Retouche pixel rapide (pencil/fill/undo)</td><td>Les deux</td></tr>
-  <tr><td><b>VRAM Map</b></td><td>Carte graphique des 512 tiles et 16 palettes sprites</td><td>Complet</td></tr>
-  <tr><td><b>Bundle</b></td><td>Export batch avec budget tile/palette automatique</td><td>Complet</td></tr>
-  <tr><td><b>Tilemap</b></td><td>Preview ngpc_tilemap.py avant export</td><td>Complet</td></tr>
-  <tr><td><b>Level</b></td><td>Éditeur de niveau : entités, vagues, régions, triggers, procgen</td><td>Complet</td></tr>
-  <tr><td><b>Dialogues</b></td><td>Banque de dialogues par scène : lignes (locuteur/texte/portrait), palette texte, fond custom, aperçu NGPC, CSV import/export → <code>scene_*_dialogs.h</code></td><td>Complet</td></tr>
-  <tr><td><b>Hitbox</b></td><td>Éditeur AABB par frame + props physiques/combat → export C</td><td>Complet</td></tr>
-  <tr><td><b>Aide</b></td><td>Ce panneau</td><td>Les deux</td></tr>
+  <tr><th>Onglet</th><th>Groupe</th><th>Rôle</th></tr>
+  <tr><td><b>Projet</b></td><td>Projet</td><td>Vue d'ensemble des assets par scène, budget VRAM, export C</td></tr>
+  <tr><td><b>Globals</b></td><td>Projet</td><td>Variables globales, manifest audio, entités globales</td></tr>
+  <tr><td><b>Level</b></td><td>Scène</td><td>Éditeur de niveau : entités, vagues, régions, triggers, procgen</td></tr>
+  <tr><td><b>Palette</b></td><td>Scène</td><td>Éditeur de palette RGB444 en temps réel, fixed-palette</td></tr>
+  <tr><td><b>Tilemap</b></td><td>Scène</td><td>Preview ngpc_tilemap.py avant export</td></tr>
+  <tr><td><b>Dialogues</b></td><td>Scène</td><td>Banque de dialogues par scène → <code>scene_*_dialogs.h</code></td></tr>
+  <tr><td><b>Sprite Setup</b></td><td>Scène</td><td>Éditeur AABB par frame + props physiques/combat → export C</td></tr>
+  <tr><td><b>Éditeur</b></td><td>Outils</td><td>Retouche pixel rapide (pencil/fill/undo)</td></tr>
+  <tr><td><b>VRAM Map</b></td><td>Outils</td><td>Carte graphique des 512 tiles et 16 palettes sprites</td></tr>
+  <tr><td><b>Bundle</b></td><td>Outils</td><td>Export batch avec budget tile/palette automatique</td></tr>
+  <tr><td><b>Aide</b></td><td>Aide</td><td>Ce panneau</td></tr>
 </table>
 
 <h2>Démarrage rapide — assets seulement</h2>
 <ol>
-  <li>Ouvrez l'onglet <b>Palette</b>.</li>
+  <li>Groupe <b>Scène</b> → onglet <b>Palette</b>.</li>
   <li>Glissez un PNG ou cliquez <i>Ouvrir…</i></li>
   <li>Observez l'aperçu HW (RGB444) et la palette détectée.</li>
   <li>Cliquez un swatch pour modifier une couleur.</li>
@@ -197,11 +198,10 @@ Raccourci clavier : <code>F12</code> pour basculer sans utiliser la souris.</p>
 
 <h2>Démarrage rapide — développement jeu</h2>
 <ol>
-  <li>Passez en <b>Mode Complet</b> (bouton en bas à droite).</li>
-  <li>Onglet <b>Projet</b> : créez une scène, ajoutez vos sprites et tilemaps.</li>
-  <li>Onglet <b>Hitbox</b> : définissez les AABB et props physiques de chaque sprite.</li>
-  <li>Onglet <b>Level</b> : placez les entités, créez vagues, régions et triggers.</li>
-  <li>Onglet <b>Projet → Export</b> : générez <code>_scene.h</code> et incluez-le dans votre jeu C.</li>
+  <li>Groupe <b>Projet</b> → onglet <b>Projet</b> : créez une scène, ajoutez vos sprites et tilemaps.</li>
+  <li>Groupe <b>Scène</b> → onglet <b>Sprite Setup</b> : définissez les AABB et props physiques.</li>
+  <li>Groupe <b>Scène</b> → onglet <b>Level</b> : placez les entités, créez vagues, régions et triggers.</li>
+  <li>Groupe <b>Projet</b> → onglet <b>Projet → Export</b> : générez <code>_scene.h</code> et incluez-le dans votre jeu C.</li>
 </ol>
 
 <h2>Sauvegarde automatique</h2>
@@ -662,6 +662,54 @@ if (ngpc_gv_dispatch(t-&gt;action, t-&gt;a0, t-&gt;a1)) continue;</pre>
 (guard <code>NGPC_GAME_VARS_GEN_H</code>) est automatiquement généré dans <b>Dossier export</b>.
 Il contient les constantes <code>GAME_FLAG_x</code>, <code>GAME_VAR_x</code> et le tableau
 <code>g_game_var_inits[]</code>.</p>
+
+<h2>Réglages performance</h2>
+<p>Trois options projet agissent sur le comportement à l'exécution :</p>
+<ul>
+  <li><b>Rayon d'activation (tiles)</b> — quand &gt; 0, les ennemis hors de cette zone
+      autour de la caméra sont mis en veille. Utile pour les grandes tilemaps avec beaucoup
+      d'ennemis. <code>0</code> = tous toujours actifs.</li>
+  <li><b>Recyclage dynamique des palettes (LRU)</b> — recycle les 16 slots palette sprite
+      à l'exécution. Utile quand le projet a plus de 16 types d'entités avec des couleurs
+      différentes. Coût CPU négligeable (quelques dizaines de cycles par spawn/despawn).
+      <br>Désactivé : les slots sont assignés à la compilation (baked dans la ROM).</li>
+  <li><b>Désactiver la police système BIOS</b> — par défaut le BIOS charge sa police
+      intégrée dans les tiles 32–127 (96 tiles × 8 mots). Cocher cette option supprime
+      cet appel et libère ces 96 slots pour tes propres tiles ou une police custom.
+      Définit <code>NGPNG_NO_SYSFONT=1</code> dans le Makefile.
+      <br>⚠ Si tu utilises <code>ngpc_text_*</code>, ne pas cocher cette option.</li>
+</ul>
+<p>Ces options sont indépendantes — elles peuvent être combinées librement.</p>
+
+<h2>Police personnalisée (Custom Font)</h2>
+<p>Le champ <b>Police custom (PNG 128×48)</b> permet de remplacer la police système BIOS
+par ta propre police 8×8.  Une fois un PNG sélectionné :</p>
+<ul>
+  <li>L'option "Désactiver la police système BIOS" est cochée automatiquement.</li>
+  <li>Au prochain export, <code>ngpc_font_export.py</code> génère
+      <code>GraphX/ngpc_custom_font.c/.h</code>.</li>
+  <li>Le <code>main.c</code> généré appelle <code>ngpc_custom_font_load()</code>
+      à la place de <code>ngpc_load_sysfont()</code>.</li>
+  <li>Toutes les fonctions <code>ngpc_text_*</code> continuent de fonctionner sans
+      modification (même mapping ASCII → tile index).</li>
+</ul>
+<h3>Format PNG obligatoire</h3>
+<pre>Dimensions  : 128 × 48 pixels  (16 chars × 8 px / 6 lignes × 8 px)
+Tiles       : 96 au total  →  ASCII 32 (espace) … 127 (DEL)
+Couleurs    : 4 max (2bpp hardware)
+  index 0  : fond / transparent  (alpha = 0  OU  noir pur #000000)
+  index 1  : couleur texte principale
+  index 2-3: secondaire, tertiaire (ombre, contour…)  — optionnel
+
+Ordre des tiles (lecture gauche→droite, ligne par ligne) :
+  Ligne 0  ASCII  32– 47  :  espace ! " # $ % &amp; ' ( ) * + , - . /
+  Ligne 1  ASCII  48– 63  :  0 1 2 3 4 5 6 7 8 9 : ; &lt; = &gt; ?
+  Ligne 2  ASCII  64– 79  :  @ A B C D E F G H I J K L M N O
+  Ligne 3  ASCII  80– 95  :  P Q R S T U V W X Y Z [ \ ] ^ _
+  Ligne 4  ASCII  96–111  :  ` a b c d e f g h i j k l m n o
+  Ligne 5  ASCII 112–127  :  p q r s t u v w x y z { | } ~  [DEL]</pre>
+<p><b>Outil :</b> <code>tools/ngpc_font_export.py</code> — utilisable aussi en ligne de commande :<br>
+<code>python tools/ngpc_font_export.py font.png -o GraphX/ngpc_custom_font</code></p>
 
 <h2>Budget global</h2>
 <p>La barre inférieure affiche le budget total du projet :</p>
@@ -1704,42 +1752,43 @@ and the C pipeline (ngpc_sprite_export.py, ngpc_tilemap.py).</p>
   <li>Automatically split a multi-color sprite into stacked layers.</li> 
 </ul> 
 
-<h2>Two modes of use</h2>
-<p>The <b>⬡ Simple mode / Full mode</b> button at the bottom-right of the window controls which tabs are visible.</p>
+<h2>Tab groups</h2>
+<p>Tabs are organised into <b>four groups</b> selectable from the button bar at the top:</p>
 <table>
-  <tr><th>Mode</th><th>Visible tabs</th><th>For whom</th></tr>
-  <tr><td><b>⬡ Simple mode</b></td><td>Project · Palette · Editor · Help</td><td>Asset management, sprite/BG export</td></tr>
-  <tr><td><b>⬡ Full mode</b></td><td>All tabs</td><td>Full no-code game development</td></tr>
+  <tr><th>Group</th><th>Tabs</th><th>Use</th></tr>
+  <tr><td><b>Project</b></td><td>Project · Globals</td><td>Project and global asset management</td></tr>
+  <tr><td><b>Scene</b></td><td>Level · Palette · Tilemap · Dialogues · Sprite Setup</td><td>Editing the active scene</td></tr>
+  <tr><td><b>Tools</b></td><td>Editor · VRAM Map · Bundle</td><td>Pixel retouch, VRAM budget, batch export</td></tr>
+  <tr><td><b>Help</b></td><td>Help</td><td>Inline documentation</td></tr>
 </table>
-<p>Your choice is remembered between sessions.<br>
-Keyboard shortcut: <code>F12</code> to toggle without using the mouse.</p>
+<p>The active group is remembered between sessions. The last active tab within each group is also restored.</p>
 
 <h2>Global navigation</h2>
 <table>
 <tr><th>Key</th><th>Action</th></tr>
-<tr><td><b>Ctrl+Tab</b></td><td>Next tab (visible)</td></tr>
-<tr><td><b>Ctrl+Shift+Tab</b></td><td>Previous tab (visible)</td></tr>
-<tr><td><b>F12</b></td><td>Toggle Simple ↔ Full mode</td></tr>
+<tr><td><b>Ctrl+Tab</b></td><td>Next tab (within active group)</td></tr>
+<tr><td><b>Ctrl+Shift+Tab</b></td><td>Previous tab (within active group)</td></tr>
 </table>
 
 <h2>Tabs</h2>
 <table>
-  <tr><th>Tab</th><th>Role</th><th>Mode</th></tr>
-  <tr><td><b>Project</b></td><td>Scene asset overview, VRAM budget, C export</td><td>Both</td></tr>
-  <tr><td><b>Palette</b></td><td>Real-time RGB444 palette editor, fixed-palette</td><td>Both</td></tr>
-  <tr><td><b>Editor</b></td><td>Quick pixel retouch (pencil/fill/undo)</td><td>Both</td></tr>
-  <tr><td><b>VRAM Map</b></td><td>Visual map of 512 tiles and 16 sprite palettes</td><td>Full</td></tr>
-  <tr><td><b>Bundle</b></td><td>Batch export with automatic tile/palette budgeting</td><td>Full</td></tr>
-  <tr><td><b>Tilemap</b></td><td>ngpc_tilemap.py preview before export</td><td>Full</td></tr>
-  <tr><td><b>Level</b></td><td>Level editor: entities, waves, regions, triggers, procgen</td><td>Full</td></tr>
-  <tr><td><b>Dialogues</b></td><td>Per-scene dialogue banks: lines (speaker/text/portrait), text palette, custom background, NGPC preview, CSV import/export → <code>scene_*_dialogs.h</code></td><td>Full</td></tr>
-  <tr><td><b>Hitbox</b></td><td>Per-frame AABB editor + physics/combat props → C export</td><td>Full</td></tr>
-  <tr><td><b>Help</b></td><td>This panel</td><td>Both</td></tr>
+  <tr><th>Tab</th><th>Group</th><th>Role</th></tr>
+  <tr><td><b>Project</b></td><td>Project</td><td>Scene asset overview, VRAM budget, C export</td></tr>
+  <tr><td><b>Globals</b></td><td>Project</td><td>Global variables, audio manifest, global entity types</td></tr>
+  <tr><td><b>Level</b></td><td>Scene</td><td>Level editor: entities, waves, regions, triggers, procgen</td></tr>
+  <tr><td><b>Palette</b></td><td>Scene</td><td>Real-time RGB444 palette editor, fixed-palette</td></tr>
+  <tr><td><b>Tilemap</b></td><td>Scene</td><td>ngpc_tilemap.py preview before export</td></tr>
+  <tr><td><b>Dialogues</b></td><td>Scene</td><td>Per-scene dialogue banks → <code>scene_*_dialogs.h</code></td></tr>
+  <tr><td><b>Sprite Setup</b></td><td>Scene</td><td>Per-frame AABB editor + physics/combat props → C export</td></tr>
+  <tr><td><b>Editor</b></td><td>Tools</td><td>Quick pixel retouch (pencil/fill/undo)</td></tr>
+  <tr><td><b>VRAM Map</b></td><td>Tools</td><td>Visual map of 512 tiles and 16 sprite palettes</td></tr>
+  <tr><td><b>Bundle</b></td><td>Tools</td><td>Batch export with automatic tile/palette budgeting</td></tr>
+  <tr><td><b>Help</b></td><td>Help</td><td>This panel</td></tr>
 </table>
 
 <h2>Quick Start — assets only</h2>
 <ol>
-  <li>Open the <b>Palette</b> tab.</li>
+  <li><b>Scene</b> group → <b>Palette</b> tab.</li>
   <li>Drag a PNG onto the tab, or click <i>Open…</i></li>
   <li>Observe the HW preview (RGB444) and the detected palette.</li>
   <li>Click a swatch to edit a color.</li>
@@ -1748,11 +1797,10 @@ Keyboard shortcut: <code>F12</code> to toggle without using the mouse.</p>
 
 <h2>Quick Start — game development</h2>
 <ol>
-  <li>Switch to <b>Full mode</b> (button at bottom-right).</li>
-  <li><b>Project</b> tab: create a scene, add your sprites and tilemaps.</li>
-  <li><b>Hitbox</b> tab: define per-frame AABBs and physics props for each sprite.</li>
-  <li><b>Level</b> tab: place entities, create waves, regions, and triggers.</li>
-  <li><b>Project → Export</b>: generate <code>_scene.h</code> and include it in your C game.</li>
+  <li><b>Project</b> group → <b>Project</b> tab: create a scene, add your sprites and tilemaps.</li>
+  <li><b>Scene</b> group → <b>Sprite Setup</b> tab: define per-frame AABBs and physics props.</li>
+  <li><b>Scene</b> group → <b>Level</b> tab: place entities, create waves, regions, and triggers.</li>
+  <li><b>Project</b> group → <b>Project → Export</b>: generate <code>_scene.h</code> and include it in your C game.</li>
 </ol>
 
 <h2>Auto-save</h2>
@@ -2121,6 +2169,52 @@ lets you define global numeric constants for the project:</p>
 #endif /* NGPC_PROJECT_CONSTANTS_H */</pre>
 <p>Include it in your C code: <code>#include "ngpc_project_constants.h"</code><br>
 The file is only written when at least one constant is defined and <b>Export dir</b> is configured.</p>
+
+<h2>Performance settings</h2>
+<p>Three project-level options affect runtime behavior:</p>
+<ul>
+  <li><b>Activation radius (tiles)</b> — when &gt; 0, enemies outside this radius around the
+      camera are suspended. Useful for large tilemaps with many enemies. <code>0</code> = all always active.</li>
+  <li><b>Dynamic palette recycling (LRU)</b> — recycles the 16 sprite palette slots at runtime
+      using an LRU eviction policy. Useful when your project has more than 16 entity types
+      with different colors. CPU cost is negligible (a few dozen cycles per spawn/despawn).
+      <br>Disabled: palette slots are assigned at compile time (baked in ROM data).</li>
+  <li><b>Disable BIOS system font</b> — by default the BIOS loads its built-in font into tile
+      slots 32–127 (96 tiles × 8 words). Checking this option skips that call and frees those
+      96 slots for your own tiles or a custom font. Sets <code>NGPNG_NO_SYSFONT=1</code> in the
+      Makefile. <br>⚠ Do not enable this if you use <code>ngpc_text_*</code> functions.</li>
+</ul>
+<p>These options are independent and can be freely combined.</p>
+
+<h2>Custom Font</h2>
+<p>The <b>Custom font (PNG 128×48)</b> field lets you replace the BIOS system font with
+your own 8×8 pixel font.  When a PNG is selected:</p>
+<ul>
+  <li>"Disable BIOS system font" is checked automatically.</li>
+  <li>On the next export, <code>ngpc_font_export.py</code> generates
+      <code>GraphX/ngpc_custom_font.c/.h</code>.</li>
+  <li>The generated <code>main.c</code> calls <code>ngpc_custom_font_load()</code>
+      instead of <code>ngpc_load_sysfont()</code>.</li>
+  <li>All <code>ngpc_text_*</code> functions keep working unchanged
+      (same ASCII → tile index mapping).</li>
+</ul>
+<h3>Required PNG format</h3>
+<pre>Dimensions : 128 × 48 pixels  (16 chars × 8 px / 6 rows × 8 px)
+Tiles      : 96 total  →  ASCII 32 (space) … 127 (DEL)
+Colors     : 4 max (2bpp hardware limit)
+  index 0  : background / transparent  (alpha = 0  OR  pure black #000000)
+  index 1  : primary text color
+  index 2-3: secondary / tertiary (shadow, outline…)  — optional
+
+Tile order (left to right, row by row):
+  Row 0  ASCII  32– 47  :  space ! " # $ % &amp; ' ( ) * + , - . /
+  Row 1  ASCII  48– 63  :  0 1 2 3 4 5 6 7 8 9 : ; &lt; = &gt; ?
+  Row 2  ASCII  64– 79  :  @ A B C D E F G H I J K L M N O
+  Row 3  ASCII  80– 95  :  P Q R S T U V W X Y Z [ \ ] ^ _
+  Row 4  ASCII  96–111  :  ` a b c d e f g h i j k l m n o
+  Row 5  ASCII 112–127  :  p q r s t u v w x y z { | } ~  [DEL]</pre>
+<p><b>Tool:</b> <code>tools/ngpc_font_export.py</code> — also usable from the command line:<br>
+<code>python tools/ngpc_font_export.py font.png -o GraphX/ngpc_custom_font</code></p>
 
 <h2>Global budget</h2>
 <p>The bottom bar shows the total project budget:</p>

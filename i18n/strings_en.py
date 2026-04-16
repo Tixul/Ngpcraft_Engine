@@ -4,10 +4,14 @@ STRINGS_EN: dict[str, str] = {
     # Application
     "app.title": "NgpCraft Engine",
     "app.restart_for_lang": "Restart the application to apply the language change.",
-    "app.mode_simple":    "⬡ Simple mode",
-    "app.mode_simple_tt": "Only asset tabs are shown (Project, Palette, Editor, Help).\nClick to reveal all game-dev tabs (Level, Sprite Setup, Bundle…).",
-    "app.mode_full":      "⬡ Full mode",
-    "app.mode_full_tt":   "All tabs are shown (Level editor, Sprite Setup, Bundle, Tilemap, VRAM Map).\nClick to switch back to Simple mode.",
+    "group.project":    "Project",
+    "group.project_tt": "Project, Globals",
+    "group.scene":      "Scene",
+    "group.scene_tt":   "Level, Palette, Tilemap, Dialogues, Sprite Setup",
+    "group.tools":      "Tools",
+    "group.tools_tt":   "Editor, VRAM Map, Bundle",
+    "group.help":       "Help",
+    "group.help_tt":    "Documentation and inline help",
 
     "nav.title": "Navigator",
     "nav.refresh": "Refresh",
@@ -117,6 +121,23 @@ STRINGS_EN: dict[str, str] = {
     "tab.hitbox": "Sprite Setup",
     "tab.level": "Level",
     "tab.globals": "Globals",
+    "tab.font":    "Font",
+    "font.spec_title": "Expected PNG format",
+    "font.spec_body": (
+        "• 128 × 48 pixels (16 columns × 6 rows)\n"
+        "• 96 tiles of 8×8 px — ASCII characters 32 → 127  (space → ~)\n"
+        "• Reading order: left→right, top→bottom\n"
+        "• Tile (col 0, row 0) = ASCII 32 space\n"
+        "• Tile (col 1, row 0) = ASCII 33  !\n"
+        "• Tile (col 0, row 1) = ASCII 48  0\n"
+        "• Max 3 visible colours + transparent\n"
+        "• Pure black (0,0,0) or alpha < 128 = transparent (colour index 0)\n"
+        "• VRAM slots 32–127 will be used — enabling 'Disable sysfont' is required."
+    ),
+    "font.preview_label":  "Preview (click to load)",
+    "font.bg_light":       "Light bg",
+    "font.bg_dark":        "Dark bg",
+    "font.bg_toggle_tt":   "Toggle preview background between light and dark",
     "glob.entity_types_tab": "Entity Types",
     "proj.scene_audio_group": "Scene Audio",
     "glob.vars_hint": "8 fixed slots (0–7). Click a cell to give it a name. Flags are booleans (0/1) driven by triggers. Variables are u8 counters (0–255).",
@@ -417,6 +438,17 @@ STRINGS_EN: dict[str, str] = {
     "proj.export_dir_auto": "(auto: next to PNGs)",
     "proj.activation_radius":    "⚠ Activation radius (tiles) — performance setting:",
     "proj.activation_radius_tt": "Number of tiles beyond the screen edge within which enemies are kept active.\n\n0 = disabled (all enemies always active — may cause lag with many enemies).\n\nIf the scene lags → lower this value (e.g. 6–8) to only update enemies near the camera.\nToo low → enemies pop into view abruptly.",
+    "proj.dynamic_palettes":     "Dynamic palette recycling (LRU)",
+    "proj.dynamic_palettes_tt":  "Recycles the 16 sprite palette slots at runtime using an LRU eviction policy.\n\nUseful when your project has more than 16 entity types with different colors.\n\nCPU cost: a few dozen cycles per entity spawn/despawn — negligible in most cases.\nDisabled: palette slots are assigned at compile time (baked in ROM data).",
+    "proj.no_sysfont":           "Disable BIOS system font (frees tiles 32–127)",
+    "proj.no_sysfont_tt":        "By default, the BIOS loads its built-in font into tile slots 32–127 (96 tiles × 8 words).\n\nChecking this option skips that call and frees those 96 slots for your own tiles or a custom font.\n\n⚠ The ngpc_text_* functions rely on the system font. If you use them, do not check this option.\nTile slots 0–31 remain reserved by the system regardless of this setting.",
+    "proj.custom_font_section":  "Custom Font",
+    "proj.custom_font":          "Custom font (PNG 128×48):",
+    "proj.custom_font_tt":       "128×48 px PNG tilesheet containing 96 ASCII characters (32–127) in ascending order.\nThe font is loaded at startup instead of the BIOS system font.\nAll ngpc_text_* functions continue to work without any changes.",
+    "proj.custom_font_none":     "(none — BIOS system font)",
+    "proj.custom_font_browse":   "Browse…",
+    "proj.custom_font_clear_tt": "Remove the custom font (revert to BIOS system font)",
+    "proj.custom_font_drop":     "Click to load a 128×48 PNG font…",
     "proj.scenes_title": "Scenes",
     "proj.new_scene": "New…",
     "proj.rename_scene": "Rename…",
@@ -2954,4 +2986,12 @@ STRINGS_EN: dict[str, str] = {
     "level.trigger_menu_item_lbl":        "Item:",
     "level.trigger_menu_item_tt":         "Item selected in this menu (by label)",
     "level.trigger_open_menu_tt":         "Menu to display",
+
+    # Scene Map tab
+    "tab.map":              "Map",
+    "map.fit":              "Fit",
+    "map.fit_tt":           "Fit all scene cards in view",
+    "map.auto_layout":      "Auto-layout",
+    "map.auto_layout_tt":   "Reset cards to automatic grid layout",
+    "map.hint":             "Double-click → open scene  •  Drag → reposition  •  Wheel → zoom",
 }

@@ -1,14 +1,16 @@
 """
 ui/main_window.py - Main application window with tab widget.
 
-Tab order (left → right):
-  Project  →  Bundle  →  VRAM  →  Palette  →  Editor
-  →  Tilemap  →  Level  →  Hitbox  →  Help
+Tabs are organised into three persistent groups selectable via a button bar:
 
-Bundle and VRAM are grouped right after Project so the sprite workflow
-(add sprites → set tile/pal bases → verify allocation) stays contiguous.
-Bundle, VRAM, Tilemap, Level, and Hitbox are hidden in Simple mode;
-only Project, Palette, Editor, and Help are visible by default.
+  [Project]  Project, Globals
+  [Scene]    Level, Palette, Tilemap, Dialogues, Sprite Setup
+  [Tools]    Editor, VRAM Map, Bundle
+  [Help]     Help
+
+Switching groups shows/hides the relevant QTabWidget tabs so each group
+acts as a self-contained workspace. The last active tab within each group
+is remembered across group switches.
 """
 
 from __future__ import annotations
@@ -19,6 +21,8 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, QSettings, QTimer
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
+    QButtonGroup,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -26,6 +30,7 @@ from PyQt6.QtWidgets import (
     QStatusBar,
     QSplitter,
     QTabWidget,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -43,7 +48,8 @@ from ui.tabs.level_tab import LevelTab
 from ui.navigator_panel import NavigatorPanel
 from ui.tabs.palette_tab import PaletteTab
 from ui.tabs.globals_tab import GlobalsTab
-from ui.tabs.project_tab import ProjectTab
+from ui.tabs.project_tab import ProjectTab, FontTab
+from ui.tabs.scene_map_tab import SceneMapTab
 from ui.tabs.tilemap_tab import TilemapTab
 from ui.tabs.vram_tab import VramTab
 
@@ -195,31 +201,34 @@ class MainWindow(QMainWindow):
         # Sync initial manifest state (signal was emitted before connection existed)
         self._project_tab.set_audio_manifest(self._globals_tab.audio_manifest)
 
-        # CLN-4: Bundle and VRAM placed immediately after Project so the
-        # "add sprites → configure bases → check allocation" workflow is
-        # contiguous. Palette/Editor follow for visual editing.
-        self._bundle_tab = BundleTab(
+        self._font_tab = FontTab(
             project_data=self._project_data,
             project_path=self._project_path,
             on_save=self._save_project,
             parent=self,
         )
-        self._bundle_tab.open_sprite_in_palette.connect(self._open_sprite_in_palette)
-        self._bundle_tab.scene_changed.connect(self._on_scene_activated)
-        self._tabs.addTab(self._bundle_tab, tr("tab.bundle"))
+        self._tabs.addTab(self._font_tab, tr("tab.font"))
 
-        self._vram_tab = VramTab(self)
-        self._vram_tab.scene_modified.connect(self._on_scene_modified)
-        self._vram_tab.open_sprite_in_palette.connect(self._open_sprite_in_palette)
-        self._tabs.addTab(self._vram_tab, tr("tab.vram"))
+        self._map_tab = SceneMapTab(
+            project_data=self._project_data,
+            project_path=self._project_path,
+            on_save=self._save_project,
+            parent=self,
+        )
+        self._map_tab.open_scene_requested.connect(self._on_map_open_scene)
+        self._tabs.addTab(self._map_tab, tr("tab.map"))
+
+        # --- Group: Scene ---
+        self._level_tab = LevelTab(on_save=self._save_project, parent=self)
+        self._level_tab.open_globals_tab_requested.connect(
+            lambda: self._navigate_to(self._globals_tab)
+        )
+        self._tabs.addTab(self._level_tab, tr("tab.level"))
 
         self._palette_tab = PaletteTab(self)
         self._palette_tab.apply_anim_to_scene_requested.connect(self._apply_anim_to_scene)
         self._palette_tab.apply_scene_palette_requested.connect(self._apply_scene_palette)
         self._tabs.addTab(self._palette_tab, tr("tab.palette"))
-
-        self._editor_tab = EditorTab(self)
-        self._tabs.addTab(self._editor_tab, tr("tab.editor"))
 
         self._tilemap_tab = TilemapTab(
             project_data=self._project_data,
@@ -230,12 +239,6 @@ class MainWindow(QMainWindow):
         )
         self._tabs.addTab(self._tilemap_tab, tr("tab.tilemap"))
 
-        self._level_tab = LevelTab(on_save=self._save_project, parent=self)
-        self._level_tab.open_globals_tab_requested.connect(
-            lambda: self._tabs.setCurrentWidget(self._globals_tab)
-        )
-        self._tabs.addTab(self._level_tab, tr("tab.level"))
-
         self._dialogues_tab = DialoguesTab(on_save=self._save_project, parent=self)
         self._dialogues_tab.scene_modified.connect(self._on_scene_modified)
         self._tabs.addTab(self._dialogues_tab, tr("tab.dialogues"))
@@ -244,15 +247,77 @@ class MainWindow(QMainWindow):
         self._hitbox_tab.hitboxes_changed.connect(self._save_project)
         self._tabs.addTab(self._hitbox_tab, tr("tab.hitbox"))
 
+        # --- Group: Tools ---
+        self._editor_tab = EditorTab(self)
+        self._tabs.addTab(self._editor_tab, tr("tab.editor"))
+
+        self._vram_tab = VramTab(self)
+        self._vram_tab.scene_modified.connect(self._on_scene_modified)
+        self._vram_tab.open_sprite_in_palette.connect(self._open_sprite_in_palette)
+        self._tabs.addTab(self._vram_tab, tr("tab.vram"))
+
+        self._bundle_tab = BundleTab(
+            project_data=self._project_data,
+            project_path=self._project_path,
+            on_save=self._save_project,
+            parent=self,
+        )
+        self._bundle_tab.open_sprite_in_palette.connect(self._open_sprite_in_palette)
+        self._bundle_tab.scene_changed.connect(self._on_scene_activated)
+        self._tabs.addTab(self._bundle_tab, tr("tab.bundle"))
+
+        # --- Group: Help ---
         self._help_tab = HelpTab(self)
         self._tabs.addTab(self._help_tab, tr("tab.help"))
 
-        # Start on Project tab (index 0)
+        # --- Group bar (above tabs) ---
+        self._active_group: str = "project"
+        self._active_tab_per_group: dict[str, QWidget] = {}
+
+        _GROUP_BTN_STYLE = (
+            "QPushButton { padding: 2px 14px; border-radius: 4px; font-weight: bold; }"
+            "QPushButton:checked { background: #2a4a2a; color: #88dd88; border: 1px solid #448844; }"
+            "QPushButton:!checked { background: transparent; color: #aaaaaa; border: 1px solid transparent; }"
+            "QPushButton:!checked:hover { color: #dddddd; border: 1px solid #555555; }"
+        )
+        self._group_btn_grp = QButtonGroup(self)
+        self._group_btn_grp.setExclusive(True)
+        group_bar_widget = QWidget()
+        group_bar_widget.setFixedHeight(30)
+        group_bar_layout = QHBoxLayout(group_bar_widget)
+        group_bar_layout.setContentsMargins(4, 2, 4, 2)
+        group_bar_layout.setSpacing(6)
+        for _gkey, _glabel_key, _gtt_key in [
+            ("project", "group.project", "group.project_tt"),
+            ("scene",   "group.scene",   "group.scene_tt"),
+            ("tools",   "group.tools",   "group.tools_tt"),
+            ("help",    "group.help",    "group.help_tt"),
+        ]:
+            _gbtn = QPushButton(tr(_glabel_key))
+            _gbtn.setCheckable(True)
+            _gbtn.setFlat(True)
+            _gbtn.setFixedHeight(24)
+            _gbtn.setStyleSheet(_GROUP_BTN_STYLE)
+            _gbtn.setToolTip(tr(_gtt_key))
+            _gbtn.clicked.connect(lambda _chk, g=_gkey: self._switch_to_group(g))
+            self._group_btn_grp.addButton(_gbtn)
+            group_bar_layout.addWidget(_gbtn)
+            setattr(self, f"_group_btn_{_gkey}", _gbtn)
+        group_bar_layout.addStretch()
+
+        # Wrap group bar + tabs in a container
+        _tabs_container = QWidget()
+        _tabs_layout = QVBoxLayout(_tabs_container)
+        _tabs_layout.setContentsMargins(0, 0, 0, 0)
+        _tabs_layout.setSpacing(0)
+        _tabs_layout.addWidget(group_bar_widget)
+        _tabs_layout.addWidget(self._tabs)
+
         self._tabs.setCurrentIndex(0)
         self._navigator.set_project_data(self._project_data)
         self._central_splitter = QSplitter(Qt.Orientation.Horizontal, self)
         self._central_splitter.addWidget(self._navigator)
-        self._central_splitter.addWidget(self._tabs)
+        self._central_splitter.addWidget(_tabs_container)
         self._central_splitter.setStretchFactor(0, 0)
         self._central_splitter.setStretchFactor(1, 1)
         self._central_splitter.setCollapsible(0, False)
@@ -273,23 +338,12 @@ class MainWindow(QMainWindow):
         self._save_timer.setSingleShot(True)
         self._save_timer.timeout.connect(lambda: self._save_label.setText(""))
 
-        # Mode toggle button — persistent in the status bar right side
-        self._mode_btn = QPushButton()
-        self._mode_btn.setCheckable(True)
-        self._mode_btn.setFlat(True)
-        self._mode_btn.setStyleSheet(
-            "QPushButton { padding: 2px 10px; border-radius: 4px; }"
-            "QPushButton:checked { background: #2a4a2a; color: #88dd88; }"
-            "QPushButton:!checked { background: #2a2a4a; color: #8899dd; }"
-        )
-        self._mode_btn.clicked.connect(self._toggle_mode)
-        self._status.addPermanentWidget(self._mode_btn)
-
-        # Restore mode from previous session (default: Simple)
+        # Restore active group from previous session
         settings = QSettings("NGPCraft", "Engine")
-        full = settings.value("ui/full_mode", False, type=bool)
-        self._mode_btn.setChecked(full)
-        self._apply_mode(full, initial=True)
+        _saved_group = settings.value("ui/active_group", "project", type=str)
+        if _saved_group not in self._TAB_GROUPS:
+            _saved_group = "project"
+        self._switch_to_group(_saved_group, initial=True)
         if settings.contains("main_window/central_splitter"):
             try:
                 self._central_splitter.restoreState(settings.value("main_window/central_splitter"))
@@ -304,9 +358,6 @@ class MainWindow(QMainWindow):
         sc_next.activated.connect(self._next_visible_tab)
         sc_prev = QShortcut(QKeySequence("Ctrl+Shift+Tab"), self)
         sc_prev.activated.connect(self._prev_visible_tab)
-        sc_mode = QShortcut(QKeySequence("F12"), self)
-        sc_mode.activated.connect(self._mode_btn.click)
-
         # Initial VRAM refresh if project loaded
         if not self._is_free_mode:
             self._vram_tab.refresh(self._project_data, self._project_path)
@@ -315,11 +366,70 @@ class MainWindow(QMainWindow):
                 self._on_scene_activated(scene)
 
     # ------------------------------------------------------------------
-    # Simple / Full mode
+    # Tab groups
     # ------------------------------------------------------------------
 
-    # Tabs that are hidden in Simple mode (asset-only view)
-    _ADVANCED_TABS = ("_vram_tab", "_bundle_tab", "_tilemap_tab", "_level_tab", "_hitbox_tab")
+    _TAB_GROUPS: dict[str, tuple[str, ...]] = {
+        "project": ("_project_tab", "_globals_tab", "_font_tab", "_map_tab"),
+        "scene":   ("_level_tab", "_palette_tab", "_tilemap_tab", "_dialogues_tab", "_hitbox_tab"),
+        "tools":   ("_editor_tab", "_vram_tab", "_bundle_tab"),
+        "help":    ("_help_tab",),
+    }
+
+    def _switch_to_group(self, name: str, *, initial: bool = False) -> None:
+        """Activate a tab group: show its tabs, hide all others, restore last active tab."""
+        self._active_group = name
+        if not initial:
+            QSettings("NGPCraft", "Engine").setValue("ui/active_group", name)
+        group_attrs = self._TAB_GROUPS.get(name, ())
+        for gkey, gattrs in self._TAB_GROUPS.items():
+            visible = (gkey == name)
+            for attr in gattrs:
+                tab = getattr(self, attr, None)
+                if tab is None:
+                    continue
+                idx = self._tabs.indexOf(tab)
+                if idx >= 0:
+                    self._tabs.setTabVisible(idx, visible)
+        # Update group button checked state
+        for gkey in self._TAB_GROUPS:
+            btn = getattr(self, f"_group_btn_{gkey}", None)
+            if btn is not None:
+                btn.setChecked(gkey == name)
+        # Navigate to last remembered tab in group, or first visible tab
+        remembered = self._active_tab_per_group.get(name)
+        if remembered is not None:
+            r_idx = self._tabs.indexOf(remembered)
+            if r_idx >= 0 and self._tabs.isTabVisible(r_idx):
+                self._tabs.setCurrentWidget(remembered)
+                return
+        for attr in group_attrs:
+            tab = getattr(self, attr, None)
+            if tab is None:
+                continue
+            idx = self._tabs.indexOf(tab)
+            if idx >= 0 and self._tabs.isTabVisible(idx):
+                self._tabs.setCurrentWidget(tab)
+                return
+
+    def _on_map_open_scene(self, sid: str) -> None:
+        """Handle double-click on a scene card: select the scene then open Level tab."""
+        self._project_tab.activate_scene_by_id(sid)
+        self._navigate_to(self._level_tab)
+
+    def _navigate_to(self, widget: QWidget | None) -> None:
+        """Switch to the group that owns widget, then activate it."""
+        if widget is None:
+            return
+        for gkey, gattrs in self._TAB_GROUPS.items():
+            for attr in gattrs:
+                if getattr(self, attr, None) is widget:
+                    if self._active_group != gkey:
+                        self._switch_to_group(gkey)
+                    self._tabs.setCurrentWidget(widget)
+                    return
+        # Fallback: just navigate directly
+        self._tabs.setCurrentWidget(widget)
 
     def _next_visible_tab(self) -> None:
         n = self._tabs.count()
@@ -339,39 +449,17 @@ class MainWindow(QMainWindow):
                 self._tabs.setCurrentIndex(candidate)
                 return
 
-    def _toggle_mode(self, checked: bool) -> None:
-        QSettings("NGPCraft", "Engine").setValue("ui/full_mode", checked)
-        self._apply_mode(checked)
-
-    def _apply_mode(self, full: bool, *, initial: bool = False) -> None:
-        """Show/hide advanced tabs based on mode. If current tab becomes hidden, go to Project."""
-        current = self._tabs.currentWidget()
-        for attr in self._ADVANCED_TABS:
-            tab = getattr(self, attr, None)
-            if tab is None:
-                continue
-            idx = self._tabs.indexOf(tab)
-            if idx >= 0:
-                self._tabs.setTabVisible(idx, full)
-
-        # If the current tab was just hidden, switch to Project
-        if not full and current is not None:
-            cur_idx = self._tabs.indexOf(current)
-            if cur_idx >= 0 and not self._tabs.isTabVisible(cur_idx):
-                self._tabs.setCurrentIndex(0)
-
-        # Update button label and tooltip
-        if full:
-            self._mode_btn.setText(tr("app.mode_full"))
-            self._mode_btn.setToolTip(tr("app.mode_full_tt"))
-        else:
-            self._mode_btn.setText(tr("app.mode_simple"))
-            self._mode_btn.setToolTip(tr("app.mode_simple_tt"))
-
     def _on_tab_changed(self, _idx: int) -> None:
-        if self._tabs.currentWidget() is self._vram_tab:
+        current = self._tabs.currentWidget()
+        # Remember last active tab per group
+        for gkey, gattrs in self._TAB_GROUPS.items():
+            for attr in gattrs:
+                if getattr(self, attr, None) is current:
+                    self._active_tab_per_group[gkey] = current
+                    break
+        if current is self._vram_tab:
             self._vram_tab.refresh(self._project_data, self._project_path)
-        if self._tabs.currentWidget() is self._globals_tab:
+        if current is self._globals_tab:
             self._globals_tab._load_entity_types_from_project()
 
     def _register_pipeline_tools(self) -> None:
@@ -467,10 +555,7 @@ class MainWindow(QMainWindow):
         self._on_scene_activated(scene)
 
     def _open_in_palette(self, path) -> None:
-        try:
-            self._tabs.setCurrentWidget(self._palette_tab)
-        except Exception:
-            self._tabs.setCurrentIndex(1)
+        self._navigate_to(self._palette_tab)
         p = Path(path)
         base_dir = self._project_path.parent if self._project_path else None
         if base_dir and not p.is_absolute():
@@ -478,10 +563,7 @@ class MainWindow(QMainWindow):
         self._palette_tab.open_path(p)
 
     def _open_in_tilemap(self, path) -> None:
-        try:
-            self._tabs.setCurrentWidget(self._tilemap_tab)
-        except Exception:
-            self._tabs.setCurrentIndex(5)
+        self._navigate_to(self._tilemap_tab)
         p = Path(path)
         base_dir = self._project_path.parent if self._project_path else None
         if base_dir and not p.is_absolute():
@@ -489,10 +571,7 @@ class MainWindow(QMainWindow):
         self._tilemap_tab.open_path(p)
 
     def _open_in_editor(self, path) -> None:
-        try:
-            self._tabs.setCurrentWidget(self._editor_tab)
-        except Exception:
-            self._tabs.setCurrentIndex(2)
+        self._navigate_to(self._editor_tab)
         p = Path(path)
         base_dir = self._project_path.parent if self._project_path else None
         if base_dir and not p.is_absolute():
@@ -505,10 +584,7 @@ class MainWindow(QMainWindow):
           - Path / str: open file without scene context
           - dict: {sprite_meta dict + optional base_dir}
         """
-        try:
-            self._tabs.setCurrentWidget(self._hitbox_tab)
-        except Exception:
-            self._tabs.setCurrentIndex(3)
+        self._navigate_to(self._hitbox_tab)
         base_dir = self._project_path.parent if self._project_path else None
         if isinstance(payload, dict):
             self._hitbox_tab.open_sprite(payload, base_dir)
@@ -521,11 +597,7 @@ class MainWindow(QMainWindow):
           - Path / str: open file only
           - dict: {path, frame_w, frame_h, frame_count}
         """
-        try:
-            self._tabs.setCurrentWidget(self._palette_tab)
-        except Exception:
-            self._tabs.setCurrentIndex(1)
-
+        self._navigate_to(self._palette_tab)
         if isinstance(payload, dict):
             p = Path(payload.get("path", ""))
             fw = int(payload.get("frame_w", 8))
@@ -552,13 +624,7 @@ class MainWindow(QMainWindow):
         }.get(str(tab_name or "").strip().lower())
         if target is None:
             return
-        idx = self._tabs.indexOf(target)
-        if idx < 0:
-            return
-        if not self._tabs.isTabVisible(idx):
-            self._mode_btn.setChecked(True)
-            self._apply_mode(True)
-        self._tabs.setCurrentWidget(target)
+        self._navigate_to(target)
 
     def _apply_anim_to_scene(self, payload: dict) -> None:
         if self._is_free_mode:

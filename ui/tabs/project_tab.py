@@ -33,8 +33,8 @@ from pathlib import Path
 from typing import Callable
 
 from PIL import Image
-from PyQt6.QtCore import Qt, QSettings, pyqtSignal, QProcess, QUrl
-from PyQt6.QtGui import QColor, QTextDocument, QDesktopServices
+from PyQt6.QtCore import Qt, QSettings, pyqtSignal, QProcess, QUrl, QRect, QPoint
+from PyQt6.QtGui import QColor, QCursor, QImage, QPainter, QPen, QPixmap, QTextDocument, QDesktopServices
 from PyQt6.QtPrintSupport import QPrinter
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
@@ -413,6 +413,353 @@ def _write_anims_header(
         errs.append(f"{name}_anims.h: {e}")
 
 # ---------------------------------------------------------------------------
+# FontPreviewWidget
+# ---------------------------------------------------------------------------
+
+class FontPreviewWidget(QWidget):
+    """Custom widget that shows a 128×48 font PNG at 3× scale with:
+    - per-tile ASCII character labels in the corner of each cell
+    - hover tooltip: tile index / VRAM slot / character
+    - click → emits clicked() so it can open the browse dialog
+    - empty state: grey placeholder text with instructions
+    """
+
+    clicked = pyqtSignal()
+
+    _SCALE = 3
+    _COLS  = 16
+    _ROWS  = 6
+    _CELL  = 8 * _SCALE          # 24 px
+    _ASCII_BASE = 32              # tile (0,0) → ASCII 32 = ' '
+
+    _W = _COLS * _CELL            # 384
+    _H = _ROWS * _CELL            # 144
+
+    # Background colours for the preview composite
+    _BG_DARK  = (0x22, 0x22, 0x22)
+    _BG_LIGHT = (0xff, 0xff, 0xff)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pixmap: QPixmap | None = None
+        self._pil_src = None        # original PIL image kept for bg-toggle re-renders
+        self._bg_dark: bool = True  # True = dark bg, False = light bg
+        self.setFixedSize(self._W + 2, self._H + 2)  # +2 for 1px border
+        self.setMouseTracking(True)
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+
+    # ------------------------------------------------------------------
+    def toggle_bg(self) -> None:
+        """Swap between dark and light background and re-render."""
+        self._bg_dark = not self._bg_dark
+        if self._pil_src is not None:
+            self._rebuild_pixmap()
+
+    # ------------------------------------------------------------------
+    def load_image(self, pil_img=None) -> None:
+        """Pass a PIL Image (any mode, 128×48) or None to clear."""
+        self._pil_src = pil_img
+        if pil_img is None:
+            self._pixmap = None
+            self.update()
+            return
+        self._rebuild_pixmap()
+
+    # ------------------------------------------------------------------
+    def _rebuild_pixmap(self) -> None:
+        """(Re-)composite the stored PIL image with the current background."""
+        pil_img = self._pil_src
+        if pil_img is None:
+            return
+
+        # Composite onto current bg colour
+        bg_rgb = self._BG_DARK if self._bg_dark else self._BG_LIGHT
+        img_rgba = pil_img.convert("RGBA")
+        bg = Image.new("RGBA", img_rgba.size, bg_rgb + (255,))
+        img_comp = Image.alpha_composite(bg, img_rgba).convert("RGB")
+
+        # Scale 3× nearest-neighbour
+        scale = self._SCALE
+        w, h = img_comp.width * scale, img_comp.height * scale
+        try:
+            resample = Image.Resampling.NEAREST
+        except AttributeError:
+            resample = Image.NEAREST  # type: ignore[attr-defined]
+        img_scaled = img_comp.resize((w, h), resample)
+
+        # Build QPixmap — qimg.copy() ensures Qt owns the data independently
+        # of the Python bytes buffer (which would be GC'd when this returns).
+        raw = img_scaled.tobytes("raw", "RGB")
+        qimg = QImage(raw, w, h, w * 3, QImage.Format.Format_RGB888)
+        self._pixmap = QPixmap.fromImage(qimg.copy())
+        self.update()
+
+    # ------------------------------------------------------------------
+    def paintEvent(self, event):  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+        rect_full = QRect(0, 0, self.width(), self.height())
+
+        if self._pixmap is None:
+            # Empty state
+            p.fillRect(rect_full, QColor("#1a1a1a"))
+            p.setPen(QPen(QColor("#555555"), 1))
+            p.drawRect(QRect(0, 0, self.width() - 1, self.height() - 1))
+            p.setPen(QColor("#777777"))
+            try:
+                from i18n import tr  # local import to avoid circular deps
+                msg = tr("proj.custom_font_drop")
+            except Exception:
+                msg = "Cliquer pour charger une police PNG 128×48…"
+            p.drawText(rect_full, Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter, msg)
+            p.end()
+            return
+
+        # Draw scaled pixmap (1px offset for border)
+        p.drawPixmap(QPoint(1, 1), self._pixmap)
+
+        # Grid overlay
+        pen_grid = QPen(QColor(0x44, 0x44, 0x44, 180), 1)
+        p.setPen(pen_grid)
+        cell = self._CELL
+        for col in range(self._COLS + 1):
+            x = 1 + col * cell
+            p.drawLine(x, 1, x, 1 + self._H)
+        for row in range(self._ROWS + 1):
+            y = 1 + row * cell
+            p.drawLine(1, y, 1 + self._W, y)
+
+        # Per-tile character labels
+        p.setPen(QColor("#ffffff"))
+        font = p.font()
+        font.setPixelSize(7)
+        p.setFont(font)
+
+        for row in range(self._ROWS):
+            for col in range(self._COLS):
+                idx = row * self._COLS + col
+                ascii_code = self._ASCII_BASE + idx
+                if 32 <= ascii_code <= 127:
+                    ch = chr(ascii_code)
+                    # skip space — nothing useful to label
+                    if ch == ' ':
+                        continue
+                    cell_x = 1 + col * cell
+                    cell_y = 1 + row * cell
+                    # small label in top-left corner, 2px inset
+                    lbl_rect = QRect(cell_x + 2, cell_y + 1, cell - 3, 9)
+                    p.drawText(lbl_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, ch)
+
+        # Border
+        p.setPen(QPen(QColor("#333333"), 1))
+        p.drawRect(QRect(0, 0, self.width() - 1, self.height() - 1))
+
+        p.end()
+
+    # ------------------------------------------------------------------
+    def _tile_at(self, pos: QPoint):
+        """Return (tile_idx, ascii_code, ch) for cursor position, or None."""
+        x = pos.x() - 1   # subtract border offset
+        y = pos.y() - 1
+        cell = self._CELL
+        if x < 0 or y < 0 or x >= self._W or y >= self._H:
+            return None
+        col = x // cell
+        row = y // cell
+        idx = row * self._COLS + col
+        ascii_code = self._ASCII_BASE + idx
+        ch = chr(ascii_code) if 32 <= ascii_code <= 127 else '?'
+        return idx, ascii_code, ch
+
+    def mouseMoveEvent(self, event):  # noqa: N802
+        if self._pixmap is None:
+            self.setToolTip("")
+            return
+        hit = self._tile_at(event.pos())
+        if hit:
+            idx, ascii_code, ch = hit
+            self.setToolTip(
+                f"Tile {idx} dans le sheet | Slot VRAM {ascii_code} | '{ch}'"
+            )
+        else:
+            self.setToolTip("")
+
+    def mousePressEvent(self, event):  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+
+
+# ---------------------------------------------------------------------------
+# FontTab
+# ---------------------------------------------------------------------------
+
+class FontTab(ProjectPathMixin, QWidget):
+    """Dedicated tab (Project group) for custom font configuration.
+
+    Owns:
+    - no_sysfont checkbox
+    - browse / clear for the custom font PNG
+    - FontPreviewWidget (full-size)
+    - Format spec reference block
+    """
+
+    def __init__(
+        self,
+        project_data: dict,
+        project_path: "Path | None",
+        on_save: "Callable",
+        parent: "QWidget | None" = None,
+    ) -> None:
+        super().__init__(parent)
+        self._data = project_data
+        self._project_path = project_path
+        self._on_save = on_save
+        self._build_ui()
+
+    # ------------------------------------------------------------------
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setSpacing(8)
+        root.setContentsMargins(10, 10, 10, 10)
+
+        # No-sysfont checkbox
+        nosys_row = QHBoxLayout()
+        self._chk_no_sysfont = QCheckBox(tr("proj.no_sysfont"))
+        self._chk_no_sysfont.setToolTip(tr("proj.no_sysfont_tt"))
+        self._chk_no_sysfont.setChecked(bool(self._data.get("no_sysfont", False)))
+        self._chk_no_sysfont.stateChanged.connect(self._on_no_sysfont_changed)
+        nosys_row.addWidget(self._chk_no_sysfont)
+        nosys_row.addStretch()
+        root.addLayout(nosys_row)
+
+        # Separator + section label
+        _sep = QFrame()
+        _sep.setFrameShape(QFrame.Shape.HLine)
+        _sep.setFrameShadow(QFrame.Shadow.Sunken)
+        root.addWidget(_sep)
+
+        _font_sec_lbl = QLabel(tr("proj.custom_font_section"))
+        _font_sec_lbl.setStyleSheet("font-weight: bold; color: #cccccc;")
+        root.addWidget(_font_sec_lbl)
+
+        # Browse row
+        font_row = QHBoxLayout()
+        _font_path_init = self._data.get("custom_font_png", "") or ""
+        self._custom_font_label = QLabel(
+            _font_path_init if _font_path_init else tr("proj.custom_font_none")
+        )
+        self._custom_font_label.setToolTip(tr("proj.custom_font_tt"))
+        if not _font_path_init:
+            self._custom_font_label.setStyleSheet("color: #aaaaaa; font-style: italic;")
+        font_browse_btn = QPushButton(tr("proj.custom_font_browse"))
+        font_browse_btn.setFixedWidth(90)
+        font_browse_btn.clicked.connect(self._on_browse_custom_font)
+        font_clear_btn = QPushButton("×")
+        font_clear_btn.setFixedWidth(24)
+        font_clear_btn.setToolTip(tr("proj.custom_font_clear_tt"))
+        font_clear_btn.clicked.connect(self._on_clear_custom_font)
+        font_row.addWidget(font_browse_btn)
+        font_row.addWidget(font_clear_btn)
+        font_row.addWidget(self._custom_font_label, 1)
+        root.addLayout(font_row)
+
+        # FontPreviewWidget — full-size, click-to-browse
+        # Row: label + bg toggle button (right-aligned)
+        prev_header = QHBoxLayout()
+        prev_lbl = QLabel(tr("font.preview_label"))
+        prev_lbl.setStyleSheet("color: #888888;")
+        prev_header.addWidget(prev_lbl)
+        prev_header.addStretch()
+        self._btn_bg_toggle = QPushButton(tr("font.bg_light"))
+        self._btn_bg_toggle.setFixedWidth(80)
+        self._btn_bg_toggle.setToolTip(tr("font.bg_toggle_tt"))
+        self._btn_bg_toggle.clicked.connect(self._on_toggle_preview_bg)
+        prev_header.addWidget(self._btn_bg_toggle)
+        root.addLayout(prev_header)
+
+        self._font_preview_widget = FontPreviewWidget()
+        self._font_preview_widget.clicked.connect(self._on_browse_custom_font)
+        root.addWidget(self._font_preview_widget)
+
+        if _font_path_init:
+            self._update_font_preview(_font_path_init)
+
+        # Format spec reference block
+        _sep2 = QFrame()
+        _sep2.setFrameShape(QFrame.Shape.HLine)
+        _sep2.setFrameShadow(QFrame.Shadow.Sunken)
+        root.addWidget(_sep2)
+
+        spec_title = QLabel(tr("font.spec_title"))
+        spec_title.setStyleSheet("font-weight: bold; color: #aaaaaa;")
+        root.addWidget(spec_title)
+
+        spec_body = QLabel(tr("font.spec_body"))
+        spec_body.setWordWrap(True)
+        spec_body.setStyleSheet("color: #888888;")
+        spec_body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        root.addWidget(spec_body)
+
+        root.addStretch()
+
+    # ------------------------------------------------------------------
+    def _on_no_sysfont_changed(self, state: int) -> None:
+        if state:
+            self._data["no_sysfont"] = True
+        else:
+            self._data.pop("no_sysfont", None)
+        self._on_save()
+
+    def _on_toggle_preview_bg(self) -> None:
+        self._font_preview_widget.toggle_bg()
+        dark = self._font_preview_widget._bg_dark
+        self._btn_bg_toggle.setText(tr("font.bg_light") if dark else tr("font.bg_dark"))
+
+    def _update_font_preview(self, png_path_rel: str) -> None:
+        """Load the font PNG and pass it to FontPreviewWidget."""
+        if not png_path_rel:
+            self._font_preview_widget.load_image(None)
+            return
+        abs_path = (
+            Path(png_path_rel) if Path(png_path_rel).is_absolute()
+            else (self._project_dir / png_path_rel if self._project_dir else Path(png_path_rel))
+        )
+        try:
+            img = Image.open(str(abs_path)).convert("RGB")
+            self._font_preview_widget.load_image(img)
+        except Exception:
+            self._font_preview_widget.load_image(None)
+
+    def _on_browse_custom_font(self) -> None:
+        base = str(self._project_dir) if self._project_dir else ""
+        path, _ = QFileDialog.getOpenFileName(
+            self, tr("proj.custom_font_browse"), base,
+            "PNG (*.png);;All files (*)"
+        )
+        if not path:
+            return
+        rel = self._rel(Path(path))
+        self._data["custom_font_png"] = rel
+        # Custom font implies no sysfont — force the flag on.
+        self._data["no_sysfont"] = True
+        self._chk_no_sysfont.blockSignals(True)
+        self._chk_no_sysfont.setChecked(True)
+        self._chk_no_sysfont.blockSignals(False)
+        self._custom_font_label.setText(rel)
+        self._custom_font_label.setStyleSheet("")
+        self._update_font_preview(rel)
+        self._on_save()
+
+    def _on_clear_custom_font(self) -> None:
+        self._data.pop("custom_font_png", None)
+        self._custom_font_label.setText(tr("proj.custom_font_none"))
+        self._custom_font_label.setStyleSheet("color: #aaaaaa; font-style: italic;")
+        self._update_font_preview("")
+        self._on_save()
+
+
+# ---------------------------------------------------------------------------
 # ProjectTab
 # ---------------------------------------------------------------------------
 
@@ -606,49 +953,63 @@ class ProjectTab(ProjectPathMixin, QWidget):
             root.addWidget(lbl)
             return
 
-        # GraphX dir row
-        dir_row = QHBoxLayout()
-        dir_row.addWidget(QLabel(tr("proj.graphx_dir")))
-        self._graphx_label = QLabel(self._data.get("graphx_dir", ""))
-        self._graphx_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        dir_row.addWidget(self._graphx_label, 1)
+        # ── Dirs row : GraphX + Export on one line ──────────────────────
+        # Layout: [label] [Changer btn] [path …]  |  [label] [Changer btn] [✕] [path …]
+        dirs_row = QHBoxLayout()
+        dirs_row.setSpacing(4)
+
+        dirs_row.addWidget(QLabel(tr("proj.graphx_dir")))
         btn_dir = QPushButton(tr("proj.change_dir"))
         btn_dir.clicked.connect(self._change_graphx_dir)
-        dir_row.addWidget(btn_dir)
-        root.addLayout(dir_row)
+        dirs_row.addWidget(btn_dir)
+        self._graphx_label = QLabel(self._data.get("graphx_dir", ""))
+        self._graphx_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._graphx_label.setStyleSheet("color: #888888;")
+        dirs_row.addWidget(self._graphx_label, 1)
 
-        # Export dir row (generated .c/.h)
-        exp_row = QHBoxLayout()
-        exp_row.addWidget(QLabel(tr("proj.export_dir")))
-        self._export_dir_label = QLabel("")
-        self._export_dir_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        exp_row.addWidget(self._export_dir_label, 1)
+        _vsep = QFrame()
+        _vsep.setFrameShape(QFrame.Shape.VLine)
+        _vsep.setFrameShadow(QFrame.Shadow.Sunken)
+        dirs_row.addWidget(_vsep)
+
+        dirs_row.addWidget(QLabel(tr("proj.export_dir")))
         btn_exp = QPushButton(tr("proj.change_export_dir"))
         btn_exp.setToolTip(tr("proj.export_dir_tt"))
         btn_exp.clicked.connect(self._change_export_dir)
-        exp_row.addWidget(btn_exp)
+        dirs_row.addWidget(btn_exp)
         btn_exp_clr = QPushButton("✕")
-        btn_exp_clr.setFixedWidth(28)
+        btn_exp_clr.setFixedWidth(24)
         btn_exp_clr.setToolTip(tr("proj.export_dir_auto"))
         btn_exp_clr.clicked.connect(self._clear_export_dir)
-        exp_row.addWidget(btn_exp_clr)
-        root.addLayout(exp_row)
+        dirs_row.addWidget(btn_exp_clr)
+        self._export_dir_label = QLabel("")
+        self._export_dir_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        dirs_row.addWidget(self._export_dir_label, 1)
+
+        root.addLayout(dirs_row)
         self._refresh_export_dir_ui()
 
-        # World activation radius row
-        act_row = QHBoxLayout()
+        # ── Options row : activation radius + dynamic palettes on one line ──
+        opts_row = QHBoxLayout()
+        opts_row.setSpacing(6)
         _act_lbl = QLabel(tr("proj.activation_radius"))
         _act_lbl.setStyleSheet("color: #cc3300; font-weight: bold;")
         _act_lbl.setToolTip(tr("proj.activation_radius_tt"))
-        act_row.addWidget(_act_lbl)
+        opts_row.addWidget(_act_lbl)
         self._spin_activation_radius = QSpinBox()
         self._spin_activation_radius.setRange(0, 16)
         self._spin_activation_radius.setToolTip(tr("proj.activation_radius_tt"))
         self._spin_activation_radius.setValue(int(self._data.get("activation_radius_tiles") or 0))
         self._spin_activation_radius.valueChanged.connect(self._on_activation_radius_changed)
-        act_row.addWidget(self._spin_activation_radius)
-        act_row.addStretch()
-        root.addLayout(act_row)
+        opts_row.addWidget(self._spin_activation_radius)
+        opts_row.addSpacing(12)
+        self._chk_dynamic_palettes = QCheckBox(tr("proj.dynamic_palettes"))
+        self._chk_dynamic_palettes.setToolTip(tr("proj.dynamic_palettes_tt"))
+        self._chk_dynamic_palettes.setChecked(bool(self._data.get("dynamic_palettes", False)))
+        self._chk_dynamic_palettes.stateChanged.connect(self._on_dynamic_palettes_changed)
+        opts_row.addWidget(self._chk_dynamic_palettes)
+        opts_row.addStretch()
+        root.addLayout(opts_row)
 
         # Main splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -2851,6 +3212,13 @@ class ProjectTab(ProjectPathMixin, QWidget):
         self._refresh_scene_statuses()
         self._update_global_budget()
 
+    def activate_scene_by_id(self, sid: str) -> None:
+        """Public: select the scene with the given id in the list."""
+        for i, sc in enumerate(self._data.get("scenes") or []):
+            if sc.get("id") == sid:
+                self._scenes_list.setCurrentRow(i)
+                break
+
     def focus_template_ready_workflow(self) -> None:
         if bool(self._btn_project_first_issue.isEnabled()):
             self._btn_project_first_issue.setFocus(Qt.FocusReason.OtherFocusReason)
@@ -3181,6 +3549,13 @@ class ProjectTab(ProjectPathMixin, QWidget):
             self._data["activation_radius_tiles"] = value
         else:
             self._data.pop("activation_radius_tiles", None)
+        self._on_save()
+
+    def _on_dynamic_palettes_changed(self, state: int) -> None:
+        if state:
+            self._data["dynamic_palettes"] = True
+        else:
+            self._data.pop("dynamic_palettes", None)
         self._on_save()
 
     def _change_graphx_dir(self) -> None:
