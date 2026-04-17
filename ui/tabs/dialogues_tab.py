@@ -21,6 +21,12 @@ import io
 import re
 import uuid
 from pathlib import Path
+
+try:
+    from PIL import Image as _PilImage
+    _PIL_OK = True
+except ImportError:
+    _PIL_OK = False
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QRect, QSize, QPoint, pyqtSignal
@@ -68,6 +74,25 @@ def _safe_id(s: str) -> str:
     return _RE_SAFE.sub("_", s).strip("_").lower() or "dlg"
 
 
+def _split_into_tile_lines(text: str, cols: int) -> list[int]:
+    """Word-wrap text at cols tile columns. Returns tile count per visual line."""
+    if not text:
+        return [0]
+    lines: list[int] = []
+    cur = 0
+    for word in text.split(' '):
+        wl = len(word)
+        if cur == 0:
+            cur = wl
+        elif cur + 1 + wl > cols:
+            lines.append(cur)
+            cur = wl
+        else:
+            cur += 1 + wl
+    lines.append(cur)
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # NGPC Dialog Preview widget
 # ---------------------------------------------------------------------------
@@ -85,6 +110,9 @@ class _NgpcDialogPreview(QWidget):
     scaled inside the portrait slot.
     """
 
+    # DLG-7: emitted when overflow status changes (-1 = fits, else first overflow char idx)
+    overflow_changed = pyqtSignal(int)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._speaker        = ""
@@ -93,21 +121,241 @@ class _NgpcDialogPreview(QWidget):
         # Pixmaps (None = not loaded / not set)
         self._portrait_px: QPixmap | None = None
         self._bg_tiles: list[QPixmap] | None = None   # [corner, hborder, fill, vborder_r]
-        pw = _PREVIEW_W * _PREVIEW_SCALE
-        ph = _PREVIEW_H * _PREVIEW_SCALE
-        self.setFixedSize(pw + 2, ph + 2)
+        # DLG-1 — bitmap font cache
+        self._font_tiles: dict[int, "QImage"] = {}     # char_code → 8×8 RGBA QImage (white ink)
+        self._glyph_cache: dict[tuple, "QPixmap"] = {} # (glyph_id, color_rgb, scale) → QPixmap
+        # DLG-2 — full screen mode
+        self._fullscreen = False
+        # DLG-4 — portrait side
+        self._portrait_side: str = "left"   # "left" | "right"
+        # DLG-6 — box Y offset in NGPC pixels (-1 = bottom)
+        self._box_y_px: int = -1
+        # DLG-7 — overflow tracking
+        self._overflow_at: int = -1   # first overflow char index, -1 = fits
+        self._resize_for_mode()
 
     def set_line(self, speaker: str, text: str,
                  portrait_px: "QPixmap | None" = None,
                  bg_tiles: "list[QPixmap] | None" = None,
-                 palette: "list[str] | None" = None) -> None:
-        self._speaker     = speaker[:_SPEAKER_MAX]
-        self._text        = text[:_TEXT_MAX]
-        self._portrait_px = portrait_px
-        self._bg_tiles    = bg_tiles
-        # palette = [word1, word2, word3] (NGPC RGB444 hex, slots 1-3)
-        self._palette     = palette or []
+                 palette: "list[str] | None" = None,
+                 portrait_side: str = "left") -> None:
+        self._speaker       = speaker[:_SPEAKER_MAX]
+        self._text          = text[:_TEXT_MAX]
+        self._portrait_px   = portrait_px
+        self._bg_tiles      = bg_tiles
+        self._palette       = palette or []
+        self._portrait_side = portrait_side
+        # DLG-7: recompute overflow (body = 3 tile rows, cols = 15 with portrait, 18 without)
+        cols     = 15 if portrait_px is not None else 18
+        new_ov   = self._overflow_char_idx(self._text, cols, 3)
+        if new_ov != self._overflow_at:
+            self._overflow_at = new_ov
+            self.overflow_changed.emit(new_ov)
         self.update()
+
+    def set_box_y(self, y_px: int) -> None:
+        """Set dialog box Y position in NGPC pixels. -1 = default bottom."""
+        self._box_y_px = y_px
+        self.update()
+
+    # DLG-7 — overflow helpers --------------------------------------------
+
+    @staticmethod
+    def _wrap_text_lines(text: str, cols: int) -> list[str]:
+        """Word-wrap text at cols tile-columns; return list of line strings."""
+        if not text or cols <= 0:
+            return [text or ""]
+        lines: list[str] = []
+        cur: list[str] = []
+        cur_len = 0
+        for word in text.split(' '):
+            wl = len(word)
+            if not cur:
+                cur, cur_len = [word], wl
+            elif cur_len + 1 + wl <= cols:
+                cur.append(word)
+                cur_len += 1 + wl
+            else:
+                lines.append(' '.join(cur))
+                cur, cur_len = [word], wl
+        if cur:
+            lines.append(' '.join(cur))
+        return lines or [""]
+
+    @staticmethod
+    def _overflow_char_idx(text: str, cols: int, max_rows: int) -> int:
+        """Return index of first overflow char, or -1 if text fits."""
+        if not text or cols <= 0 or max_rows <= 0:
+            return -1
+        words = text.split(' ')
+        row = 0
+        col = 0
+        idx = 0
+        for wi, word in enumerate(words):
+            wl = len(word)
+            sp = 1 if wi > 0 and col > 0 else 0
+            if col > 0 and col + sp + wl > cols:
+                row += 1
+                if row >= max_rows:
+                    return idx + (1 if wi > 0 else 0)
+                col = wl
+            else:
+                col += sp + wl
+            idx += (1 if wi > 0 else 0) + wl
+        return -1
+
+    # DLG-1 — bitmap font -------------------------------------------------
+
+    def set_font(self, pil_img, font_format: str = "128x48") -> None:
+        """Build glyph cache from a PIL source image (project custom font).
+
+        Auto-detects cols from image width (img.width // 8).
+        Applies outline synthesis: body pixels → white, adjacent-transparent → black,
+        matching the hardware output of ngpc_font_export.py outline mode.
+        """
+        self._font_tiles.clear()
+        self._glyph_cache.clear()
+        if pil_img is None:
+            self.update()
+            return
+        try:
+            img = pil_img.convert("RGBA")
+            cols = max(1, img.width // 8)
+            rows = max(1, img.height // 8)
+            tile_count = cols * rows
+
+            for tile_idx in range(tile_count):
+                tc = tile_idx % cols
+                tr = tile_idx // cols
+                crop = img.crop((tc * 8, tr * 8, tc * 8 + 8, tr * 8 + 8))
+                # Build body mask: opaque non-black pixels OR near-black opaque pixels
+                body = [[False] * 8 for _ in range(8)]
+                for py in range(8):
+                    for px in range(8):
+                        r, g, b, a = crop.getpixel((px, py))
+                        if a >= 128:
+                            body[py][px] = True
+
+                qi = QImage(8, 8, QImage.Format.Format_RGBA8888)
+                qi.fill(Qt.GlobalColor.transparent)
+                for py in range(8):
+                    for px in range(8):
+                        if body[py][px]:
+                            qi.setPixelColor(px, py, QColor(255, 255, 255, 255))  # body = white
+                        else:
+                            # Outline: transparent pixel adjacent (8-way) to body
+                            outline = False
+                            for dy in (-1, 0, 1):
+                                for dx in (-1, 0, 1):
+                                    nx, ny = px + dx, py + dy
+                                    if 0 <= nx < 8 and 0 <= ny < 8 and body[ny][nx]:
+                                        outline = True
+                                        break
+                                if outline:
+                                    break
+                            if outline:
+                                qi.setPixelColor(px, py, QColor(0, 0, 0, 255))  # outline = black
+                self._font_tiles[tile_idx + 32] = qi
+        except Exception:
+            pass
+        self.update()
+
+    def _colorize_glyph(self, glyph: "QImage", color: "QColor", scale: int,
+                        outline_color: "QColor | None" = None) -> "QPixmap":
+        """Return a scaled, tinted QPixmap for a glyph (cached).
+
+        White pixels  → tinted to `color`       (body)
+        Black pixels  → tinted to `outline_color` if provided, else kept black (outline)
+        Transparent   → kept transparent
+        """
+        oc = outline_color if outline_color is not None else QColor(0, 0, 0, 255)
+        key = (id(glyph), color.rgb(), oc.rgb(), scale)
+        cached = self._glyph_cache.get(key)
+        if cached is not None:
+            return cached
+        t = 8 * scale
+        # Build per-pixel: recolor white→body, black→outline
+        result = QImage(t, t, QImage.Format.Format_RGBA8888)
+        result.fill(Qt.GlobalColor.transparent)
+        scaled_src = glyph.scaled(t, t,
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.FastTransformation)
+        for py in range(t):
+            for px in range(t):
+                c = QColor(scaled_src.pixel(px, py))
+                if c.alpha() < 64:
+                    continue
+                lum = (c.red() + c.green() + c.blue()) // 3
+                if lum >= 128:
+                    result.setPixelColor(px, py, color)
+                else:
+                    result.setPixelColor(px, py, oc)
+        base = QPixmap.fromImage(result)
+        self._glyph_cache[key] = base
+        return base
+
+    def _draw_text_bitmap(self, p: "QPainter", text: str,
+                          x0: int, y0: int, max_w: int, max_h: int,
+                          color: "QColor",
+                          cols: int = 0,
+                          outline_color: "QColor | None" = None) -> None:
+        """Render text tile-by-tile using the cached bitmap font.
+
+        When cols > 0, uses exact NGPC word-wrap and draws an orange ▶
+        continuation marker if the text overflows the available rows.
+        """
+        s = _PREVIEW_SCALE
+        t = 8 * s
+        if cols > 0:
+            lines    = self._wrap_text_lines(text, cols)
+            max_rows = max_h // t
+            for li, line in enumerate(lines):
+                if li >= max_rows:
+                    break
+                cy = y0 + li * t
+                cx = x0
+                # On the last fit row with overflow pending: leave 1 tile for marker
+                is_last_fit = (li == max_rows - 1 and len(lines) > max_rows)
+                render_len  = len(line) - 1 if is_last_fit else len(line)
+                for j, ch in enumerate(line):
+                    if j >= render_len:
+                        break
+                    glyph = self._font_tiles.get(ord(ch))
+                    if glyph and not glyph.isNull():
+                        p.drawPixmap(cx, cy, self._colorize_glyph(glyph, color, s, outline_color))
+                    cx += t
+                if is_last_fit:
+                    # Orange ▶ overflow marker
+                    ov_c = QColor("#ff8800")
+                    g = self._font_tiles.get(ord('>'))
+                    if g and not g.isNull():
+                        p.drawPixmap(cx, cy, self._colorize_glyph(g, ov_c, s))
+        else:
+            # Legacy char-by-char (no cols given — fallback for speaker name)
+            cx, cy = x0, y0
+            for ch in text:
+                if cx + t > x0 + max_w:
+                    cx, cy = x0, cy + t
+                    if cy + t > y0 + max_h:
+                        break
+                glyph = self._font_tiles.get(ord(ch))
+                if glyph and not glyph.isNull():
+                    p.drawPixmap(cx, cy, self._colorize_glyph(glyph, color, s, outline_color))
+                cx += t
+
+    # DLG-2 — full screen mode --------------------------------------------
+
+    def set_fullscreen(self, enabled: bool) -> None:
+        if self._fullscreen == enabled:
+            return
+        self._fullscreen = enabled
+        self._resize_for_mode()
+        self.update()
+
+    def _resize_for_mode(self) -> None:
+        s = _PREVIEW_SCALE
+        h = (152 if self._fullscreen else _PREVIEW_H) * s
+        self.setFixedSize(_PREVIEW_W * s + 2, h + 2)
 
     # ------------------------------------------------------------------
     # helpers
@@ -140,72 +388,80 @@ class _NgpcDialogPreview(QWidget):
     # ------------------------------------------------------------------
 
     def paintEvent(self, _event):
-        s = _PREVIEW_SCALE
-        pw = _PREVIEW_W * s
-        ph = _PREVIEW_H * s
-        t  = 8 * s          # 1 tile at scale
+        s   = _PREVIEW_SCALE
+        pw  = _PREVIEW_W * s
+        bh  = _PREVIEW_H * s          # box height in display px
+        fh  = (152 if self._fullscreen else _PREVIEW_H) * s  # widget height
+        # DLG-6: box Y position
+        if self._box_y_px >= 0:
+            by = min(self._box_y_px, 152 - _PREVIEW_H) * s
+        else:
+            by = fh - bh              # default: bottom
+        t   = 8 * s                   # 1 tile at scale
 
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
-        tiles = self._bg_tiles  # [corner, hborder, fill, vborder_r]
+        # DLG-2: gameplay area above the box
+        if self._fullscreen and by > 0:
+            p.fillRect(0, 0, pw, by, QColor("#0d0d1a"))
+            p.setPen(QColor("#2a2a44"))
+            p.setFont(QFont("Courier", 9))
+            p.drawText(QRect(0, 0, pw, by), Qt.AlignmentFlag.AlignCenter,
+                       "[ gameplay area ]")
 
+        # Dialogue box background
+        tiles = self._bg_tiles
         if tiles and len(tiles) == 4:
             corner, hborder, fill, vborder_r = tiles
-
-            # Centre fill
-            self._draw_tile_tiled(p, fill, t, t, pw - 2*t, ph - 2*t)
-
-            # Top / bottom H-border
-            self._draw_tile_tiled(p, hborder,  t, 0,      pw - 2*t, t)           # top
-            self._draw_tile_tiled(p, hborder,  t, ph - t, pw - 2*t, t, vflip=True)  # bot
-
-            # Left / right V-border
-            self._draw_tile_tiled(p, vborder_r, pw - t, t, t, ph - 2*t)          # right
-            self._draw_tile_tiled(p, vborder_r, 0,      t, t, ph - 2*t, hflip=True) # left
-
-            # Corners
+            self._draw_tile_tiled(p, fill,      t,      by + t,      pw - 2*t, bh - 2*t)
+            self._draw_tile_tiled(p, hborder,   t,      by,          pw - 2*t, t)
+            self._draw_tile_tiled(p, hborder,   t,      by + bh - t, pw - 2*t, t, vflip=True)
+            self._draw_tile_tiled(p, vborder_r, pw - t, by + t,      t,        bh - 2*t)
+            self._draw_tile_tiled(p, vborder_r, 0,      by + t,      t,        bh - 2*t, hflip=True)
             ct = corner.scaled(t, t, Qt.AspectRatioMode.IgnoreAspectRatio,
-                                Qt.TransformationMode.FastTransformation)
-            p.drawPixmap(0,       0,       ct)
-            p.drawPixmap(pw - t,  0,       self._flip(ct, True,  False))
-            p.drawPixmap(0,       ph - t,  self._flip(ct, False, True))
-            p.drawPixmap(pw - t,  ph - t,  self._flip(ct, True,  True))
-
+                               Qt.TransformationMode.FastTransformation)
+            p.drawPixmap(0,      by,           ct)
+            p.drawPixmap(pw - t, by,           self._flip(ct, True,  False))
+            p.drawPixmap(0,      by + bh - t,  self._flip(ct, False, True))
+            p.drawPixmap(pw - t, by + bh - t,  self._flip(ct, True,  True))
         else:
-            # Default: plain dark box
-            p.fillRect(0, 0, pw, ph, QColor("#1a1a2e"))
+            p.fillRect(0, by, pw, bh, QColor("#1a1a2e"))
             p.setPen(QPen(QColor("#aaaacc"), 1))
-            p.drawRect(0, 0, pw - 1, ph - 1)
+            p.drawRect(0, by, pw - 1, bh - 1)
 
-        # Portrait slot
+        # Portrait slot — DLG-4: left or right side
         port_w = 24 * s
+        right  = (self._portrait_side == "right")
         x_text = 2 * s
-        if self._portrait_px and not self._portrait_px.isNull():
-            scaled_port = self._portrait_px.scaled(
-                port_w, ph - 4 * s,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.FastTransformation,
-            )
-            px_x = 2 * s
-            px_y = (ph - scaled_port.height()) // 2
-            p.drawPixmap(px_x, px_y, scaled_port)
-            x_text = px_x + port_w + 2 * s
-        elif self._portrait_px is not None:
-            # Explicitly set but null (file missing) — show placeholder
-            p.fillRect(2*s, 2*s, port_w, ph - 4*s, QColor("#2a2a44"))
-            p.setPen(QPen(QColor("#6666aa"), 1))
-            p.drawRect(2*s, 2*s, port_w - 1, ph - 4*s - 1)
-            font_p = QFont("Courier", max(6, s * 4))
-            p.setFont(font_p)
-            p.setPen(QColor("#888888"))
-            p.drawText(QRect(2*s, 2*s, port_w, ph - 4*s),
-                       Qt.AlignmentFlag.AlignCenter, "?")
-            x_text = 2*s + port_w + 2*s
+        tw_end = pw - 2 * s          # text zone right edge (no portrait)
+        if self._portrait_px is not None:
+            px_x = (pw - port_w - 2 * s) if right else 2 * s
+            if not self._portrait_px.isNull():
+                scaled_port = self._portrait_px.scaled(
+                    port_w, bh - 4 * s,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.FastTransformation,
+                )
+                px_y = by + (bh - scaled_port.height()) // 2
+                p.drawPixmap(px_x, px_y, scaled_port)
+            else:
+                p.fillRect(px_x, by + 2*s, port_w, bh - 4*s, QColor("#2a2a44"))
+                p.setPen(QPen(QColor("#6666aa"), 1))
+                p.drawRect(px_x, by + 2*s, port_w - 1, bh - 4*s - 1)
+                p.setFont(QFont("Courier", max(6, s * 4)))
+                p.setPen(QColor("#888888"))
+                p.drawText(QRect(px_x, by + 2*s, port_w, bh - 4*s),
+                           Qt.AlignmentFlag.AlignCenter, "?")
+            if right:
+                x_text = 2 * s
+                tw_end = px_x - 2 * s
+            else:
+                x_text = px_x + port_w + 2 * s
+                tw_end = pw - 2 * s
 
-        # Palette colors: slot1=text, slot2=speaker, slot3=accent (fallback if not set)
+        # Palette helper
         def _pal_color(slot: int, fallback: str) -> QColor:
-            """slot=1/2/3; returns QColor from self._palette or fallback hex string."""
             idx = slot - 1
             if idx < len(self._palette):
                 try:
@@ -216,24 +472,45 @@ class _NgpcDialogPreview(QWidget):
                     pass
             return QColor(fallback)
 
+        tx  = x_text
+        tw  = tw_end - x_text
+        spk_y  = by + s
+        spk_h  = 10 * s
+        body_y = by + spk_h
+        body_h = bh - spk_h - 2 * s
+        # DLG-7: tile columns available for body text (exact pixel measurement)
+        body_cols = tw // (8 * s)
+
+        outline_col = _pal_color(2, "#000000")   # slot 2 = outline colour
+
         # Speaker name
-        font_sm = QFont("Courier", max(5, s * 4))
-        font_sm.setBold(True)
-        p.setFont(font_sm)
-        p.setPen(_pal_color(2, "#ffdd88"))
         if self._speaker:
-            p.drawText(x_text, 0, pw - x_text - s, 10 * s,
-                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                       self._speaker)
+            spk_color = _pal_color(2, "#ffdd88")
+            if self._font_tiles:
+                self._draw_text_bitmap(p, self._speaker, tx, spk_y, tw, spk_h,
+                                       spk_color, outline_color=outline_col)
+            else:
+                font_sm = QFont("Courier", max(5, s * 4))
+                font_sm.setBold(True)
+                p.setFont(font_sm)
+                p.setPen(spk_color)
+                p.drawText(tx, by, tw, spk_h,
+                           Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                           self._speaker)
 
         # Text body
-        font_body = QFont("Courier", max(5, s * 4))
-        p.setFont(font_body)
-        p.setPen(_pal_color(1, "#dddddd"))
-        p.drawText(QRect(x_text, 10 * s, pw - x_text - s, ph - 12 * s),
-                   Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
-                   | Qt.TextFlag.TextWordWrap,
-                   self._text or "")
+        if self._text:
+            txt_color = _pal_color(1, "#dddddd")
+            if self._font_tiles:
+                self._draw_text_bitmap(p, self._text, tx, body_y, tw, body_h, txt_color,
+                                       cols=body_cols, outline_color=outline_col)
+            else:
+                p.setFont(QFont("Courier", max(5, s * 4)))
+                p.setPen(txt_color)
+                p.drawText(QRect(tx, body_y, tw, body_h),
+                           Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
+                           | Qt.TextFlag.TextWordWrap,
+                           self._text)
 
         p.end()
 
@@ -266,6 +543,15 @@ class DialoguesTab(QWidget):
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(800)   # ms after last keystroke
         self._save_timer.timeout.connect(self._flush_save)
+
+        # DLG-7 — overflow state
+        self._overflow_at: int = -1
+
+        # DLG-5 — typewriter animation state
+        self._tw_timer = QTimer(self)
+        self._tw_timer.timeout.connect(self._on_tw_tick)
+        self._tw_idx: int = 0
+        self._tw_full_text: str = ""
 
         self._build_ui()
 
@@ -489,9 +775,15 @@ class DialoguesTab(QWidget):
         por_row.setSpacing(4)
         self._combo_portrait = QComboBox()
         self._combo_portrait.setIconSize(QSize(32, 32))
-        self._combo_portrait.setMinimumWidth(160)
+        self._combo_portrait.setMinimumWidth(140)
         self._combo_portrait.currentIndexChanged.connect(self._on_portrait_changed)
         por_row.addWidget(self._combo_portrait)
+        self._btn_portrait_side = QPushButton("◀ L")
+        self._btn_portrait_side.setFixedSize(36, 24)
+        self._btn_portrait_side.setToolTip("Côté du portrait (gauche / droite)")
+        self._btn_portrait_side.setCheckable(True)
+        self._btn_portrait_side.clicked.connect(self._on_portrait_side_toggled)
+        por_row.addWidget(self._btn_portrait_side)
         self._lbl_portrait_thumb = QLabel()
         self._lbl_portrait_thumb.setFixedSize(1, 1)
         self._lbl_portrait_thumb.setVisible(False)
@@ -512,6 +804,23 @@ class DialoguesTab(QWidget):
         self._lbl_chars = QLabel("0 / 80")
         self._lbl_chars.setStyleSheet("color:#666688; font-size:10px;")
         rv.addWidget(self._lbl_chars)
+
+        # DLG-7 — overflow indicator + split button
+        ov_row = QHBoxLayout()
+        ov_row.setSpacing(6)
+        self._lbl_overflow = QLabel("")
+        self._lbl_overflow.setStyleSheet("color:#ff8800; font-size:10px;")
+        self._lbl_overflow.setVisible(False)
+        ov_row.addWidget(self._lbl_overflow)
+        self._btn_split = QPushButton("✂ Split")
+        self._btn_split.setFixedHeight(20)
+        self._btn_split.setStyleSheet("font-size:10px;")
+        self._btn_split.setToolTip("Couper le texte au point de débordement → nouvelle ligne")
+        self._btn_split.setVisible(False)
+        self._btn_split.clicked.connect(self._on_split_overflow)
+        ov_row.addWidget(self._btn_split)
+        ov_row.addStretch(1)
+        rv.addLayout(ov_row)
 
         # ── Choices section ──────────────────────────────────────────
         sep_ch = QFrame()
@@ -595,6 +904,28 @@ class DialoguesTab(QWidget):
         fs_row.addStretch(1)
         rv.addLayout(fs_row)
 
+        # DLG-6 — box Y position presets
+        boxy_row = QHBoxLayout()
+        boxy_row.setSpacing(4)
+        lbl_boxy = QLabel("Position :")
+        lbl_boxy.setStyleSheet("color:#aaaacc; font-size:11px;")
+        boxy_row.addWidget(lbl_boxy)
+        self._btn_boxy_top    = QPushButton("▲ Haut")
+        self._btn_boxy_mid    = QPushButton("▬ Milieu")
+        self._btn_boxy_bottom = QPushButton("▼ Bas")
+        for btn, y_val in (
+            (self._btn_boxy_top, 0),
+            (self._btn_boxy_mid, 56),
+            (self._btn_boxy_bottom, -1),
+        ):
+            btn.setFixedHeight(22)
+            btn.setCheckable(True)
+            btn.setStyleSheet("font-size:10px;")
+            btn.clicked.connect(lambda _c, v=y_val: self._on_box_y_preset(v))
+            boxy_row.addWidget(btn)
+        boxy_row.addStretch(1)
+        rv.addLayout(boxy_row)
+
         pal_row = QHBoxLayout()
         pal_row.setSpacing(4)
         lbl_pal = QLabel(tr("dlg.palette"))
@@ -632,7 +963,31 @@ class DialoguesTab(QWidget):
         rv.addWidget(lbl_prev)
 
         self._preview = _NgpcDialogPreview()
+        self._preview.overflow_changed.connect(self._on_overflow_changed)
         rv.addWidget(self._preview)
+
+        # DLG-5 — typewriter animation controls
+        tw_row = QHBoxLayout()
+        tw_row.setSpacing(6)
+        self._btn_tw_play = QPushButton("▶ Anim")
+        self._btn_tw_play.setFixedHeight(22)
+        self._btn_tw_play.setCheckable(True)
+        self._btn_tw_play.setStyleSheet("font-size:10px;")
+        self._btn_tw_play.setToolTip("Animer le texte caractère par caractère")
+        self._btn_tw_play.clicked.connect(self._on_play_typewriter)
+        tw_row.addWidget(self._btn_tw_play)
+        lbl_tw_spd = QLabel("Vitesse :")
+        lbl_tw_spd.setStyleSheet("color:#aaaacc; font-size:10px;")
+        tw_row.addWidget(lbl_tw_spd)
+        self._spin_tw_speed = QSpinBox()
+        self._spin_tw_speed.setRange(1, 20)
+        self._spin_tw_speed.setValue(4)
+        self._spin_tw_speed.setFixedWidth(50)
+        self._spin_tw_speed.setToolTip("Caractères par frame (1 = lent, 20 = rapide)")
+        tw_row.addWidget(self._spin_tw_speed)
+        tw_row.addStretch(1)
+        rv.addLayout(tw_row)
+
         rv.addStretch(1)
 
         self._right_stack.addWidget(page0)
@@ -759,10 +1114,39 @@ class DialoguesTab(QWidget):
         self._refresh_choice_goto_combos()
         self._right_stack.setCurrentIndex(0)
         self._set_editing_enabled(False)
+        # DLG-1: load project font into preview
+        font_img, font_fmt = self._load_project_font()
+        self._preview.set_font(font_img, font_fmt)
+        # DLG-2: restore fullscreen mode from scene config
+        sc = self._current_scene_data()
+        fs = bool((sc.get("dialogue_config") or {}).get("full_screen")) if sc else False
+        self._preview.set_fullscreen(fs)
+        # DLG-6: restore box Y
+        raw_y = (sc.get("dialogue_config") or {}).get("box_y") if sc else None
+        box_y = int(raw_y) if raw_y is not None else -1
+        self._preview.set_box_y(box_y)
+        self._sync_boxy_buttons(box_y)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _load_project_font(self) -> "tuple":
+        """Return (pil_image, font_format) from project_data, or (None, '128x48')."""
+        fmt = "128x48"
+        if not _PIL_OK or self._project_data is None:
+            return None, fmt
+        font_path = self._project_data.get("custom_font_png") or ""
+        fmt = self._project_data.get("font_format") or "128x48"
+        if not font_path:
+            return None, fmt
+        abs_path = Path(self._base_dir or "") / font_path
+        if not abs_path.exists():
+            return None, fmt
+        try:
+            return _PilImage.open(str(abs_path)), fmt
+        except Exception:
+            return None, fmt
 
     def _current_scene_data(self) -> dict | None:
         """Return the scene dict currently selected in the combo."""
@@ -950,6 +1334,12 @@ class DialoguesTab(QWidget):
         self._edit_speaker.blockSignals(False)
         self._edit_text.blockSignals(False)
         self._combo_portrait.blockSignals(False)
+        # DLG-4: restore portrait side
+        side = str(ln.get("portrait_side") or "left")
+        self._btn_portrait_side.blockSignals(True)
+        self._btn_portrait_side.setChecked(side == "right")
+        self._btn_portrait_side.setText("▶ R" if side == "right" else "◀ L")
+        self._btn_portrait_side.blockSignals(False)
         self._load_choices_into_form()
         self._update_preview()
         self._set_editing_enabled(True)
@@ -964,7 +1354,18 @@ class DialoguesTab(QWidget):
         self._edit_speaker.blockSignals(False)
         self._edit_text.blockSignals(False)
         self._preview.set_line("", "")
+        self._lbl_overflow.setVisible(False)
+        self._btn_split.setVisible(False)
         self._set_editing_enabled(False)
+
+    def _current_portrait_side(self) -> str:
+        dlgs = self._get_dialogues()
+        if not (0 <= self._sel_dlg < len(dlgs)):
+            return "left"
+        lines = dlgs[self._sel_dlg].get("lines") or []
+        if not (0 <= self._sel_line < len(lines)):
+            return "left"
+        return str(lines[self._sel_line].get("portrait_side") or "left")
 
     def _update_preview(self) -> None:
         spk = self._edit_speaker.text()
@@ -975,7 +1376,8 @@ class DialoguesTab(QWidget):
         portrait_px = self._load_portrait_pixmap(por_name)
         bg_tiles    = self._load_bg_tiles(bg_name)
         pal         = self._current_palette()
-        self._preview.set_line(spk, txt, portrait_px, bg_tiles, pal)
+        side        = self._current_portrait_side()
+        self._preview.set_line(spk, txt, portrait_px, bg_tiles, pal, portrait_side=side)
 
     def _update_portrait_thumb(self, por_name: str,
                                portrait_px: "QPixmap | None") -> None:
@@ -1048,7 +1450,118 @@ class DialoguesTab(QWidget):
         if sc is None:
             return
         cfg = sc.setdefault("dialogue_config", {})
-        cfg["full_screen"] = self._chk_full_screen.isChecked()
+        checked = self._chk_full_screen.isChecked()
+        cfg["full_screen"] = checked
+        self._preview.set_fullscreen(checked)   # DLG-2
+        self._mark_dirty()
+
+    # DLG-4 — portrait side ------------------------------------------------
+
+    def _on_portrait_side_toggled(self, checked: bool) -> None:
+        side = "right" if checked else "left"
+        self._btn_portrait_side.setText("▶ R" if checked else "◀ L")
+        self._write_field("portrait_side", side)
+        self._update_preview()
+
+    # DLG-5 — typewriter animation ----------------------------------------
+
+    def _on_play_typewriter(self) -> None:
+        if self._btn_tw_play.isChecked():
+            self._tw_full_text = self._edit_text.text()
+            self._tw_idx = 0
+            interval = max(30, 250 // max(1, self._spin_tw_speed.value()))
+            self._tw_timer.start(interval)
+            self._btn_tw_play.setText("■ Stop")
+        else:
+            self._tw_timer.stop()
+            self._btn_tw_play.setText("▶ Anim")
+            self._update_preview()
+
+    def _on_tw_tick(self) -> None:
+        speed = max(1, self._spin_tw_speed.value())
+        self._tw_idx = min(self._tw_idx + speed, len(self._tw_full_text))
+        partial = self._tw_full_text[:self._tw_idx]
+        spk = self._edit_speaker.text()
+        por_name = self._combo_portrait.currentData() or ""
+        sc = self._current_scene_data()
+        bg_name = str((sc.get("dialogue_config") or {}).get("bg_sprite") or "") if sc else ""
+        portrait_px = self._load_portrait_pixmap(por_name)
+        bg_tiles    = self._load_bg_tiles(bg_name)
+        pal         = self._current_palette()
+        side        = self._current_portrait_side()
+        self._preview.set_line(spk, partial, portrait_px, bg_tiles, pal, portrait_side=side)
+        if self._tw_idx >= len(self._tw_full_text):
+            self._tw_timer.stop()
+            self._btn_tw_play.setChecked(False)
+            self._btn_tw_play.setText("▶ Anim")
+
+    # DLG-7 — overflow / split -----------------------------------------------
+
+    def _on_overflow_changed(self, idx: int) -> None:
+        self._overflow_at = idx
+        if idx < 0:
+            self._lbl_overflow.setVisible(False)
+            self._btn_split.setVisible(False)
+        else:
+            overflow_text = self._edit_text.text()[idx:]
+            n = len(overflow_text)
+            self._lbl_overflow.setText(f"▶ +{n} chars → box 2")
+            self._lbl_overflow.setVisible(True)
+            self._btn_split.setVisible(True)
+
+    def _on_split_overflow(self) -> None:
+        if self._overflow_at < 0:
+            return
+        sc = self._current_scene_data()
+        if sc is None:
+            return
+        dlgs = self._get_dialogues(sc)
+        if not (0 <= self._sel_dlg < len(dlgs)):
+            return
+        lines = dlgs[self._sel_dlg].get("lines") or []
+        if not (0 <= self._sel_line < len(lines)):
+            return
+        full = self._edit_text.text()
+        fit_text      = full[:self._overflow_at].rstrip()
+        overflow_text = full[self._overflow_at:].lstrip()
+        # Update current line with fit portion
+        lines[self._sel_line]["text"] = fit_text
+        self._edit_text.blockSignals(True)
+        self._edit_text.setText(fit_text)
+        self._edit_text.blockSignals(False)
+        # Insert a new line after current with overflow portion
+        cur_ln = lines[self._sel_line]
+        new_ln = {
+            "speaker":      str(cur_ln.get("speaker") or ""),
+            "text":         overflow_text,
+            "portrait":     str(cur_ln.get("portrait") or ""),
+            "portrait_side": str(cur_ln.get("portrait_side") or "left"),
+        }
+        insert_pos = self._sel_line + 1
+        lines.insert(insert_pos, new_ln)
+        self._sel_line = insert_pos
+        self._refresh_line_list()
+        self._list_lines.setCurrentRow(self._sel_line)
+        self._mark_dirty()
+
+    # DLG-6 — box Y position -----------------------------------------------
+
+    def _sync_boxy_buttons(self, v: int) -> None:
+        self._btn_boxy_top.setChecked(v == 0)
+        self._btn_boxy_mid.setChecked(v == 56)
+        self._btn_boxy_bottom.setChecked(v < 0)
+
+    def _on_box_y_preset(self, v: int) -> None:
+        sc = self._current_scene_data()
+        if sc is None:
+            return
+        cfg = sc.setdefault("dialogue_config", {})
+        if v < 0:
+            cfg.pop("box_y", None)
+        else:
+            cfg["box_y"] = v
+        self._sync_boxy_buttons(v)
+        self._preview.set_box_y(v)
         self._mark_dirty()
 
     # ------------------------------------------------------------------
@@ -1315,9 +1828,16 @@ class DialoguesTab(QWidget):
 
     def _on_text_changed(self, text: str) -> None:
         self._write_field("text", text, debounce=True)
-        self._lbl_chars.setText(f"{len(text)} / {_TEXT_MAX}")
-        c = "#dd4444" if len(text) > _TEXT_MAX else "#666688"
-        self._lbl_chars.setStyleSheet(f"color:{c}; font-size:10px;")
+        # DLG-3: per-line tile counter
+        has_portrait = bool(self._combo_portrait.currentData() or "")
+        cols = 15 if has_portrait else 18
+        counts = _split_into_tile_lines(text, cols)
+        overflow = any(c > cols for c in counts)
+        parts = [f"L{i+1}:{c}/{cols}{'⚠' if c > cols else ''}"
+                 for i, c in enumerate(counts)]
+        self._lbl_chars.setText("  ".join(parts))
+        self._lbl_chars.setStyleSheet(
+            f"color:{'#dd4444' if overflow else '#666688'}; font-size:10px;")
         self._update_preview()
         self._refresh_line_label()
 

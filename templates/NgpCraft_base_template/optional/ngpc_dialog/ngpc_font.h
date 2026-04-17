@@ -30,8 +30,13 @@
 #define FONT_TILE_CURSOR  72u   /* '>' selection cursor */
 
 /* Load the 73 font tiles into TILE_RAM at FONT_TILE_BASE.
- * Safe to call multiple times (idempotent). */
+ * No-op when NO_SYSFONT is defined (custom font already loaded at boot). */
 void ngpc_font_load(void);
+
+/* Set palette slot to the font's colors.
+ * When NO_SYSFONT: uses colors extracted from the custom font PNG.
+ * Otherwise: default dialog palette (white ink, dark fill). */
+void ngpc_font_apply_palette(u8 plane, u8 pal_slot);
 
 /* Convert an ASCII character to its absolute tile index.
  * Returns FONT_TILE_BASE + FONT_TILE_SPACE for unsupported characters. */

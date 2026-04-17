@@ -189,6 +189,12 @@ static void _clear_inner(const NgpcDialog *d)
     u8 ih = (d->bh > 2u) ? (u8)(d->bh - 2u) : 0u;
     u8 x, y;
 
+#ifdef NO_SYSFONT
+    /* Custom font two-plane mode: SCR2 interior transparent, SCR1 holds the fill. */
+    for (y = 0u; y < ih; y++)
+        for (x = 0u; x < iw; x++)
+            _clear_tile((u8)(d->bx + 1u + x), (u8)(d->by + 1u + y));
+#else
     if (d->frame_tile_base != 0u) {
         /* Refill with opaque fill tile (frame_tile_base+2). */
         for (y = 0u; y < ih; y++)
@@ -199,6 +205,7 @@ static void _clear_inner(const NgpcDialog *d)
         for (y = 0u; y < ih; y++)
             _fill_row((u8)(d->bx + 1u), (u8)(d->by + 1u + y), _SPACE, iw, d->pal);
     }
+#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -494,6 +501,9 @@ void ngpc_dialog_open(NgpcDialog *d,
     d->flags           = _DLG_OPEN;
 
     ngpc_font_load();
+#ifndef NO_SYSFONT
+    ngpc_font_apply_palette(GFX_SCR2, pal);
+#endif
     _draw_frame(d);
 
     if (portrait_tile != 0u) {

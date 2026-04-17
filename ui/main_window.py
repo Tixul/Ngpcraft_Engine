@@ -455,7 +455,9 @@ class MainWindow(QMainWindow):
         for gkey, gattrs in self._TAB_GROUPS.items():
             for attr in gattrs:
                 if getattr(self, attr, None) is current:
-                    self._active_tab_per_group[gkey] = current
+                    # Never pin _map_tab as the remembered tab for the project group
+                    if not (gkey == "project" and attr == "_map_tab"):
+                        self._active_tab_per_group[gkey] = current
                     break
         if current is self._vram_tab:
             self._vram_tab.refresh(self._project_data, self._project_path)

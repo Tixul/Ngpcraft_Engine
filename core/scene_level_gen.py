@@ -612,6 +612,41 @@ def make_scene_level_h(
 
     sprite_meta = _sprite_meta_map(scene)
     seen_types = _collect_entity_types(scene)
+
+    # ---- DungeonGen: filter procedural canvas placements, inject pool types ----
+    # When DungeonGen is enabled, player/enemy/item are placed procedurally at
+    # runtime. Their canvas placements are suppressed to avoid conflicts.
+    # Non-procedural entities (triggers, NPCs, props) are kept so that:
+    #  - g_{sym}_entities[] still contains them (room exits, static objects)
+    #  - trigger actions (show_entity, hide_entity, etc.) resolve correctly
+    # Pool entity types are injected into seen_types so their sprite/hitbox data
+    # is always emitted in this header even if not on canvas.
+    _dg = scene.get("rt_dungeongen_params") or {}
+    if isinstance(_dg, dict) and bool(_dg.get("enabled")):
+        _procedural_roles = {"player", "enemy", "item"}
+        entities = [
+            e for e in entities
+            if str(entity_roles.get(str(e.get("type") or ""), "prop") or "prop").lower()
+            not in _procedural_roles
+        ]
+        # Inject pool + player entity types into seen_types for sprite/hitbox export
+        _dg_inject = []
+        _pid = str((_dg.get("player_entity_id") or "")).strip()
+        if _pid:
+            _dg_inject.append(_pid)
+        for _pe in (_dg.get("enemy_pool") or []):
+            _eid = str((_pe.get("entity_id") or "")).strip()
+            if _eid:
+                _dg_inject.append(_eid)
+        for _pe in (_dg.get("item_pool") or []):
+            _eid = str((_pe.get("entity_id") or "")).strip()
+            if _eid:
+                _dg_inject.append(_eid)
+        _seen_set = set(seen_types)
+        for _eid in _dg_inject:
+            if _eid not in _seen_set:
+                seen_types.append(_eid)
+                _seen_set.add(_eid)
     damage_prop_types: set[str] = set()
 
     sep = "/* " + "-" * 66 + " */"
@@ -1543,6 +1578,10 @@ def make_scene_level_h(
             "entity_type_spawned_ge":    86,
             "on_custom_event":           87,
             "item_count_ge":             88,
+            "dgn_cluster_ge":            89,
+            "dgn_room_type_is":          90,
+            "dgn_has_stair":             91,
+            "dgn_room_cleared":          92,
         }
 
         act_to_id = {
@@ -1626,6 +1665,9 @@ def make_scene_level_h(
             "flip_sprite_v":   77,
             "drop_item":       78,
             "drop_random_item":79,
+            "dgn_reset":        80,
+            "dgn_next_cluster": 81,
+            "dgn_go_back":      82,
         }
 
         lines += [sep, "/* Triggers (conditions -> actions)                                    */", sep]
@@ -1779,6 +1821,18 @@ def make_scene_level_h(
             "#define TRIG_ACT_TOGGLE_TILE     73",
             "#define TRIG_ACT_SET_NPC_DIALOGUE 74",
             "#define TRIG_ACT_OPEN_MENU        75",
+            "#endif",
+            "",
+            "#ifndef TRIG_DGN_CLUSTER_GE",
+            "#define TRIG_DGN_CLUSTER_GE   89",
+            "#define TRIG_DGN_ROOM_TYPE_IS 90",
+            "#define TRIG_DGN_HAS_STAIR    91",
+            "#define TRIG_DGN_ROOM_CLEARED 92",
+            "#endif",
+            "#ifndef TRIG_ACT_DGN_RESET",
+            "#define TRIG_ACT_DGN_RESET        80",
+            "#define TRIG_ACT_DGN_NEXT_CLUSTER 81",
+            "#define TRIG_ACT_DGN_GO_BACK      82",
             "#endif",
             "",
             "#ifndef NGPNG_TRIGGER_T",
@@ -2632,6 +2686,9 @@ def make_scene_level_h(
     map_mode = map_mode_now
     tile_ids = scene.get("tile_ids", {}) or {}
     _sc_flags = 0
+    _rt_dg = (scene.get("rt_dungeongen_params") or {}) if isinstance(scene, dict) else {}
+    if _rt_dg.get("enabled"):
+        _sc_flags |= 0x0800  # SCENE_FLAG_RUNTIME_DUNGEONGEN
 
     for ent in entities:
         typ = str(ent.get("type") or "").strip()
@@ -3001,7 +3058,9 @@ def make_scene_dialogs_h(*, scene: dict, sym: str, export_dir=None) -> str | Non
     lines.append("typedef struct {")
     lines.append("    const char *text;    /* encoded text, may start with speaker markers */")
     lines.append("    u8  portrait_id;     /* 0xFF = no portrait for this page             */")
+    lines.append("    u8  flags;           /* bit 0: portrait on right side (DLG_PAGE_FLAG_PORTRAIT_RIGHT) */")
     lines.append("} NgpcDlgPage;")
+    lines.append("#define DLG_PAGE_FLAG_PORTRAIT_RIGHT  0x01u")
     lines.append("#endif")
     lines.append("")
 
@@ -3021,13 +3080,15 @@ def make_scene_dialogs_h(*, scene: dict, sym: str, export_dir=None) -> str | Non
 
         lines.append(f"static const NgpcDlgPage g_{sym}_dlg_{did}[] = {{")
         for ln in dlg_lines:
-            speaker = str(ln.get("speaker") or "")
-            text    = str(ln.get("text") or "")
+            speaker  = str(ln.get("speaker") or "")
+            text     = str(ln.get("text") or "")
             portrait = str(ln.get("portrait") or "").strip()
             portrait_c = f"{portrait_ids[portrait]}u" if portrait else "0xFFu"
-            encoded = _encode_dialog_text(speaker=speaker, text=text)
-            lines.append(f'    {{ "{encoded}", {portrait_c} }},')
-        lines.append("    { 0, 0xFFu }")
+            side     = str(ln.get("portrait_side") or "left").strip()
+            flags_c  = "DLG_PAGE_FLAG_PORTRAIT_RIGHT" if side == "right" else "0x00u"
+            encoded  = _encode_dialog_text(speaker=speaker, text=text)
+            lines.append(f'    {{ "{encoded}", {portrait_c}, {flags_c} }},')
+        lines.append("    { 0, 0xFFu, 0x00u }")
         lines.append("};")
         lines.append("")
         defines.append(f"#define {sym_upper_scene}_DLG_{did_upper} {i}")
@@ -3282,13 +3343,10 @@ def make_scene_dialogs_h(*, scene: dict, sym: str, export_dir=None) -> str | Non
     pal = list(cfg.get("palette") or [])
     while len(pal) < 3:
         pal.append(_PAL_DEFAULTS[len(pal)])
-    # If a bg_sprite is configured, always derive slot-2 fill color from its
-    # palette (index 1 = first non-transparent color = box background).
-    # This overrides any stored value so the font background always matches the box.
-    if bg_sprite and export_dir is not None:
-        fill_hex = _get_sprite_fill_color(export_dir, bg_sprite)
-        if fill_hex:
-            pal[1] = fill_hex
+    # NOTE: do NOT override pal[1] with the sprite fill color.
+    # For SYSFONT, ngpc_font_apply_palette() overwrites the palette anyway.
+    # For NO_SYSFONT, index 2 = character body — it must contrast with the fill,
+    # not match it. The user controls PAL_2 via the dialogue palette swatches.
     lines.append("")
     lines.append("/* Dialog text palette (NGPC RGB444: 0xBGR  slot 0 = transparent) */")
     for idx in range(3):
@@ -3297,6 +3355,24 @@ def make_scene_dialogs_h(*, scene: dict, sym: str, export_dir=None) -> str | Non
         except (ValueError, IndexError):
             word = int(_PAL_DEFAULTS[idx], 16)
         lines.append(f"#define {sym_upper_scene}_DLG_PAL_{idx + 1}  0x{word:04X}  /* slot {idx + 1} */")
+
+    # ── Box geometry (matches preview exactly) ────────────────────────────
+    full_screen = bool(cfg.get("full_screen"))
+    raw_y       = cfg.get("box_y")
+    if raw_y is not None and int(raw_y) >= 0:
+        box_y_val = int(raw_y)
+    elif full_screen:
+        box_y_val = 112   # default bottom: 152 - 40
+    else:
+        box_y_val = 0     # non-fullscreen: box occupies whole preview area
+    lines.append("")
+    lines.append("/* Dialog box geometry — pass directly to scene_X_dlg_open() */")
+    lines.append(f"#define {sym_upper_scene}_DLG_BOX_X   0u")
+    lines.append(f"#define {sym_upper_scene}_DLG_BOX_Y   {box_y_val}u")
+    lines.append(f"#define {sym_upper_scene}_DLG_BOX_W   160u")
+    lines.append(f"#define {sym_upper_scene}_DLG_BOX_H   40u")
+    if full_screen:
+        lines.append(f"#define {sym_upper_scene}_DLG_FULL_SCREEN  1")
 
     lines.append("")
     lines.append(f"#endif /* {guard} */")

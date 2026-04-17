@@ -25,7 +25,7 @@ u8   ngpng_trigger_cond_met(u8 cond, u8 region, u16 value,
     u16 tx, u16 ty, u16 timer, u8 next_wave,
     u8 player_hp, u8 lives, u8 enemy_active_count,
     u16 collectible_count, u16 pad_pressed, u8 player_jump_started,
-    u16 npc_talked, u16 entity_contact);
+    u16 npc_talked, u16 entity_contact, u8 dlg_done);
 
 #endif /* NGPNG_HAS_TRIGGERS */
 

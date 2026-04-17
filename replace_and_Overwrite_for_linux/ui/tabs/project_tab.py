@@ -417,7 +417,7 @@ def _write_anims_header(
 # ---------------------------------------------------------------------------
 
 class FontPreviewWidget(QWidget):
-    """Custom widget that shows a 128×48 font PNG at 3× scale with:
+    """Custom widget that shows a 128×48 font PNG at configurable scale with:
     - per-tile ASCII character labels in the corner of each cell
     - hover tooltip: tile index / VRAM slot / character
     - click → emits clicked() so it can open the browse dialog
@@ -426,27 +426,50 @@ class FontPreviewWidget(QWidget):
 
     clicked = pyqtSignal()
 
-    _SCALE = 3
-    _COLS  = 16
-    _ROWS  = 6
-    _CELL  = 8 * _SCALE          # 24 px
     _ASCII_BASE = 32              # tile (0,0) → ASCII 32 = ' '
-
-    _W = _COLS * _CELL            # 384
-    _H = _ROWS * _CELL            # 144
 
     # Background colours for the preview composite
     _BG_DARK  = (0x22, 0x22, 0x22)
     _BG_LIGHT = (0xff, 0xff, 0xff)
 
-    def __init__(self, parent=None):
+    def __init__(self, scale: int = 3, cols: int = 16, rows: int = 6, parent=None):
         super().__init__(parent)
         self._pixmap: QPixmap | None = None
         self._pil_src = None        # original PIL image kept for bg-toggle re-renders
         self._bg_dark: bool = True  # True = dark bg, False = light bg
-        self.setFixedSize(self._W + 2, self._H + 2)  # +2 for 1px border
+        self._scale = scale
+        self._cols_count = cols
+        self._rows_count = rows
+        self._cell = 8 * scale
+        self._w = cols * self._cell
+        self._h = rows * self._cell
+        self.setFixedSize(self._w + 2, self._h + 2)  # +2 for 1px border
         self.setMouseTracking(True)
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+
+    def set_scale(self, scale: int) -> None:
+        """Change zoom level and redraw."""
+        self._scale = scale
+        self._cell = 8 * scale
+        self._w = self._cols_count * self._cell
+        self._h = self._rows_count * self._cell
+        self.setFixedSize(self._w + 2, self._h + 2)
+        if self._pil_src is not None:
+            self._rebuild_pixmap()
+        else:
+            self.update()
+
+    def set_format(self, cols: int, rows: int) -> None:
+        """Change grid format (cols×rows) and redraw."""
+        self._cols_count = cols
+        self._rows_count = rows
+        self._w = cols * self._cell
+        self._h = rows * self._cell
+        self.setFixedSize(self._w + 2, self._h + 2)
+        if self._pil_src is not None:
+            self._rebuild_pixmap()
+        else:
+            self.update()
 
     # ------------------------------------------------------------------
     def toggle_bg(self) -> None:
@@ -478,8 +501,8 @@ class FontPreviewWidget(QWidget):
         bg = Image.new("RGBA", img_rgba.size, bg_rgb + (255,))
         img_comp = Image.alpha_composite(bg, img_rgba).convert("RGB")
 
-        # Scale 3× nearest-neighbour
-        scale = self._SCALE
+        # Scale N× nearest-neighbour
+        scale = self._scale
         w, h = img_comp.width * scale, img_comp.height * scale
         try:
             resample = Image.Resampling.NEAREST
@@ -522,34 +545,36 @@ class FontPreviewWidget(QWidget):
         # Grid overlay
         pen_grid = QPen(QColor(0x44, 0x44, 0x44, 180), 1)
         p.setPen(pen_grid)
-        cell = self._CELL
-        for col in range(self._COLS + 1):
+        cell = self._cell
+        for col in range(self._cols_count + 1):
             x = 1 + col * cell
-            p.drawLine(x, 1, x, 1 + self._H)
-        for row in range(self._ROWS + 1):
+            p.drawLine(x, 1, x, 1 + self._h)
+        for row in range(self._rows_count + 1):
             y = 1 + row * cell
-            p.drawLine(1, y, 1 + self._W, y)
+            p.drawLine(1, y, 1 + self._w, y)
 
-        # Per-tile character labels
-        p.setPen(QColor("#ffffff"))
-        font = p.font()
-        font.setPixelSize(7)
-        p.setFont(font)
+        # Per-tile character labels (only when cell is large enough)
+        if cell >= 14:
+            p.setPen(QColor("#ffffff"))
+            font = p.font()
+            lbl_size = max(6, min(cell - 4, 11))
+            font.setPixelSize(lbl_size)
+            p.setFont(font)
 
-        for row in range(self._ROWS):
-            for col in range(self._COLS):
-                idx = row * self._COLS + col
-                ascii_code = self._ASCII_BASE + idx
-                if 32 <= ascii_code <= 127:
-                    ch = chr(ascii_code)
-                    # skip space — nothing useful to label
-                    if ch == ' ':
-                        continue
-                    cell_x = 1 + col * cell
-                    cell_y = 1 + row * cell
-                    # small label in top-left corner, 2px inset
-                    lbl_rect = QRect(cell_x + 2, cell_y + 1, cell - 3, 9)
-                    p.drawText(lbl_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, ch)
+            for row in range(self._rows_count):
+                for col in range(self._cols_count):
+                    idx = row * self._cols_count + col
+                    ascii_code = self._ASCII_BASE + idx
+                    if 32 <= ascii_code <= 127:
+                        ch = chr(ascii_code)
+                        # skip space — nothing useful to label
+                        if ch == ' ':
+                            continue
+                        cell_x = 1 + col * cell
+                        cell_y = 1 + row * cell
+                        # small label in top-left corner, 2px inset
+                        lbl_rect = QRect(cell_x + 2, cell_y + 1, cell - 3, lbl_size + 2)
+                        p.drawText(lbl_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, ch)
 
         # Border
         p.setPen(QPen(QColor("#333333"), 1))
@@ -562,12 +587,12 @@ class FontPreviewWidget(QWidget):
         """Return (tile_idx, ascii_code, ch) for cursor position, or None."""
         x = pos.x() - 1   # subtract border offset
         y = pos.y() - 1
-        cell = self._CELL
-        if x < 0 or y < 0 or x >= self._W or y >= self._H:
+        cell = self._cell
+        if x < 0 or y < 0 or x >= self._w or y >= self._h:
             return None
         col = x // cell
         row = y // cell
-        idx = row * self._COLS + col
+        idx = row * self._cols_count + col
         ascii_code = self._ASCII_BASE + idx
         ch = chr(ascii_code) if 32 <= ascii_code <= 127 else '?'
         return idx, ascii_code, ch
@@ -643,6 +668,22 @@ class FontTab(ProjectPathMixin, QWidget):
         _font_sec_lbl.setStyleSheet("font-weight: bold; color: #cccccc;")
         root.addWidget(_font_sec_lbl)
 
+        # Format row
+        fmt_row = QHBoxLayout()
+        fmt_lbl = QLabel(tr("font.format_label"))
+        fmt_lbl.setStyleSheet("color: #aaaaaa;")
+        fmt_row.addWidget(fmt_lbl)
+        from PyQt6.QtWidgets import QComboBox
+        self._fmt_combo = QComboBox()
+        self._fmt_combo.addItem(tr("font.format_128x48"), "128x48")
+        self._fmt_combo.addItem(tr("font.format_256x24"), "256x24")
+        _saved_fmt = self._data.get("font_format", "128x48")
+        self._fmt_combo.setCurrentIndex(1 if _saved_fmt == "256x24" else 0)
+        self._fmt_combo.currentIndexChanged.connect(self._on_format_changed)
+        fmt_row.addWidget(self._fmt_combo)
+        fmt_row.addStretch()
+        root.addLayout(fmt_row)
+
         # Browse row
         font_row = QHBoxLayout()
         _font_path_init = self._data.get("custom_font_png", "") or ""
@@ -665,11 +706,23 @@ class FontTab(ProjectPathMixin, QWidget):
         root.addLayout(font_row)
 
         # FontPreviewWidget — full-size, click-to-browse
-        # Row: label + bg toggle button (right-aligned)
+        # Row: label | zoom buttons | stretch | bg toggle button
         prev_header = QHBoxLayout()
         prev_lbl = QLabel(tr("font.preview_label"))
         prev_lbl.setStyleSheet("color: #888888;")
         prev_header.addWidget(prev_lbl)
+        prev_header.addSpacing(8)
+
+        self._zoom_btns: dict[int, QPushButton] = {}
+        for z in (2, 3, 4, 6):
+            btn = QPushButton(f"{z}×")
+            btn.setFixedWidth(32)
+            btn.setCheckable(True)
+            btn.setChecked(z == 3)
+            btn.clicked.connect(lambda checked, zz=z: self._on_zoom(zz))
+            self._zoom_btns[z] = btn
+            prev_header.addWidget(btn)
+
         prev_header.addStretch()
         self._btn_bg_toggle = QPushButton(tr("font.bg_light"))
         self._btn_bg_toggle.setFixedWidth(80)
@@ -678,7 +731,8 @@ class FontTab(ProjectPathMixin, QWidget):
         prev_header.addWidget(self._btn_bg_toggle)
         root.addLayout(prev_header)
 
-        self._font_preview_widget = FontPreviewWidget()
+        _init_cols, _init_rows = (32, 3) if _saved_fmt == "256x24" else (16, 6)
+        self._font_preview_widget = FontPreviewWidget(scale=3, cols=_init_cols, rows=_init_rows)
         self._font_preview_widget.clicked.connect(self._on_browse_custom_font)
         root.addWidget(self._font_preview_widget)
 
@@ -695,11 +749,12 @@ class FontTab(ProjectPathMixin, QWidget):
         spec_title.setStyleSheet("font-weight: bold; color: #aaaaaa;")
         root.addWidget(spec_title)
 
-        spec_body = QLabel(tr("font.spec_body"))
-        spec_body.setWordWrap(True)
-        spec_body.setStyleSheet("color: #888888;")
-        spec_body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        root.addWidget(spec_body)
+        _spec_key = "font.spec_body_256x24" if _saved_fmt == "256x24" else "font.spec_body_128x48"
+        self._spec_body_lbl = QLabel(tr(_spec_key))
+        self._spec_body_lbl.setWordWrap(True)
+        self._spec_body_lbl.setStyleSheet("color: #888888;")
+        self._spec_body_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        root.addWidget(self._spec_body_lbl)
 
         root.addStretch()
 
@@ -710,6 +765,23 @@ class FontTab(ProjectPathMixin, QWidget):
         else:
             self._data.pop("no_sysfont", None)
         self._on_save()
+
+    def _on_format_changed(self, idx: int) -> None:
+        fmt = self._fmt_combo.currentData()
+        self._data["font_format"] = fmt
+        cols, rows = (32, 3) if fmt == "256x24" else (16, 6)
+        self._font_preview_widget.set_format(cols, rows)
+        _spec_key = "font.spec_body_256x24" if fmt == "256x24" else "font.spec_body_128x48"
+        self._spec_body_lbl.setText(tr(_spec_key))
+        png_path = self._data.get("custom_font_png", "") or ""
+        if png_path:
+            self._update_font_preview(png_path)
+        self._on_save()
+
+    def _on_zoom(self, scale: int) -> None:
+        for z, btn in self._zoom_btns.items():
+            btn.setChecked(z == scale)
+        self._font_preview_widget.set_scale(scale)
 
     def _on_toggle_preview_bg(self) -> None:
         self._font_preview_widget.toggle_bg()
@@ -807,6 +879,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
 
     def _export_dir_abs(self) -> Path | None:
         """Project setting: optional directory where generated .c/.h are written."""
+        # Linux: normalise backslashes in export_dir paths stored on Windows
         rel = str(self._data.get("export_dir") or "").replace("\\", "/").strip()
         if not rel:
             return None
@@ -828,13 +901,36 @@ class ProjectTab(ProjectPathMixin, QWidget):
         self._audio_manifest = manifest
         self._populate_bgm_combo()
 
+    def _maybe_export_custom_font(self, export_dir: Path, errs: list[str]) -> None:
+        _d = self._data or {}
+        _png = str(_d.get("custom_font_png") or "").strip()
+        if not _png:
+            return
+        import sys as _sys
+        from core.headless_export import _find_tool_near
+        _tool = _find_tool_near("ngpc_font_export.py", self._project_dir)
+        if not _tool:
+            errs.append("ngpc_font_export.py not found — custom font not exported")
+            return
+        import subprocess as _sp
+        _out = str(export_dir / "ngpc_custom_font")
+        _r = _sp.run(
+            [_sys.executable, str(_tool), _png, "-o", _out, "-n", "ngpc_custom_font"],
+            capture_output=True, text=True,
+        )
+        if _r.returncode != 0:
+            errs.append(f"custom font export failed: {_r.stderr.strip()}")
+
     def _maybe_write_assets_autogen_mk(self, export_dir: Path | None, errs: list[str]) -> Path | None:
         if not export_dir or not self._project_dir:
             return None
         try:
             _d = self._data or {}
             _has_save = project_has_save_triggers(_d)
-            return write_assets_autogen_mk(self._project_dir, export_dir, has_save=_has_save)
+            _no_sysfont = bool(_d.get("no_sysfont"))
+            if _no_sysfont:
+                self._maybe_export_custom_font(export_dir, errs)
+            return write_assets_autogen_mk(self._project_dir, export_dir, has_save=_has_save, no_sysfont=_no_sysfont)
         except Exception as e:
             errs.append(f"assets_autogen.mk: {e}")
             return None
@@ -899,6 +995,123 @@ class ProjectTab(ProjectPathMixin, QWidget):
         except Exception as exc:
             errs.append(f"procgen_config: {exc}")
             return []
+
+    def _resolve_dungeongen_asset_pools(self) -> tuple[list[dict], list[dict], str | None]:
+        """Resolve DungeonGen sprite pools, with scene-level fallback for legacy projects."""
+        if not isinstance(self._data, dict):
+            return [], [], None
+        procgen_assets = self._data.get("procgen_assets", {}) or {}
+        dgen_assets = (procgen_assets.get("dungeongen") or {}) if isinstance(procgen_assets, dict) else {}
+        enemy_pool = dgen_assets.get("enemy_pool", []) or []
+        item_pool  = dgen_assets.get("item_pool",  []) or []
+        if enemy_pool or item_pool:
+            return enemy_pool, item_pool, None
+
+        for scene in (self._data.get("scenes") or []):
+            if not isinstance(scene, dict):
+                continue
+            rt = scene.get("rt_dungeongen_params", {}) or {}
+            if not rt.get("enabled"):
+                continue
+            enemy_pool = rt.get("enemy_pool", []) or []
+            item_pool  = rt.get("item_pool",  []) or []
+            if enemy_pool or item_pool:
+                scene_name = str(scene.get("name") or scene.get("id") or scene.get("label") or "?")
+                return enemy_pool, item_pool, scene_name
+        return [], [], None
+
+    def _maybe_write_dungeongen_procgen_assets(self, export_dir: Path | None, errs: list[str]) -> list[Path]:
+        """Write DungeonGen tiles_procgen.* and sprites_lab.* into export_dir."""
+        if not export_dir or not self._project_dir or not isinstance(self._data, dict):
+            return []
+
+        procgen_assets = self._data.get("procgen_assets", {}) or {}
+        dgen_assets = (procgen_assets.get("dungeongen") or {}) if isinstance(procgen_assets, dict) else {}
+        if not isinstance(dgen_assets, dict) or not dgen_assets:
+            return []
+
+        written: list[Path] = []
+
+        png_rel = str(dgen_assets.get("tileset_png", "") or "").strip()
+        tile_roles = dgen_assets.get("tile_roles", {}) or {}
+        if png_rel and tile_roles:
+            try:
+                from core.dungeongen_tiles_export import export_tiles_procgen
+                from core.dungeongen_cells import (
+                    normalize_dungeongen_runtime_cells,
+                    parse_dungeongen_cell_size,
+                )
+
+                cell_cfg = str(dgen_assets.get("cell_size", "16x16") or "16x16")
+                cw, ch = parse_dungeongen_cell_size(cell_cfg)
+                rt_cw, rt_ch = cw, ch
+                for _sc in (self._data.get("scenes") or []):
+                    _rtdg = (_sc.get("rt_dungeongen_params") or {}) if isinstance(_sc, dict) else {}
+                    if not _rtdg.get("enabled"):
+                        continue
+                    _sc_cw = int(_rtdg.get("cell_w_tiles", cw) or cw)
+                    _sc_ch = int(_rtdg.get("cell_h_tiles", ch) or ch)
+                    if _sc_cw != cw or _sc_ch != ch:
+                        _sc_name = _sc.get("name", "?") if isinstance(_sc, dict) else "?"
+                        errs.append(
+                            f"DungeonGen: scene '{_sc_name}' has stale cell size "
+                            f"{_sc_cw}x{_sc_ch}; project setting {cell_cfg} is used."
+                        )
+
+                png_path = Path(png_rel) if Path(png_rel).is_absolute() else self._project_dir / png_rel
+                if not png_path.exists():
+                    errs.append(f"DungeonGen tileset missing: {png_path}")
+                else:
+                    role_dict: dict[str, list[int]] = {}
+                    for key, value in tile_roles.items():
+                        if isinstance(value, list):
+                            role_dict[key] = [int(x) for x in value]
+                        elif isinstance(value, int):
+                            role_dict[key] = [value]
+                    rt_cw, rt_ch, _cell_reason = normalize_dungeongen_runtime_cells(
+                        source_cell_w_tiles=cw,
+                        source_cell_h_tiles=ch,
+                        requested_cell_w_tiles=rt_cw,
+                        requested_cell_h_tiles=rt_ch,
+                        tile_roles=role_dict,
+                    )
+                    tileset_mode = str(dgen_assets.get("tileset_mode", "full") or "full")
+                    tc, th = export_tiles_procgen(
+                        png_path=png_path,
+                        cell_w_tiles=cw,
+                        cell_h_tiles=ch,
+                        tile_roles=role_dict,
+                        out_dir=export_dir,
+                        rt_cell_w_tiles=rt_cw,
+                        rt_cell_h_tiles=rt_ch,
+                        compact_mode=(tileset_mode == "compact"),
+                    )
+                    written.extend([tc, th])
+            except Exception as exc:
+                errs.append(f"DungeonGen tiles: {exc}")
+
+        try:
+            from core.dungeongen_sprites_export import export_sprites_lab
+
+            enemy_pool, item_pool, fallback_scene = self._resolve_dungeongen_asset_pools()
+            if fallback_scene:
+                errs.append(
+                    f"DungeonGen sprites: procgen_assets pool empty; "
+                    f"using runtime pool from scene '{fallback_scene}'."
+                )
+            entity_types = (self._data.get("entity_templates", []) or []) + (self._data.get("entity_types", []) or [])
+            sc, sh = export_sprites_lab(
+                enemy_pool=enemy_pool,
+                item_pool=item_pool,
+                entity_types=[e for e in entity_types if isinstance(e, dict)],
+                base_dir=self._project_dir,
+                out_dir=export_dir,
+            )
+            written.extend([sc, sh])
+        except Exception as exc:
+            errs.append(f"DungeonGen sprites: {exc}")
+
+        return written
 
     def _run_globals_validation(self, errs: list[str]) -> None:
         """Append globals consistency warnings (C1/C2) to errs."""
@@ -3320,7 +3533,8 @@ class ProjectTab(ProjectPathMixin, QWidget):
         # (e.g. scenes_autogen.c added by a recent export) appear in OBJS.
         try:
             _has_save = bool(self._data.get("enable_flash_save", False))
-            write_assets_autogen_mk(self._project_dir, _export_dir_abs, has_save=_has_save)
+            _no_sysfont = bool(self._data.get("no_sysfont", False))
+            write_assets_autogen_mk(self._project_dir, _export_dir_abs, has_save=_has_save, no_sysfont=_no_sysfont)
         except Exception:
             pass
 
@@ -4327,6 +4541,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
                 scenes_h, scenes_c, skipped_scenes = write_scenes_autogen(project_data=self._data, export_dir=exp_dir)
             except Exception as e:
                 errs.append(f"scenes autogen: {e}")
+        dgen_assets = self._maybe_write_dungeongen_procgen_assets(exp_dir, errs)
         mk_path = self._maybe_write_assets_autogen_mk(exp_dir, errs)
         constants_h = self._maybe_write_constants_h(exp_dir, errs)
         game_vars_h = self._maybe_write_game_vars_h(exp_dir, errs)
@@ -4356,6 +4571,8 @@ class ProjectTab(ProjectPathMixin, QWidget):
             msg += "\n" + tr("proj.constants_written", path=self._rel(constants_h))
         if game_vars_h:
             msg += "\n" + tr("proj.gamevars_written", path=self._rel(game_vars_h))
+        if dgen_assets:
+            msg += "\n" + " ".join(p.name for p in dgen_assets) + " written"
         if errs:
             msg += "\n" + "\n".join(errs[:6])
         QMessageBox.information(self, tr("proj.export_all_c"), msg)
@@ -4604,6 +4821,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
                         msg += "\n" + tr("proj.scenes_autogen_skipped", names=", ".join(skipped_scenes[:8]))
             except Exception as e:
                 errs.append(f"scenes autogen: {e}")
+        dgen_assets = self._maybe_write_dungeongen_procgen_assets(exp_dir, errs)
         mk_path = self._maybe_write_assets_autogen_mk(exp_dir, errs) if do_autogen_mk else None
         if mk_path:
             msg += "\n" + tr("proj.autogen_mk_written", path=self._rel(mk_path))
@@ -4622,6 +4840,8 @@ class ProjectTab(ProjectPathMixin, QWidget):
         procgen_hs = self._maybe_write_procgen_configs(exp_dir, errs)
         if procgen_hs:
             msg += "\n" + " ".join(p.name for p in procgen_hs) + " written"
+        if dgen_assets:
+            msg += "\n" + " ".join(p.name for p in dgen_assets) + " written"
         self._run_globals_validation(errs)
         if errs:
             msg += "\n" + "\n".join(errs[:6])

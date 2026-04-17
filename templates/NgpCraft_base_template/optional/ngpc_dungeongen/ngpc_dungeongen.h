@@ -103,9 +103,9 @@
 
 /* ---- Navigation cluster : taille max d'un lot de salles (2..4) ---- */
 /* Utilise par ngpc_cluster pour borner la profondeur de l'arbre.       */
-/* Valeur recommandee : 3. Maximum absolu : 4 (contrainte RAM).         */
+/* Valeur recommandee : 4. Maximum absolu : 4 (contrainte RAM).         */
 #ifndef DUNGEONGEN_CLUSTER_SIZE_MAX
-#define DUNGEONGEN_CLUSTER_SIZE_MAX  3u
+#define DUNGEONGEN_CLUSTER_SIZE_MAX  4u
 #endif
 
 /* ---- Difficulte : rampe ennemis par room_idx (0=desactive) ---- */
@@ -183,16 +183,64 @@
 
 /* Comportement de la collision eau (defaut = DGNCOL_WATER).
  * Remplacer par DGNCOL_SOLID pour rendre l'eau infranchissable (avec pont).
- * Le jeu interprete DGNCOL_WATER comme dommages ou mort selon ses propres regles. */
+ * Remplacer par DGNCOL_PASS pour eau totalement ignoree (traversable, aucun effet).
+ * Remplacer par DGNCOL_VOID pour mort instant sur case eau.
+ * Le jeu interprete DGNCOL_WATER comme dommages ou ralentissement selon ses propres regles. */
 #ifndef DUNGEONGEN_WATER_COL
 #define DUNGEONGEN_WATER_COL  DGNCOL_WATER
 #endif
+
+/* Comportement trou/fosse — HINTS pour le game code uniquement.
+ * Dans tous les cas ngpc_dungeongen_collision_at() retourne DGNCOL_VOID.
+ * 0 = mort instant, 1 = etage inferieur (multifloor), 2 = goto scene. */
+#ifndef DUNGEONGEN_VOID_BEHAVIOR
+#define DUNGEONGEN_VOID_BEHAVIOR  0u
+#endif
+/* Dommages infliges lors de la chute (0 = aucun). Interprete par le game code. */
+#ifndef DUNGEONGEN_VOID_DAMAGE
+#define DUNGEONGEN_VOID_DAMAGE    0u
+#endif
+/* DUNGEONGEN_VOID_SCENE_ID : defini par dungeongen_config.h si VOID_BEHAVIOR == 2. */
 
 /* Masques de sorties murales (pour ngpc_dgroom.exits) */
 #define DGN_EXIT_N   0x01u
 #define DGN_EXIT_S   0x02u
 #define DGN_EXIT_E   0x04u
 #define DGN_EXIT_W   0x08u
+
+/* Flip hardware pour tuiles directionnelles (mode compact tileset).
+ * Valeurs passees a _put_cell_ex() et encodees dans TILE_X_FLIP dans tiles_procgen.h.
+ * En mode full (defaut), tous les TILE_X_FLIP valent DGN_FLIP_NONE.
+ * En mode compact, les tuiles derivees reutilisent la donnee source avec flip. */
+#ifndef DGN_FLIP_NONE
+#define DGN_FLIP_NONE  0u   /* pas de flip                   */
+#define DGN_FLIP_H     1u   /* flip horizontal               */
+#define DGN_FLIP_V     2u   /* flip vertical                 */
+#define DGN_FLIP_HV    3u   /* flip horizontal + vertical    */
+#endif
+
+/* Valeurs par defaut TILE_*_FLIP : DGN_FLIP_NONE pour les projets dont
+ * tiles_procgen.h a ete genere sans mode compact (avant 2026-04-15).
+ * En mode compact, ces defines sont emis par l'exporter avec les valeurs correctes.
+ * Le #ifndef garantit que tiles_procgen.h prend priorite si il les definit deja. */
+#ifndef TILE_WALL_EXT_N_FLIP
+#define TILE_WALL_EXT_N_FLIP   DGN_FLIP_NONE
+#define TILE_WALL_EXT_S_FLIP   DGN_FLIP_NONE
+#define TILE_WALL_EXT_E_FLIP   DGN_FLIP_NONE
+#define TILE_WALL_EXT_W_FLIP   DGN_FLIP_NONE
+#define TILE_WALL_EXT_NW_FLIP  DGN_FLIP_NONE
+#define TILE_WALL_EXT_NE_FLIP  DGN_FLIP_NONE
+#define TILE_WALL_EXT_SW_FLIP  DGN_FLIP_NONE
+#define TILE_WALL_EXT_SE_FLIP  DGN_FLIP_NONE
+#define TILE_WALL_INT_N_FLIP   DGN_FLIP_NONE
+#define TILE_WALL_INT_S_FLIP   DGN_FLIP_NONE
+#define TILE_WALL_INT_E_FLIP   DGN_FLIP_NONE
+#define TILE_WALL_INT_W_FLIP   DGN_FLIP_NONE
+#define TILE_WALL_INT_NW_FLIP  DGN_FLIP_NONE
+#define TILE_WALL_INT_NE_FLIP  DGN_FLIP_NONE
+#define TILE_WALL_INT_SW_FLIP  DGN_FLIP_NONE
+#define TILE_WALL_INT_SE_FLIP  DGN_FLIP_NONE
+#endif
 
 /* Types de salle pour le modele cluster (defini par l'appelant avant enter) */
 #define DGEN_ROOM_ENTRY  0u   /* point d'entree du cluster, pas de back-exit */
@@ -209,7 +257,7 @@
 #elif DUNGEONGEN_MAX_EXITS == 3
 #define DUNGEONGEN_N_STYLES  6u
 #else
-#define DUNGEONGEN_N_STYLES  7u
+#define DUNGEONGEN_N_STYLES  13u  /* styles [0-6] originaux + [7-12] cluster S/E/W */
 #endif
 
 /* =========================================================================
@@ -261,6 +309,22 @@ extern NgpcDungeonRoom ngpc_dgroom;
 void ngpc_dungeongen_set_rtc_seed(void);
 
 /*
+ * Fixe la seed de session manuellement (u16, != 0).
+ * Remplace ngpc_dungeongen_set_rtc_seed() quand le jeu gere lui-meme la seed
+ * (ex : saisie joueur, seed affichee a l'ecran, mode debug fixe).
+ * seed=0 est normalise en 1 pour eviter un RNG degenere.
+ */
+void ngpc_dungeongen_set_seed(u16 seed);
+
+/*
+ * Retourne l'index de style dont le bitmask exits correspond exactement a exits_mask.
+ * Recherche dans les 13 styles (originaux + cluster S/E/W).
+ * Retourne 0 (salle fermee) si aucun style ne correspond.
+ * Utilise par ngpc_cluster pour selectionner le style adapte a la topologie.
+ */
+u8 ngpc_dungeongen_style_for_exits(u8 exits_mask);
+
+/*
  * Charge les assets graphiques en VRAM et configure les palettes.
  * Appeler une fois apres ngpc_init() et ngpc_gfx_scroll()/clear() initiaux.
  * Charge : tiles_procgen (terrain) + sprites_lab (entites).
@@ -302,6 +366,17 @@ void ngpc_dungeongen_spawn(void);
 void ngpc_dungeongen_sync_sprites(u8 cam_x, u8 cam_y);
 
 /*
+ * Accesseurs read-only des ennemis spawnés pour l'intégration gameplay runtime.
+ * idx : 0..ngpc_dungeongen_enemy_count()-1
+ * world_x/world_y : position monde en pixels
+ * type_index : index dans le pool DungeonGen exporté (enemy_pool)
+ */
+u8 ngpc_dungeongen_enemy_count(void);
+u8 ngpc_dungeongen_enemy_world_x(u8 idx);
+u8 ngpc_dungeongen_enemy_world_y(u8 idx);
+u8 ngpc_dungeongen_enemy_type_index(u8 idx);
+
+/*
  * Retourne le type de collision a la position (mx, my) en metatiles.
  * Recalcul depuis l'etat interne (aucune carte de collision en RAM).
  * Appeler apres ngpc_dungeongen_enter() et ngpc_dungeongen_set_room_type().
@@ -313,6 +388,13 @@ void ngpc_dungeongen_sync_sprites(u8 cam_x, u8 cam_y);
  * peut complementer avec une verification tile si besoin.
  */
 u8 ngpc_dungeongen_collision_at(u8 mx, u8 my);
+
+/*
+ * Retourne 1 si l'AABB monde [wx0,wy0]-[wx1,wy1] touche une case solide.
+ * Coordonnees en pixels monde, bornes inclusives.
+ * Toute coordonnee hors salle est consideree comme solide.
+ */
+u8 ngpc_dungeongen_world_rect_hits_solid(s16 wx0, s16 wy0, s16 wx1, s16 wy1);
 
 /*
  * Definit le type de la salle courante dans le modele cluster.

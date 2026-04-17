@@ -12,6 +12,12 @@ from pathlib import Path
 import re
 
 from i18n.lang import tr
+from core.dungeongen_cells import (
+    dungeongen_cell_label,
+    dungeongen_group_cells_per_variant,
+    normalize_dungeongen_runtime_cells,
+    parse_dungeongen_cell_size,
+)
 
 
 _RE_SAFE = re.compile(r"[^0-9a-zA-Z_]+")
@@ -82,6 +88,49 @@ def _tilemap_fingerprint(base_dir: Path | None, tm: dict) -> tuple[str, str]:
     return (str(abs_p).lower(), _tilemap_output_base(tm).lower())
 
 
+def _normalize_dungeongen_role_indices(raw: object) -> list[int]:
+    if isinstance(raw, list):
+        vals: list[int] = []
+        for item in raw:
+            try:
+                vals.append(int(item))
+            except Exception:
+                continue
+        return vals
+    if raw in (None, ""):
+        return []
+    try:
+        return [int(raw)]
+    except Exception:
+        return []
+
+
+def _probe_dungeongen_tileset(
+    png_path: Path | None,
+    *,
+    cell_w_tiles: int,
+    cell_h_tiles: int,
+) -> tuple[int | None, str | None]:
+    if png_path is None or not png_path.exists():
+        return None, None
+    try:
+        from PIL import Image
+        with Image.open(png_path) as img:
+            iw, ih = img.size
+    except Exception as exc:
+        return None, f"DungeonGen tileset probe failed for {png_path}: {exc}"
+
+    cell_px_w = max(1, int(cell_w_tiles)) * 8
+    cell_px_h = max(1, int(cell_h_tiles)) * 8
+    if (iw % cell_px_w) != 0 or (ih % cell_px_h) != 0:
+        return None, (
+            f"DungeonGen tileset size {iw}x{ih}px is not divisible by source cell "
+            f"{dungeongen_cell_label(cell_w_tiles, cell_h_tiles)}."
+        )
+
+    return (iw // cell_px_w) * (ih // cell_px_h), None
+
+
 def _audio_manifest_path(project_dir: Path | None, project_data: dict) -> Path | None:
     audio = project_data.get("audio", {}) if isinstance(project_data, dict) else {}
     if not isinstance(audio, dict):
@@ -129,10 +178,29 @@ def collect_export_pipeline_issues(project_dir: Path | None, project_data: dict)
     sprite_name_seen: dict[str, tuple[tuple[str, int, int, int, str], str, str]] = {}
     tilemap_name_seen: dict[str, tuple[tuple[str, str], str, str]] = {}
 
+    procgen_assets = project_data.get("procgen_assets", {}) if isinstance(project_data, dict) else {}
+    dgen_assets = (procgen_assets.get("dungeongen") or {}) if isinstance(procgen_assets, dict) else {}
+    dgen_tileset_rel = str(dgen_assets.get("tileset_png") or "").strip() if isinstance(dgen_assets, dict) else ""
+    dgen_tileset_path = _abs_path(project_dir, dgen_tileset_rel) if dgen_tileset_rel else None
+    dgen_tile_roles = {
+        str(key): _normalize_dungeongen_role_indices(value)
+        for key, value in ((dgen_assets.get("tile_roles") or {}).items() if isinstance(dgen_assets, dict) else [])
+    }
+    dgen_src_cw, dgen_src_ch = parse_dungeongen_cell_size(
+        dgen_assets.get("cell_size", "16x16") if isinstance(dgen_assets, dict) else "16x16"
+    )
+    dgen_meta_count, dgen_tileset_probe_issue = _probe_dungeongen_tileset(
+        dgen_tileset_path,
+        cell_w_tiles=dgen_src_cw,
+        cell_h_tiles=dgen_src_ch,
+    )
+
     for scene in scenes:
         scene_label = str(scene.get("label") or "").strip() or "?"
         scene_id = str(scene.get("id") or "").strip()
         scene_safe = _safe_ident(scene_label or scene_id or "scene")
+        dgen = scene.get("rt_dungeongen_params") if isinstance(scene, dict) else None
+        dgen_enabled = isinstance(dgen, dict) and bool(dgen.get("enabled", False))
 
         prev_scene = scene_safe_seen.get(scene_safe)
         if prev_scene and prev_scene != scene_label:
@@ -145,6 +213,75 @@ def collect_export_pipeline_issues(project_dir: Path | None, project_data: dict)
             )
         else:
             scene_safe_seen[scene_safe] = scene_label
+
+        if dgen_enabled:
+            map_mode = str(scene.get("map_mode", "topdown") or "topdown").strip().lower()
+            if map_mode != "topdown":
+                issues.append(ExportValidationIssue("bad", "DungeonGen requires scene map_mode='topdown'", scene_label=scene_label))
+            for spr in (scene.get("sprites") or []):
+                if not isinstance(spr, dict):
+                    continue
+                role = str(spr.get("gameplay_role") or "").strip().lower()
+                if not role:
+                    role = str((spr.get("ctrl") or {}).get("role") or "").strip().lower()
+                if role != "player":
+                    continue
+                if int((spr.get("props") or {}).get("move_type", 0) or 0) == 2:
+                    issues.append(ExportValidationIssue("bad", "DungeonGen requires a top-down player sprite in that scene", scene_label=scene_label))
+                    break
+
+            if not isinstance(dgen_assets, dict) or not dgen_assets:
+                issues.append(ExportValidationIssue("bad", "DungeonGen enabled but procgen_assets.dungeongen is missing", scene_label=scene_label))
+            else:
+                if not dgen_tileset_rel:
+                    issues.append(ExportValidationIssue("bad", "DungeonGen enabled but no DungeonGen tileset PNG is configured", scene_label=scene_label))
+                elif dgen_tileset_path is not None and not dgen_tileset_path.exists():
+                    issues.append(ExportValidationIssue("bad", f"DungeonGen tileset PNG not found: {dgen_tileset_path}", scene_label=scene_label))
+                elif dgen_tileset_probe_issue:
+                    issues.append(ExportValidationIssue("bad", dgen_tileset_probe_issue, scene_label=scene_label))
+
+                if not dgen_tile_roles:
+                    issues.append(ExportValidationIssue("warn", "DungeonGen tileset is configured but no tile roles are assigned yet", scene_label=scene_label))
+
+                req_cw = int(dgen.get("cell_w_tiles", dgen_src_cw) or dgen_src_cw)
+                req_ch = int(dgen.get("cell_h_tiles", dgen_src_ch) or dgen_src_ch)
+                norm_cw, norm_ch, cell_reason = normalize_dungeongen_runtime_cells(
+                    source_cell_w_tiles=dgen_src_cw,
+                    source_cell_h_tiles=dgen_src_ch,
+                    requested_cell_w_tiles=req_cw,
+                    requested_cell_h_tiles=req_ch,
+                    tile_roles=dgen_tile_roles,
+                )
+                if cell_reason:
+                    issues.append(ExportValidationIssue("warn", cell_reason, scene_label=scene_label))
+
+                try:
+                    cells_per_variant = dungeongen_group_cells_per_variant(
+                        source_cell_w_tiles=dgen_src_cw,
+                        source_cell_h_tiles=dgen_src_ch,
+                        runtime_cell_w_tiles=norm_cw,
+                        runtime_cell_h_tiles=norm_ch,
+                    )
+                except ValueError as exc:
+                    issues.append(ExportValidationIssue("bad", str(exc), scene_label=scene_label))
+                else:
+                    for role_key, indices in dgen_tile_roles.items():
+                        if indices and (len(indices) % cells_per_variant) != 0:
+                            issues.append(ExportValidationIssue(
+                                "bad",
+                                f"DungeonGen role '{role_key}' must assign {cells_per_variant} source cells per variant for runtime cell {dungeongen_cell_label(norm_cw, norm_ch)}. Current selection count: {len(indices)}.",
+                                scene_label=scene_label,
+                                asset_label=role_key,
+                            ))
+                        if dgen_meta_count is not None:
+                            bad_idx = next((idx for idx in indices if idx < 0 or idx >= dgen_meta_count), None)
+                            if bad_idx is not None:
+                                issues.append(ExportValidationIssue(
+                                    "bad",
+                                    f"DungeonGen role '{role_key}' references source cell index {bad_idx}, but the tileset only exposes indices 0..{dgen_meta_count - 1}.",
+                                    scene_label=scene_label,
+                                    asset_label=role_key,
+                                ))
 
         for spr in (scene.get("sprites") or []):
             if not isinstance(spr, dict) or not _export_enabled(spr):
@@ -201,6 +338,66 @@ def collect_export_pipeline_issues(project_dir: Path | None, project_data: dict)
                         scene_label=scene_label,
                     )
                 )
+
+    # ---- DungeonGen project-level post-checks --------------------------------
+    # Run once after the scene loop to avoid per-scene repetition.
+    any_dgen_enabled = any(
+        isinstance(sc.get("rt_dungeongen_params"), dict)
+        and bool(sc["rt_dungeongen_params"].get("enabled", False))
+        for sc in scenes
+    )
+    if any_dgen_enabled:
+        # Generated C headers — only warn if export_dir exists and is non-empty
+        # (i.e. at least one export has been run).
+        if export_dir is not None and export_has_artifacts:
+            gen_dir = export_dir  # headless_export writes to export_dir directly
+            for fname in ("dungeongen_config.h", "tiles_procgen.h", "sprites_lab.h"):
+                if not (gen_dir / fname).exists():
+                    issues.append(ExportValidationIssue(
+                        "warn",
+                        f"DungeonGen enabled but '{fname}' not found in export dir — "
+                        f"re-export the project to generate it.",
+                    ))
+
+        # Pool entries without a matching *_mspr.c in GraphX/
+        if isinstance(dgen_assets, dict) and project_dir is not None:
+            graphx_dir = project_dir / "GraphX"
+            # Build mspr index (same logic as dungeongen_sprites_export._build_mspr_index)
+            mspr_names: set[str] = set()
+            for scan_dir in [graphx_dir, graphx_dir / "gen"]:
+                if scan_dir.is_dir():
+                    for f in scan_dir.glob("*_mspr.c"):
+                        stem = f.stem
+                        base = stem[:-5] if stem.endswith("_mspr") else stem
+                        mspr_names.add(base.lower())
+
+            def _pool_entity_label(entry: dict) -> str:
+                return str(entry.get("entity_id") or entry.get("name") or "?")
+
+            def _entry_has_mspr(entry: dict) -> bool:
+                eid = str(entry.get("entity_id") or "").strip().lower()
+                if eid.startswith("etype_"):
+                    eid = eid[6:]
+                if eid in mspr_names:
+                    return True
+                # partial suffix match
+                for k in mspr_names:
+                    if k == eid or k.endswith("_" + eid) or eid.endswith("_" + k):
+                        return True
+                return False
+
+            for pool_key, pool_label in (("enemy_pool", "ennemi"), ("item_pool", "item")):
+                for entry in (dgen_assets.get(pool_key) or []):
+                    if not isinstance(entry, dict):
+                        continue
+                    if not _entry_has_mspr(entry):
+                        issues.append(ExportValidationIssue(
+                            "warn",
+                            f"DungeonGen pool {pool_label} '{_pool_entity_label(entry)}' : "
+                            f"aucun fichier *_mspr.c trouvé dans GraphX/ — "
+                            f"exporter le sprite depuis l'onglet Bundle.",
+                            asset_label=_pool_entity_label(entry),
+                        ))
 
     if export_dir is not None and export_has_artifacts:
         assets_mk = export_dir / "assets_autogen.mk"

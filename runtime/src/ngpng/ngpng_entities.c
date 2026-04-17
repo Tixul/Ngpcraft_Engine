@@ -1029,7 +1029,8 @@ void ngpng_enemy_spawn(const NgpSceneDef *sc, NgpngEnemy *enemies,
             enemies[i].vy = 0;
             if (sc->path_count > 0u && assigned_path_idx != 0xFFu && assigned_path_idx < sc->path_count) {
                 enemies[i].path_idx = assigned_path_idx;
-            } else if (sc->path_count > 0u && src->data > 0u && src->data <= sc->path_count) {
+            } else if (assigned_behavior == 0xFFu &&
+                sc->path_count > 0u && src->data > 0u && src->data <= sc->path_count) {
                 enemies[i].path_idx = (u8)(src->data - 1u);
             }
             /* OPT-2E: gate platformer init on behavior only (not gravity).
@@ -1171,6 +1172,161 @@ static void ngpng_enemy_resolve_horizontal_block(const NgpSceneDef *sc, NgpngEne
         e->vx = 0;
 }
 
+static void ngpng_enemy_pick_topdown_dir(NgpngEnemy *e, u8 seed)
+{
+    if (!e) return;
+    switch (seed & 3u) {
+        case 0u: e->vx = 1;  e->vy = 0;  break;
+        case 1u: e->vx = -1; e->vy = 0;  break;
+        case 2u: e->vx = 0;  e->vy = 1;  break;
+        default: e->vx = 0;  e->vy = -1; break;
+    }
+}
+
+static void ngpng_enemy_pick_patrol_topdown_dir(NgpngEnemy *e, u8 seed)
+{
+    if (!e) return;
+    if (seed & 1u) {
+        e->vx = (seed & 2u) ? (s8)1 : (s8)-1;
+        e->vy = 0;
+    } else {
+        e->vx = 0;
+        e->vy = (seed & 2u) ? (s8)1 : (s8)-1;
+    }
+}
+
+static void ngpng_enemy_apply_topdown_behavior(
+    const NgpSceneDef *sc, NgpngEnemy *e, s16 player_wx, s16 player_wy, u8 seed)
+{
+    s16 dx;
+    s16 dy;
+    s16 adx;
+    s16 ady;
+    s16 radius_px;
+    u8 radius_tiles;
+    u8 random_interval;
+    (void)sc;
+    if (!e || e->behavior == 0xFFu) return;
+    radius_tiles = (u8)((e->data > 0u) ? e->data : 5u);
+    radius_px = (s16)((s16)radius_tiles * 8);
+    random_interval = (u8)((e->data > 0u) ? e->data : 24u);
+    switch (e->behavior) {
+        case NGPNG_BEHAVIOR_FIXED:
+            e->vx = 0;
+            e->vy = 0;
+            return;
+        case NGPNG_BEHAVIOR_RANDOM:
+            if ((e->vx == 0 && e->vy == 0) ||
+                (random_interval > 0u && (e->anim % random_interval) == 0u)) {
+                ngpng_enemy_pick_topdown_dir(e, (u8)(seed + e->anim));
+            }
+            return;
+        case NGPNG_BEHAVIOR_CHASE:
+        case NGPNG_BEHAVIOR_FLEE:
+            dx = (s16)(player_wx - e->world_x);
+            dy = (s16)(player_wy - e->world_y);
+            adx = (dx < 0) ? (s16)(-dx) : dx;
+            ady = (dy < 0) ? (s16)(-dy) : dy;
+            if (adx > radius_px || ady > radius_px) {
+                e->vx = 0;
+                e->vy = 0;
+                return;
+            }
+            e->vx = (dx > 2) ? (s8)1 : ((dx < -2) ? (s8)-1 : (s8)0);
+            e->vy = (dy > 2) ? (s8)1 : ((dy < -2) ? (s8)-1 : (s8)0);
+            if (e->behavior == NGPNG_BEHAVIOR_FLEE) {
+                e->vx = (s8)(-e->vx);
+                e->vy = (s8)(-e->vy);
+            }
+            return;
+        case NGPNG_BEHAVIOR_PATROL:
+        default:
+            if (e->vx == 0 && e->vy == 0)
+                ngpng_enemy_pick_patrol_topdown_dir(e, (u8)(seed + e->anim));
+            else if (e->vx != 0) {
+                e->vx = (e->vx > 0) ? (s8)1 : (s8)-1;
+                e->vy = 0;
+            } else {
+                e->vy = (e->vy > 0) ? (s8)1 : (s8)-1;
+                e->vx = 0;
+            }
+            return;
+    }
+}
+
+static void ngpng_enemy_resolve_topdown_block(const NgpSceneDef *sc, NgpngEnemy *e, u8 seed)
+{
+    if (!sc || !e || !sc->tilecol) return;
+
+    if (e->vx > 0) {
+        s16 probe_x = (s16)(e->world_x + e->body_x + ((e->body_w > 0u) ? (e->body_w - 1u) : 0u));
+        s16 y0 = (s16)(e->world_y + e->body_y + 1);
+        s16 y1 = (s16)(e->world_y + e->body_y + ((e->body_h > 0u) ? (e->body_h - 1u) : 0u));
+        u8 t0;
+        u8 t1;
+        if (y1 < y0) y1 = y0;
+        t0 = ngpng_tilecol_world(sc, probe_x, y0, TILE_SOLID);
+        t1 = ngpng_tilecol_world(sc, probe_x, y1, TILE_SOLID);
+        if (ngpng_tile_blocks_right(t0) || ngpng_tile_blocks_right(t1)) {
+            u16 tx = (probe_x <= 0) ? 0u : (u16)(((u16)probe_x) >> 3u);
+            e->world_x = (s16)((s16)(tx * 8u) - e->body_x - e->body_w);
+            if (e->behavior == (u8)NGPNG_BEHAVIOR_PATROL) { e->vx = -1; e->vy = 0; }
+            else if (e->behavior == (u8)NGPNG_BEHAVIOR_RANDOM) ngpng_enemy_pick_topdown_dir(e, (u8)(seed + 17u));
+            else e->vx = 0;
+        }
+    } else if (e->vx < 0) {
+        s16 probe_x = (s16)(e->world_x + e->body_x);
+        s16 y0 = (s16)(e->world_y + e->body_y + 1);
+        s16 y1 = (s16)(e->world_y + e->body_y + ((e->body_h > 0u) ? (e->body_h - 1u) : 0u));
+        u8 t0;
+        u8 t1;
+        if (y1 < y0) y1 = y0;
+        t0 = ngpng_tilecol_world(sc, probe_x, y0, TILE_SOLID);
+        t1 = ngpng_tilecol_world(sc, probe_x, y1, TILE_SOLID);
+        if (ngpng_tile_blocks_left(t0) || ngpng_tile_blocks_left(t1)) {
+            u16 tx = (probe_x < 0) ? 0u : (u16)(((u16)probe_x) >> 3u);
+            e->world_x = (s16)((s16)((tx + 1u) * 8u) - e->body_x);
+            if (e->behavior == (u8)NGPNG_BEHAVIOR_PATROL) { e->vx = 1; e->vy = 0; }
+            else if (e->behavior == (u8)NGPNG_BEHAVIOR_RANDOM) ngpng_enemy_pick_topdown_dir(e, (u8)(seed + 23u));
+            else e->vx = 0;
+        }
+    }
+
+    if (e->vy > 0) {
+        s16 probe_y = (s16)(e->world_y + e->body_y + ((e->body_h > 0u) ? (e->body_h - 1u) : 0u));
+        s16 x0 = (s16)(e->world_x + e->body_x + 1);
+        s16 x1 = (s16)(e->world_x + e->body_x + ((e->body_w > 0u) ? (e->body_w - 1u) : 0u));
+        u8 t0;
+        u8 t1;
+        if (x1 < x0) x1 = x0;
+        t0 = ngpng_tilecol_world(sc, x0, probe_y, TILE_SOLID);
+        t1 = ngpng_tilecol_world(sc, x1, probe_y, TILE_SOLID);
+        if (t0 == TILE_SOLID || t1 == TILE_SOLID) {
+            u16 ty = (probe_y <= 0) ? 0u : (u16)(((u16)probe_y) >> 3u);
+            e->world_y = (s16)((s16)(ty * 8u) - e->body_y - e->body_h);
+            if (e->behavior == (u8)NGPNG_BEHAVIOR_PATROL) { e->vx = 0; e->vy = -1; }
+            else if (e->behavior == (u8)NGPNG_BEHAVIOR_RANDOM) ngpng_enemy_pick_topdown_dir(e, (u8)(seed + 31u));
+            else e->vy = 0;
+        }
+    } else if (e->vy < 0) {
+        s16 probe_y = (s16)(e->world_y + e->body_y);
+        s16 x0 = (s16)(e->world_x + e->body_x + 1);
+        s16 x1 = (s16)(e->world_x + e->body_x + ((e->body_w > 0u) ? (e->body_w - 1u) : 0u));
+        u8 t0;
+        u8 t1;
+        if (x1 < x0) x1 = x0;
+        t0 = ngpng_tilecol_world(sc, x0, probe_y, TILE_SOLID);
+        t1 = ngpng_tilecol_world(sc, x1, probe_y, TILE_SOLID);
+        if (t0 == TILE_SOLID || t1 == TILE_SOLID) {
+            u16 ty = (probe_y < 0) ? 0u : (u16)(((u16)probe_y) >> 3u);
+            e->world_y = (s16)((s16)((ty + 1u) * 8u) - e->body_y);
+            if (e->behavior == (u8)NGPNG_BEHAVIOR_PATROL) { e->vx = 0; e->vy = 1; }
+            else if (e->behavior == (u8)NGPNG_BEHAVIOR_RANDOM) ngpng_enemy_pick_topdown_dir(e, (u8)(seed + 37u));
+            else e->vy = 0;
+        }
+    }
+}
+
 static u8 ngpng_enemy_touches_deadly_tile(const NgpSceneDef *sc, const NgpngEnemy *e)
 {
     s16 x0;
@@ -1214,6 +1370,13 @@ static void ngpng_enemy_apply_platformer_behavior(const NgpSceneDef *sc, NgpngEn
             dx = (s16)(player_wx - e->world_x);
             if (dx < -6) e->vx = -1;
             else if (dx > 6) e->vx = 1;
+            else e->vx = 0;
+            break;
+        case NGPNG_BEHAVIOR_FLEE:
+            if (e->gravity == 0u) return; /* flee requires gravity */
+            dx = (s16)(player_wx - e->world_x);
+            if (dx < -6) e->vx = 1;
+            else if (dx > 6) e->vx = -1;
             else e->vx = 0;
             break;
         case NGPNG_BEHAVIOR_RANDOM:
@@ -1311,7 +1474,10 @@ void ngpng_enemies_update(const NgpSceneDef *sc,
             }
         }
         if (enemies[i].behavior != 0xFFu) {
-            ngpng_enemy_apply_platformer_behavior(sc, &enemies[i], player_wx, i, frame_timer);
+            if (enemies[i].gravity > 0u)
+                ngpng_enemy_apply_platformer_behavior(sc, &enemies[i], player_wx, i, frame_timer);
+            else
+                ngpng_enemy_apply_topdown_behavior(sc, &enemies[i], player_wx, player_wy, i);
         } else {
             /* data=4: zigzag -- flip vy every 16 frames. */
             if (enemies[i].data == 4u && (enemies[i].anim & 0x1Fu) == 0x10u) {
@@ -1382,6 +1548,8 @@ void ngpng_enemies_update(const NgpSceneDef *sc,
                 continue;
             }
 #endif
+        } else if (enemies[i].behavior != 0xFFu) {
+            ngpng_enemy_resolve_topdown_block(sc, &enemies[i], (u8)(i + frame_timer));
         } else if (enemies[i].vy != 0) {
             /* Shmup-style bounce (no gravity). */
             if (enemies[i].world_y < 16) {

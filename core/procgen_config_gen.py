@@ -53,6 +53,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from core.dungeongen_cells import normalize_dungeongen_runtime_cells, parse_dungeongen_cell_size
+
 _DFS_FILENAME  = "procgen_config.h"
 _CAVE_FILENAME = "cavegen_config.h"
 
@@ -305,12 +307,274 @@ def write_cavegen_config_h(*, scene: dict, export_dir: Path, project_data: dict 
     return out
 
 
+
+# DungeonGen / ngpc_dungeongen (scrollable metatile rooms)
 # ---------------------------------------------------------------------------
-# Batch — write both for all scenes that have runtime params
+
+_DUNGEONGEN_FILENAME = "dungeongen_config.h"
+
+_DUNGEONGEN_DEFAULTS: dict = {
+    "ground_pct_1":   70,
+    "ground_pct_2":   20,
+    "ground_pct_3":   10,
+    "eau_freq":       40,
+    "vide_freq":      30,
+    "vide_margin":     3,
+    "tonneau_freq":   50,
+    "tonneau_max":     2,
+    "escalier_freq":   0,
+    "enemy_min":       0,
+    "enemy_max":       3,
+    "enemy_density":  16,
+    "ene2_pct":       50,
+    "item_freq":      50,
+    "n_rooms":         0,
+    "enemy_ramp_rooms": 0,
+    "safe_room_every":  0,
+    "min_exits":          0,
+    "cluster_size_max":   4,
+    "tier_cols":          0,
+    "tier_ene_max":    [],
+    "tier_item_freq":  [],
+    "tier_eau_freq":   [],
+    "tier_vide_freq":  [],
+    "room_mw_min":    10,
+    "room_mw_max":    16,
+    "room_mh_min":    10,
+    "room_mh_max":    16,
+    "max_exits":       4,
+    "cell_w_tiles":    2,
+    "cell_h_tiles":    2,
+    "multifloor":  False,
+    "floor_var":       0,
+    "max_floors":      0,
+    "boss_scene":     "",
+    "water_behavior": "water",
+    "void_behavior":  "death",
+    "void_damage":     0,
+    "void_scene":     "",
+}
+
+
+def make_dungeongen_config_h(*, scene: dict, project_data: dict | None = None) -> str:
+    """Return the full content of dungeongen_config.h as a string.
+
+    Reads ``scene["rt_dungeongen_params"]``; falls back to sensible defaults.
+    All values are emitted as ``#define DUNGEONGEN_*`` overrides that are read
+    by the ``#ifndef`` guards in ngpc_dungeongen.h before it sets its own defaults.
+    Include this header BEFORE including ngpc_dungeongen.h.
+    """
+    dp: dict = {}
+    raw = scene.get("rt_dungeongen_params") if isinstance(scene, dict) else None
+    if isinstance(raw, dict):
+        dp = raw
+
+    def _g(key: str) -> Any:
+        val = dp.get(key)
+        return val if val is not None else _DUNGEONGEN_DEFAULTS[key]
+
+    procgen_assets = (project_data.get("procgen_assets") or {}) if isinstance(project_data, dict) else {}
+    dgen_assets = (procgen_assets.get("dungeongen") or {}) if isinstance(procgen_assets, dict) else {}
+    tile_roles = (dgen_assets.get("tile_roles") or {}) if isinstance(dgen_assets, dict) else {}
+    src_cw, src_ch = parse_dungeongen_cell_size(
+        dgen_assets.get("cell_size", "16x16") if isinstance(dgen_assets, dict) else "16x16"
+    )
+
+    ground_pct_1   = _int(_g("ground_pct_1"),  70)
+    ground_pct_2   = _int(_g("ground_pct_2"),  20)
+    ground_pct_3   = _int(_g("ground_pct_3"),  10)
+    # Clamp so sum == 100 (adjust pct_3 silently)
+    total = ground_pct_1 + ground_pct_2
+    ground_pct_3   = max(0, 100 - total)
+
+    eau_freq       = _int(_g("eau_freq"),       40)
+    vide_freq      = _int(_g("vide_freq"),      30)
+    vide_margin    = _int(_g("vide_margin"),     3)
+    tonneau_freq   = _int(_g("tonneau_freq"),   50)
+
+    def _role_assigned(key: str) -> bool:
+        v = tile_roles.get(key)
+        return bool(v) if isinstance(v, list) else (v is not None)
+
+    if not _role_assigned("water"):
+        eau_freq = 0
+    if not _role_assigned("void"):
+        vide_freq = 0
+    if not _role_assigned("deco_a"):
+        tonneau_freq = 0
+    tonneau_max    = max(1, min(2, _int(_g("tonneau_max"), 2)))
+    escalier_freq  = _int(_g("escalier_freq"),   0)
+    enemy_min      = _int(_g("enemy_min"),       0)
+    enemy_max      = max(enemy_min, _int(_g("enemy_max"), 3))
+    enemy_density  = max(1, _int(_g("enemy_density"), 16))
+    ene2_pct       = max(0, min(100, _int(_g("ene2_pct"), 50)))
+    item_freq      = _int(_g("item_freq"),      50)
+    n_rooms           = max(0, _int(_g("n_rooms"), 0))
+    enemy_ramp_rooms  = max(0, _int(_g("enemy_ramp_rooms"), 0))
+    safe_room_every   = max(0, _int(_g("safe_room_every"), 0))
+    min_exits         = max(0, min(4, _int(_g("min_exits"), 0)))
+    cluster_size_max  = max(2, min(4, _int(_g("cluster_size_max"), 4)))
+    tier_cols         = max(0, _int(_g("tier_cols"), 0))
+
+    def _row(key: str, n: int, default_val: int) -> list[int]:
+        raw_row = _g(key)
+        if isinstance(raw_row, list) and raw_row:
+            vals = [max(0, int(v)) for v in raw_row]
+            while len(vals) < n:
+                vals.append(default_val)
+            return vals[:n]
+        return [default_val] * n
+
+    tier_ene_max   = _row("tier_ene_max",   tier_cols, enemy_max) if tier_cols else []
+    tier_item_freq = _row("tier_item_freq", tier_cols, item_freq) if tier_cols else []
+    tier_eau_freq  = _row("tier_eau_freq",  tier_cols, eau_freq)  if tier_cols else []
+    tier_vide_freq = _row("tier_vide_freq", tier_cols, vide_freq) if tier_cols else []
+    if tier_ene_max:
+        enemy_max = max(enemy_max, max(tier_ene_max))
+
+    _max_room_w    = max(4, 32 // max(1, src_cw))
+    _max_room_h    = max(4, 32 // max(1, src_ch))
+    room_mw_max    = max(4, min(_max_room_w, _int(_g("room_mw_max"), 16)))
+    room_mw_min    = max(4, min(room_mw_max, _int(_g("room_mw_min"), 10)))
+    room_mh_max    = max(4, min(_max_room_h, _int(_g("room_mh_max"), 16)))
+    room_mh_min    = max(4, min(room_mh_max, _int(_g("room_mh_min"), 10)))
+    max_exits      = max(0, min(4, _int(_g("max_exits"), 4)))
+    cell_w_tiles, cell_h_tiles, cell_reason = normalize_dungeongen_runtime_cells(
+        source_cell_w_tiles=src_cw,
+        source_cell_h_tiles=src_ch,
+        requested_cell_w_tiles=_int(_g("cell_w_tiles"), 2),
+        requested_cell_h_tiles=_int(_g("cell_h_tiles"), 2),
+        tile_roles=tile_roles if isinstance(tile_roles, dict) else {},
+    )
+    multifloor     = bool(_g("multifloor"))
+    floor_var      = max(0, min(7, _int(_g("floor_var"), 0)))
+    max_floors     = _int(_g("max_floors"), 0)
+    boss_scene     = str(_g("boss_scene") or "").strip()
+
+    _WATER_COL_MAP = {
+        "pass":  "DGNCOL_PASS",
+        "water": "DGNCOL_WATER",
+        "solid": "DGNCOL_SOLID",
+        "death": "DGNCOL_VOID",
+    }
+    water_behavior  = str(_g("water_behavior") or "water")
+    water_col_def   = _WATER_COL_MAP.get(water_behavior, "DGNCOL_WATER")
+    _VOID_BEH_MAP   = {"death": 0, "floor": 1, "scene": 2}
+    void_behavior   = str(_g("void_behavior") or "death")
+    void_behavior_n = _VOID_BEH_MAP.get(void_behavior, 0)
+    void_damage     = max(0, min(255, _int(_g("void_damage"), 0)))
+    void_scene      = str(_g("void_scene") or "").strip()
+
+    lines = [
+        "/* dungeongen_config.h — auto-generated by NgpCraft Engine */",
+        "/* DO NOT EDIT — re-export from Level > Procgen > DungeonGen */",
+        "/* Include this header BEFORE #include \"ngpc_dungeongen/ngpc_dungeongen.h\" */",
+        "#ifndef DUNGEONGEN_CONFIG_H",
+        "#define DUNGEONGEN_CONFIG_H",
+        "",
+        "/* ---- Sol : mix des 3 variantes (somme = 100) ---- */",
+        f"#define DUNGEONGEN_GROUND_PCT_1    {ground_pct_1}u",
+        f"#define DUNGEONGEN_GROUND_PCT_2    {ground_pct_2}u",
+        f"#define DUNGEONGEN_GROUND_PCT_3    {ground_pct_3}u",
+        "",
+        "/* ---- Population : frequences (0=desactive, 100=systematique) ---- */",
+        f"#define DUNGEONGEN_EAU_FREQ        {eau_freq}u",
+        f"#define DUNGEONGEN_VIDE_FREQ       {vide_freq}u",
+        f"#define DUNGEONGEN_VIDE_MARGIN     {vide_margin}u",
+        f"#define DUNGEONGEN_TONNEAU_FREQ    {tonneau_freq}u",
+        f"#define DUNGEONGEN_TONNEAU_MAX     {tonneau_max}u",
+        f"#define DUNGEONGEN_ESCALIER_FREQ   {escalier_freq}u",
+        "",
+        "/* ---- Entites ---- */",
+        f"#define DUNGEONGEN_ENEMY_MIN       {enemy_min}u",
+        f"#define DUNGEONGEN_ENEMY_MAX       {enemy_max}u",
+        f"#define DUNGEONGEN_ENEMY_DENSITY   {enemy_density}u",
+        f"#define DUNGEONGEN_ENE2_PCT        {ene2_pct}u",
+        f"#define DUNGEONGEN_ITEM_FREQ       {item_freq}u",
+        "",
+        "/* ---- Navigation (lu par le code de jeu, pas par le module) ---- */",
+        f"#define DUNGEONGEN_N_ROOMS           {n_rooms}u",
+        f"#define DUNGEONGEN_CLUSTER_SIZE_MAX  {cluster_size_max}u",
+        "",
+        "/* ---- Difficulte progressive ---- */",
+        f"#define DUNGEONGEN_ENEMY_RAMP_ROOMS  {enemy_ramp_rooms}u",
+        f"#define DUNGEONGEN_SAFE_ROOM_EVERY   {safe_room_every}u",
+        f"#define DUNGEONGEN_MIN_EXITS         {min_exits}u",
+        "",
+        "/* ---- Taille des salles (cellules logiques) ---- */",
+        f"#define DUNGEONGEN_ROOM_MW_MIN     {room_mw_min}u",
+        f"#define DUNGEONGEN_ROOM_MW_MAX     {room_mw_max}u",
+        f"#define DUNGEONGEN_ROOM_MH_MIN     {room_mh_min}u",
+        f"#define DUNGEONGEN_ROOM_MH_MAX     {room_mh_max}u",
+        "",
+        "/* ---- Sorties et cellule ---- */",
+        f"#define DUNGEONGEN_MAX_EXITS       {max_exits}u",
+        f"#define DUNGEONGEN_CELL_W_TILES    {cell_w_tiles}u",
+        f"#define DUNGEONGEN_CELL_H_TILES    {cell_h_tiles}u",
+    ]
+
+    if cell_reason:
+        lines += ["", f"/* {cell_reason} */"]
+
+    if tier_cols > 0:
+        def _fmt_row(vals: list[int]) -> str:
+            return "{ " + ", ".join(f"{v}u" for v in vals) + " }"
+        lines += [
+            "",
+            "/* ---- Tiers de difficulte ---- */",
+            f"#define DUNGEONGEN_TIER_COLS         {tier_cols}u",
+            f"#define DUNGEONGEN_TIER_ENE_MAX      {_fmt_row(tier_ene_max)}",
+            f"#define DUNGEONGEN_TIER_ITEM_FREQ    {_fmt_row(tier_item_freq)}",
+            f"#define DUNGEONGEN_TIER_EAU_FREQ     {_fmt_row(tier_eau_freq)}",
+            f"#define DUNGEONGEN_TIER_VIDE_FREQ    {_fmt_row(tier_vide_freq)}",
+        ]
+
+    lines += [
+        "",
+        "/* ---- Comportement eau (DGNCOL_* retourné par collision_at sur case eau) ---- */",
+        f"#define DUNGEONGEN_WATER_COL       {water_col_def}",
+        "",
+        "/* ---- Comportement trou/fosse ---- */",
+        "/* 0=mort instant, 1=etage inferieur (multifloor), 2=goto scene            */",
+        "/* Dans tous les cas collision_at() retourne DGNCOL_VOID.                  */",
+        "/* Ces defines sont des HINTS pour le game code — pas utilisés par le gen. */",
+        f"#define DUNGEONGEN_VOID_BEHAVIOR   {void_behavior_n}u",
+        f"#define DUNGEONGEN_VOID_DAMAGE     {void_damage}u",
+    ]
+    if void_behavior == "scene" and void_scene:
+        lines.append(f'#define DUNGEONGEN_VOID_SCENE_ID   "{void_scene}"')
+
+    if multifloor:
+        lines += [
+            "",
+            "/* ---- Multi-floor progression ---- */",
+            f"#define DUNGEONGEN_MULTIFLOOR      1u",
+            f"#define DUNGEONGEN_FLOOR_VAR       {floor_var}u",
+            f"#define DUNGEONGEN_MAX_FLOORS      {max_floors}u",
+        ]
+        if boss_scene:
+            lines += [f'#define DUNGEONGEN_BOSS_SCENE_ID   "{boss_scene}"']
+
+    lines += ["", "#endif /* DUNGEONGEN_CONFIG_H */", ""]
+    return "\n".join(lines)
+
+
+def write_dungeongen_config_h(*, scene: dict, export_dir: Path, project_data: dict | None = None) -> Path:
+    """Write ``dungeongen_config.h`` to *export_dir*. Returns the written path."""
+    export_dir = Path(export_dir)
+    export_dir.mkdir(parents=True, exist_ok=True)
+    content = make_dungeongen_config_h(scene=scene, project_data=project_data)
+    out = export_dir / _DUNGEONGEN_FILENAME
+    out.write_text(content, encoding="utf-8")
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Batch — write all for all scenes that have runtime params
 # ---------------------------------------------------------------------------
 
 def write_all_procgen_configs(*, project_data: dict, export_dir: Path) -> list[Path]:
-    """Scan all scenes and write procgen_config.h and/or cavegen_config.h.
+    """Scan all scenes and write procgen_config.h, cavegen_config.h, dungeongen_config.h.
 
     Only the *last* scene with rt_dfs_params / rt_cave_params wins
     (the expectation is that a project uses one set of DFS params and
@@ -321,8 +585,9 @@ def write_all_procgen_configs(*, project_data: dict, export_dir: Path) -> list[P
     export_dir = Path(export_dir)
     scenes = (project_data.get("scenes") or []) if isinstance(project_data, dict) else []
 
-    last_dfs:  dict | None = None
-    last_cave: dict | None = None
+    last_dfs:        dict | None = None
+    last_cave:       dict | None = None
+    last_dungeongen: dict | None = None
 
     for sc in scenes:
         if not isinstance(sc, dict):
@@ -333,10 +598,19 @@ def write_all_procgen_configs(*, project_data: dict, export_dir: Path) -> list[P
         cave = sc.get("rt_cave_params")
         if isinstance(cave, dict) and cave.get("enabled", False):
             last_cave = sc
+        dgen = sc.get("rt_dungeongen_params")
+        if isinstance(dgen, dict) and dgen.get("enabled", False):
+            last_dungeongen = sc
 
     written: list[Path] = []
     if last_dfs is not None:
         written.append(write_procgen_config_h(scene=last_dfs, export_dir=export_dir))
     if last_cave is not None:
         written.append(write_cavegen_config_h(scene=last_cave, export_dir=export_dir))
+    if last_dungeongen is not None:
+        written.append(write_dungeongen_config_h(
+            scene=last_dungeongen,
+            export_dir=export_dir,
+            project_data=project_data,
+        ))
     return written

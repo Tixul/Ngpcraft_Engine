@@ -57,7 +57,7 @@ u8 ngpng_trigger_cond_met(u8 cond, u8 region, u16 value,
     u16 tx, u16 ty, u16 timer, u8 next_wave,
     u8 player_hp, u8 lives, u8 enemy_active_count,
     u16 collectible_count, u16 pad_pressed, u8 player_jump_started,
-    u16 npc_talked, u16 entity_contact)
+    u16 npc_talked, u16 entity_contact, u8 dlg_done)
 {
     u8 fire = 0u;
     if (cond == TRIG_ENTER_REGION || cond == TRIG_LEAVE_REGION) {
@@ -116,6 +116,11 @@ u8 ngpng_trigger_cond_met(u8 cond, u8 region, u16 value,
     } else if (cond == TRIG_ENTITY_CONTACT) {
         /* value = src_idx of the prop/NPC entity. Bit set when player AABB overlaps entity AABB. */
         if (value < 16u) fire = (u8)((entity_contact >> (u8)value) & 1u);
+    } else if (cond == TRIG_DIALOGUE_DONE) {
+        fire = dlg_done ? 1u : 0u;
+    } else if (cond == TRIG_CHOICE_RESULT) {
+        /* value 0 = choice 0, value 1 = choice 1. dlg_done carries the raw result. */
+        fire = dlg_done ? 1u : 0u;
     }
     if (fire && (cond == TRIG_BTN_A || cond == TRIG_BTN_B || cond == TRIG_BTN_A_B ||
                  cond == TRIG_BTN_UP || cond == TRIG_BTN_DOWN ||

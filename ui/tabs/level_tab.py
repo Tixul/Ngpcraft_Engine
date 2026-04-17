@@ -2906,6 +2906,7 @@ class LevelTab(QWidget):
         # Core state
         self._scene:    Optional[dict] = None
         self._base_dir: Optional[Path] = None
+        self._dgen_pa_png_rel: str = ""  # relative path to DungeonGen tileset PNG
         self._project_scenes:    list[dict] = []
         self._project_constants: list[dict] = []
         self._project_songs:     list = []   # list[AudioSong] from manifest
@@ -5726,9 +5727,12 @@ class LevelTab(QWidget):
 
         tab_design_v.addWidget(proc_split, 1)
 
-        self._procgen_sub_tabs.addTab(tab_design,                      "Design Map")
-        self._procgen_sub_tabs.addTab(self._build_procgen_dfs_tab(),   "Dungeon DFS")
-        self._procgen_sub_tabs.addTab(self._build_procgen_cave_tab(),  "Cave")
+        self._procgen_sub_tabs.addTab(tab_design,                            "Design Map")
+        self._procgen_sub_tabs.addTab(self._build_procgen_dungeongen_tab(), "DungeonGen")
+        self._procgen_sub_tabs.addTab(self._build_procgen_assets_tab(),     "Procgen Assets")
+        # Hidden (WIP — not ready for use):
+        self._tab_dfs  = self._build_procgen_dfs_tab()
+        self._tab_cave = self._build_procgen_cave_tab()
         gv.addWidget(self._procgen_sub_tabs, 1)
 
         self._tab_procgen = tab_gen
@@ -6378,6 +6382,7 @@ class LevelTab(QWidget):
         self._refresh_trigger_sfx_combo()
         self._refresh_neighbor_combos()
         self._refresh_procgen_scene_combos()
+        self._restore_procgen_assets_state()
 
     def _scene_idx_for_id(self, sid: str) -> int | None:
         sid = str(sid or "").strip()
@@ -7133,6 +7138,87 @@ class LevelTab(QWidget):
             except Exception:
                 pass
 
+        # ── Restore runtime DungeonGen params ────────────────────────
+        dg = scene.get("rt_dungeongen_params")
+        self._chk_dgen_enabled.setChecked(isinstance(dg, dict) and bool(dg.get("enabled", False)))
+        if isinstance(dg, dict) and dg:
+            try:
+                _seed_mode = dg.get("seed_mode", "rtc")
+                _seed_idx = 1 if _seed_mode == "fixed" else 0
+                self._combo_dgen_seed_mode.setCurrentIndex(_seed_idx)
+                self._spin_dgen_seed_value.setValue(max(1, min(65535, int(dg.get("seed_fixed", 1)))))
+                self._spin_dgen_seed_value.setEnabled(_seed_mode == "fixed")
+                self._spin_dgen_mw_min.setValue(max(4, min(32, int(dg.get("room_mw_min", 10)))))
+                self._spin_dgen_mw_max.setValue(max(4, min(32, int(dg.get("room_mw_max", 16)))))
+                self._spin_dgen_mh_min.setValue(max(4, min(32, int(dg.get("room_mh_min", 10)))))
+                self._spin_dgen_mh_max.setValue(max(4, min(32, int(dg.get("room_mh_max", 16)))))
+                self._spin_dgen_max_exits.setValue(max(0, min(4, int(dg.get("max_exits", 4)))))
+                self._spin_dgen_cell_w.setValue(max(1, min(4, int(dg.get("cell_w_tiles", 2)))))
+                self._spin_dgen_cell_h.setValue(max(1, min(4, int(dg.get("cell_h_tiles", 2)))))
+                self._spin_dgen_gpc1.setValue(int(dg.get("ground_pct_1", 70)))
+                self._spin_dgen_gpc2.setValue(int(dg.get("ground_pct_2", 20)))
+                self._spin_dgen_gpc3.setValue(int(dg.get("ground_pct_3", 10)))
+                self._spin_dgen_eau_freq.setValue(int(dg.get("eau_freq", 40)))
+                self._spin_dgen_vide_freq.setValue(int(dg.get("vide_freq", 30)))
+                self._spin_dgen_vide_margin.setValue(int(dg.get("vide_margin", 3)))
+                self._spin_dgen_tonneau_freq.setValue(int(dg.get("tonneau_freq", 50)))
+                self._spin_dgen_tonneau_max.setValue(max(1, min(2, int(dg.get("tonneau_max", 2)))))
+                self._spin_dgen_escalier_freq.setValue(int(dg.get("escalier_freq", 0)))
+                self._spin_dgen_enemy_min.setValue(int(dg.get("enemy_min", 0)))
+                self._spin_dgen_enemy_max.setValue(int(dg.get("enemy_max", 3)))
+                self._spin_dgen_enemy_density.setValue(max(1, int(dg.get("enemy_density", 16))))
+                self._spin_dgen_ene2_pct.setValue(max(0, min(100, int(dg.get("ene2_pct", 50)))))
+                self._spin_dgen_item_freq.setValue(int(dg.get("item_freq", 50)))
+                self._spin_dgen_n_rooms.setValue(max(0, int(dg.get("n_rooms", 0))))
+                self._spin_dgen_enemy_ramp_rooms.setValue(max(0, int(dg.get("enemy_ramp_rooms", 0))))
+                self._spin_dgen_safe_room_every.setValue(max(0, int(dg.get("safe_room_every", 0))))
+                self._spin_dgen_min_exits.setValue(max(0, min(4, int(dg.get("min_exits", 0)))))
+                self._spin_dgen_cluster_size_max.setValue(max(2, min(4, int(dg.get("cluster_size_max", 4)))))
+                self._spin_dgen_tier_cols.setValue(max(0, int(dg.get("tier_cols", 0))))
+                def _fmt_tier_row(key: str) -> str:
+                    vals = dg.get(key, [])
+                    return ", ".join(str(v) for v in vals) if vals else ""
+                self._edit_dgen_tier_ene_max.setText(_fmt_tier_row("tier_ene_max"))
+                self._edit_dgen_tier_item_freq.setText(_fmt_tier_row("tier_item_freq"))
+                self._edit_dgen_tier_eau_freq.setText(_fmt_tier_row("tier_eau_freq"))
+                self._edit_dgen_tier_vide_freq.setText(_fmt_tier_row("tier_vide_freq"))
+                self._chk_dgen_multifloor.setChecked(bool(dg.get("multifloor", False)))
+                self._spin_dgen_floor_var.setValue(max(0, min(7, int(dg.get("floor_var", 0)))))
+                self._spin_dgen_max_floors.setValue(int(dg.get("max_floors", 0)))
+                bs_idx = self._combo_dgen_boss_scene.findData(dg.get("boss_scene", ""))
+                if bs_idx >= 0:
+                    self._combo_dgen_boss_scene.setCurrentIndex(bs_idx)
+                # Pool ennemis / items
+                self._set_dgen_pool(
+                    getattr(self, "_tbl_dgen_ene_pool",  None) or QTableWidget(),
+                    "enemy", dg.get("enemy_pool", []) or [], has_max=True)
+                self._set_dgen_pool(
+                    getattr(self, "_tbl_dgen_item_pool", None) or QTableWidget(),
+                    "item",  dg.get("item_pool",  []) or [], has_max=False)
+                # Player selector
+                _pc = getattr(self, "_combo_dgen_player", None)
+                if _pc is not None:
+                    _pid_idx = _pc.findData(dg.get("player_entity_id", ""))
+                    _pc.setCurrentIndex(_pid_idx if _pid_idx >= 0 else 0)
+                # Comportement eau
+                _wc = dg.get("water_behavior", "water")
+                _wc_idx = self._combo_dgen_water_col.findData(_wc)
+                self._combo_dgen_water_col.setCurrentIndex(_wc_idx if _wc_idx >= 0 else 1)
+                # Comportement trou
+                _vb = dg.get("void_behavior", "death")
+                _vb_idx = self._combo_dgen_void_behavior.findData(_vb)
+                self._combo_dgen_void_behavior.setCurrentIndex(_vb_idx if _vb_idx >= 0 else 0)
+                self._spin_dgen_void_damage.setValue(max(0, min(255, int(dg.get("void_damage", 0)))))
+                _vs_id = dg.get("void_scene", "")
+                _vs_idx = self._combo_dgen_void_scene.findData(_vs_id)
+                self._combo_dgen_void_scene.setCurrentIndex(_vs_idx if _vs_idx >= 0 else 0)
+                # Mettre à jour la visibilité des widgets conditionnels
+                _vb_mode = self._combo_dgen_void_behavior.currentData()
+                self._wdg_void_scene_row.setVisible(_vb_mode == "scene")
+                self._wdg_void_damage_row.setVisible(_vb_mode != "death")
+            except Exception:
+                pass
+
         # ── Restore runtime DFS params ────────────────────────────────
         dp = scene.get("rt_dfs_params")
         self._chk_dfs_enabled.setChecked(isinstance(dp, dict) and bool(dp.get("enabled", False)))
@@ -7796,6 +7882,7 @@ class LevelTab(QWidget):
             self._on_save()
         self._refresh_hud_widget_type_combo()
         self._refresh_hud_font_digit_combos()
+        self._refresh_dgen_pool_combos()
         self._refresh_type_starter_ui()
         self._canvas.update()
 
@@ -11496,6 +11583,996 @@ class LevelTab(QWidget):
     # Procgen sub-tab builders
     # ------------------------------------------------------------------
 
+    def _build_procgen_dungeongen_tab(self) -> QWidget:
+        """Build and return the DungeonGen runtime configuration sub-tab."""
+        tab = QWidget()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(scroll.Shape.NoFrame)
+        inner = QWidget()
+        v = QVBoxLayout(inner)
+        v.setContentsMargins(6, 6, 6, 6)
+        v.setSpacing(8)
+
+        # ── Master enable ─────────────────────────────────────────────────
+        self._chk_dgen_enabled = QCheckBox(
+            "Enable DungeonGen runtime generation for this scene")
+        self._chk_dgen_enabled.setToolTip(
+            "When checked, the Export button writes dungeongen_config.h.\n"
+            "Include it BEFORE #include \"ngpc_dungeongen/ngpc_dungeongen.h\" in your code.\n"
+            "Uncheck = scene uses static Design Map or another procgen mode.")
+        self._chk_dgen_enabled.setStyleSheet("font-weight: bold;")
+        v.addWidget(self._chk_dgen_enabled)
+
+        self._dgen_params_widget = QWidget()
+        dgen_v = QVBoxLayout(self._dgen_params_widget)
+        dgen_v.setContentsMargins(0, 0, 0, 0)
+        dgen_v.setSpacing(8)
+
+        def _dgen_toggle(checked: bool) -> None:
+            self._dgen_params_widget.setEnabled(checked)
+
+        self._chk_dgen_enabled.toggled.connect(_dgen_toggle)
+        self._dgen_params_widget.setEnabled(False)
+
+        v.addWidget(self._dgen_params_widget, 1)
+        v = dgen_v  # noqa: F841
+
+        # ── Seed ─────────────────────────────────────────────────────────
+        grp_seed = QGroupBox("Seed de génération")
+        seed_v = QVBoxLayout(grp_seed)
+        seed_v.setSpacing(4)
+
+        seed_row = QHBoxLayout()
+        seed_row.addWidget(QLabel("Mode:"))
+        self._combo_dgen_seed_mode = QComboBox()
+        self._combo_dgen_seed_mode.addItem("RTC (aléatoire à chaque boot)", "rtc")
+        self._combo_dgen_seed_mode.addItem("Fixe (valeur saisie)", "fixed")
+        self._combo_dgen_seed_mode.setToolTip(
+            "RTC : ngpc_dungeongen_set_rtc_seed() — donjon différent à chaque session.\n"
+            "Fixe : ngpc_dungeongen_set_seed(N) — même donjon reproductible (debug, partage).")
+        seed_row.addWidget(self._combo_dgen_seed_mode)
+        seed_row.addWidget(QLabel("Valeur:"))
+        self._spin_dgen_seed_value = QSpinBox()
+        self._spin_dgen_seed_value.setRange(1, 65535)
+        self._spin_dgen_seed_value.setValue(1)
+        self._spin_dgen_seed_value.setEnabled(False)
+        self._spin_dgen_seed_value.setToolTip("Seed fixe (1–65535) — ignorée si mode RTC.")
+        seed_row.addWidget(self._spin_dgen_seed_value)
+        seed_row.addStretch()
+        seed_v.addLayout(seed_row)
+
+        def _dgen_seed_mode_changed(index: int) -> None:
+            self._spin_dgen_seed_value.setEnabled(
+                self._combo_dgen_seed_mode.itemData(index) == "fixed")
+        self._combo_dgen_seed_mode.currentIndexChanged.connect(_dgen_seed_mode_changed)
+
+        v.addWidget(grp_seed)
+
+        # ── Salle ────────────────────────────────────────────────────────
+        grp_room = QGroupBox("Salle (cellules logiques)")
+        room_v = QVBoxLayout(grp_room)
+        room_v.setSpacing(4)
+
+        wrow = QHBoxLayout()
+        wrow.addWidget(QLabel("Largeur min:"))
+        self._spin_dgen_mw_min = QSpinBox()
+        self._spin_dgen_mw_min.setRange(4, 32)
+        self._spin_dgen_mw_min.setValue(10)
+        self._spin_dgen_mw_min.setToolTip("DUNGEONGEN_ROOM_MW_MIN — largeur minimale d'une salle en cellules")
+        wrow.addWidget(self._spin_dgen_mw_min)
+        wrow.addWidget(QLabel("max:"))
+        self._spin_dgen_mw_max = QSpinBox()
+        self._spin_dgen_mw_max.setRange(4, 32)
+        self._spin_dgen_mw_max.setValue(16)
+        self._spin_dgen_mw_max.setToolTip("DUNGEONGEN_ROOM_MW_MAX — largeur maximale (≤32, taille tilemap HW)")
+        wrow.addWidget(self._spin_dgen_mw_max)
+        wrow.addStretch()
+        room_v.addLayout(wrow)
+
+        hrow = QHBoxLayout()
+        hrow.addWidget(QLabel("Hauteur min:"))
+        self._spin_dgen_mh_min = QSpinBox()
+        self._spin_dgen_mh_min.setRange(4, 32)
+        self._spin_dgen_mh_min.setValue(10)
+        self._spin_dgen_mh_min.setToolTip("DUNGEONGEN_ROOM_MH_MIN — hauteur minimale d'une salle en cellules")
+        hrow.addWidget(self._spin_dgen_mh_min)
+        hrow.addWidget(QLabel("max:"))
+        self._spin_dgen_mh_max = QSpinBox()
+        self._spin_dgen_mh_max.setRange(4, 32)
+        self._spin_dgen_mh_max.setValue(16)
+        self._spin_dgen_mh_max.setToolTip("DUNGEONGEN_ROOM_MH_MAX — hauteur maximale (≤32, taille tilemap HW)")
+        hrow.addWidget(self._spin_dgen_mh_max)
+        hrow.addStretch()
+        room_v.addLayout(hrow)
+
+        exit_row = QHBoxLayout()
+        exit_row.addWidget(QLabel("Max sorties (0-4):"))
+        self._spin_dgen_max_exits = QSpinBox()
+        self._spin_dgen_max_exits.setRange(0, 4)
+        self._spin_dgen_max_exits.setValue(4)
+        self._spin_dgen_max_exits.setToolTip(
+            "DUNGEONGEN_MAX_EXITS — nombre de sorties max par salle (N/S/E/W).\n"
+            "Détermine le nombre de styles disponibles (0→1, 1→2, 2→5, 3→6, 4→7).")
+        exit_row.addWidget(self._spin_dgen_max_exits)
+        exit_row.addStretch()
+        room_v.addLayout(exit_row)
+
+        cell_row = QHBoxLayout()
+        cell_row.addWidget(QLabel("Taille cellule (tiles NGPC):"))
+        self._spin_dgen_cell_w = QSpinBox()
+        self._spin_dgen_cell_w.setRange(1, 4)
+        self._spin_dgen_cell_w.setValue(2)
+        self._spin_dgen_cell_w.setReadOnly(True)
+        self._spin_dgen_cell_w.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._spin_dgen_cell_w.setStyleSheet("color: #888;")
+        self._spin_dgen_cell_w.setToolTip(
+            "Lecture seule — piloté par 'Taille cellule source' dans l'onglet Procgen Assets.\n"
+            "DUNGEONGEN_CELL_W_TILES = 1 (8×8), 2 (16×16) ou 4 (32×32).")
+        cell_row.addWidget(self._spin_dgen_cell_w)
+        cell_row.addWidget(QLabel("x"))
+        self._spin_dgen_cell_h = QSpinBox()
+        self._spin_dgen_cell_h.setRange(1, 4)
+        self._spin_dgen_cell_h.setValue(2)
+        self._spin_dgen_cell_h.setReadOnly(True)
+        self._spin_dgen_cell_h.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._spin_dgen_cell_h.setStyleSheet("color: #888;")
+        self._spin_dgen_cell_h.setToolTip(
+            "Lecture seule — piloté par 'Taille cellule source' dans l'onglet Procgen Assets.\n"
+            "DUNGEONGEN_CELL_H_TILES = 1 (8×8), 2 (16×16) ou 4 (32×32).")
+        cell_row.addWidget(self._spin_dgen_cell_h)
+        cell_row.addWidget(QLabel("tiles  ⬅ réglé dans Procgen Assets"))
+        cell_row.addStretch()
+        room_v.addLayout(cell_row)
+
+        cell_note = QLabel("Cellule 2x2 = metatile 16x16px  |  Cellule 1x1 = tile 8x8px  |  max salle 16x16 cellules = tilemap HW 32x32")
+        cell_note.setStyleSheet("color:#aaa;font-size:10px;")
+        cell_note.setWordWrap(True)
+        room_v.addWidget(cell_note)
+        v.addWidget(grp_room)
+
+        # ── Sol ──────────────────────────────────────────────────────────
+        grp_ground = QGroupBox("Sol — mix des 3 variantes (somme = 100%)")
+        ground_v = QVBoxLayout(grp_ground)
+        ground_v.setSpacing(4)
+
+        g1row = QHBoxLayout()
+        g1row.addWidget(QLabel("Variante 1:"))
+        self._spin_dgen_gpc1 = QSpinBox()
+        self._spin_dgen_gpc1.setRange(0, 100)
+        self._spin_dgen_gpc1.setValue(70)
+        self._spin_dgen_gpc1.setSuffix("%")
+        self._spin_dgen_gpc1.setToolTip("DUNGEONGEN_GROUND_PCT_1 — sol principal (tile variante 1)")
+        g1row.addWidget(self._spin_dgen_gpc1)
+        g1row.addWidget(QLabel("Variante 2:"))
+        self._spin_dgen_gpc2 = QSpinBox()
+        self._spin_dgen_gpc2.setRange(0, 100)
+        self._spin_dgen_gpc2.setValue(20)
+        self._spin_dgen_gpc2.setSuffix("%")
+        self._spin_dgen_gpc2.setToolTip("DUNGEONGEN_GROUND_PCT_2 — detail sol (tile variante 2)")
+        g1row.addWidget(self._spin_dgen_gpc2)
+        g1row.addWidget(QLabel("Variante 3:"))
+        self._spin_dgen_gpc3 = QSpinBox()
+        self._spin_dgen_gpc3.setRange(0, 100)
+        self._spin_dgen_gpc3.setValue(10)
+        self._spin_dgen_gpc3.setSuffix("%")
+        self._spin_dgen_gpc3.setToolTip("DUNGEONGEN_GROUND_PCT_3 — accent sol (tile variante 3). Auto-ajuste pour sommer a 100.")
+        g1row.addWidget(self._spin_dgen_gpc3)
+        g1row.addStretch()
+        ground_v.addLayout(g1row)
+
+        self._lbl_dgen_ground_sum = QLabel("Somme: 100%")
+        self._lbl_dgen_ground_sum.setStyleSheet("color:#aaa;font-size:10px;")
+        ground_v.addWidget(self._lbl_dgen_ground_sum)
+
+        def _update_ground_sum() -> None:
+            s = self._spin_dgen_gpc1.value() + self._spin_dgen_gpc2.value() + self._spin_dgen_gpc3.value()
+            ok = s == 100
+            self._lbl_dgen_ground_sum.setText(f"Somme: {s}%  {'OK' if ok else '(PCT_3 sera auto-ajuste a l export)'}")
+            self._lbl_dgen_ground_sum.setStyleSheet(
+                "color:#5f5;font-size:10px;" if ok else "color:#fa0;font-size:10px;")
+
+        self._spin_dgen_gpc1.valueChanged.connect(lambda _: _update_ground_sum())
+        self._spin_dgen_gpc2.valueChanged.connect(lambda _: _update_ground_sum())
+        self._spin_dgen_gpc3.valueChanged.connect(lambda _: _update_ground_sum())
+        _update_ground_sum()
+        v.addWidget(grp_ground)
+
+        # ── Population ───────────────────────────────────────────────────
+        grp_pop = QGroupBox("Population — elements visuels")
+        pop_v = QVBoxLayout(grp_pop)
+        pop_v.setSpacing(4)
+
+        def _freq_row(label: str, default: int, tip: str) -> QSpinBox:
+            row = QHBoxLayout()
+            row.addWidget(QLabel(label))
+            spin = QSpinBox()
+            spin.setRange(0, 100)
+            spin.setValue(default)
+            spin.setSuffix("%")
+            spin.setToolTip(tip)
+            row.addWidget(spin)
+            row.addStretch()
+            pop_v.addLayout(row)
+            return spin
+
+        self._spin_dgen_eau_freq = _freq_row(
+            "Eau (bande traversante):", 40,
+            "DUNGEONGEN_EAU_FREQ — % de chance d'une bande d'eau. Seulement si <=2 sorties. 0=desactive.")
+        self._spin_dgen_vide_freq = _freq_row(
+            "Fosse (vide 2x2):", 30,
+            "DUNGEONGEN_VIDE_FREQ — % de chance d'une fosse (zone vide 2x2 cellules). 0=desactive.")
+        self._spin_dgen_tonneau_freq = _freq_row(
+            "Decoration A (prop mural):", 50,
+            "DUNGEONGEN_TONNEAU_FREQ — % de chance d'un ou deux props decoratifs contre un mur.\n"
+            "Tile : role 'Decoration A' dans l'onglet Procgen Assets. 0=desactive.")
+        self._spin_dgen_escalier_freq = QSpinBox()   # cache, compat JSON legacy
+        self._spin_dgen_escalier_freq.setRange(0, 100)
+        self._spin_dgen_escalier_freq.setValue(0)
+        self._spin_dgen_escalier_freq.hide()
+
+        tno_row = QHBoxLayout()
+        tno_row.addWidget(QLabel("Max decoration A:"))
+        self._spin_dgen_tonneau_max = QSpinBox()
+        self._spin_dgen_tonneau_max.setRange(1, 2)
+        self._spin_dgen_tonneau_max.setValue(2)
+        self._spin_dgen_tonneau_max.setToolTip("DUNGEONGEN_TONNEAU_MAX — 1 ou 2 props decoratifs max par salle.")
+        tno_row.addWidget(self._spin_dgen_tonneau_max)
+        tno_row.addStretch()
+        pop_v.addLayout(tno_row)
+
+        margin_row = QHBoxLayout()
+        margin_row.addWidget(QLabel("Marge autour sorties (cellules):"))
+        self._spin_dgen_vide_margin = QSpinBox()
+        self._spin_dgen_vide_margin.setRange(1, 6)
+        self._spin_dgen_vide_margin.setValue(3)
+        self._spin_dgen_vide_margin.setToolTip(
+            "DUNGEONGEN_VIDE_MARGIN — zone de protection autour des ouvertures de sortie.\n"
+            "Une fosse ne sera jamais placee a moins de N cellules d'une sortie.")
+        margin_row.addWidget(self._spin_dgen_vide_margin)
+        margin_row.addStretch()
+        pop_v.addLayout(margin_row)
+
+        v.addWidget(grp_pop)
+
+        # ── Comportements Eau & Trou ──────────────────────────────────────
+        grp_behav = QGroupBox("Comportements — Eau & Trou")
+        beh_v = QVBoxLayout(grp_behav)
+        beh_v.setSpacing(4)
+
+        eau_row = QHBoxLayout()
+        eau_row.addWidget(QLabel("Eau :"))
+        self._combo_dgen_water_col = QComboBox()
+        self._combo_dgen_water_col.addItem("Passable (aucun effet)",        "pass")
+        self._combo_dgen_water_col.addItem("Dommages / effet (DGNCOL_WATER)", "water")
+        self._combo_dgen_water_col.addItem("Solide (mur infranchissable)",  "solid")
+        self._combo_dgen_water_col.addItem("Mort instant",                  "death")
+        self._combo_dgen_water_col.setCurrentIndex(1)
+        self._combo_dgen_water_col.setToolTip(
+            "DUNGEONGEN_WATER_COL — comportement retourné par collision_at() sur une case eau.\n"
+            "'Dommages' = DGNCOL_WATER (le game code interprète comme il veut).\n"
+            "'Solide' = le pont reste franchissable, mais les cases eau sont des murs.\n"
+            "'Mort instant' = DGNCOL_VOID (chute immédiate).")
+        self._combo_dgen_water_col.currentIndexChanged.connect(
+            lambda: self._store_scene_state(save_project=True, update_status=False))
+        eau_row.addWidget(self._combo_dgen_water_col, 1)
+        beh_v.addLayout(eau_row)
+
+        void_row = QHBoxLayout()
+        void_row.addWidget(QLabel("Trou (fosse) :"))
+        self._combo_dgen_void_behavior = QComboBox()
+        self._combo_dgen_void_behavior.addItem("Mort instant",              "death")
+        self._combo_dgen_void_behavior.addItem("Étage inférieur (multifloor)", "floor")
+        self._combo_dgen_void_behavior.addItem("Goto scène →",              "scene")
+        self._combo_dgen_void_behavior.setToolTip(
+            "DUNGEONGEN_VOID_BEHAVIOR — indique au game code le comportement d'une chute.\n"
+            "Dans tous les cas collision_at() retourne DGNCOL_VOID.\n"
+            "'Étage inférieur' = utilise le système multifloor (décrémenter floor_var).\n"
+            "'Goto scène' = le game code effectue la transition vers DUNGEONGEN_VOID_SCENE_ID.")
+
+        def _void_behavior_changed():
+            mode = self._combo_dgen_void_behavior.currentData()
+            self._wdg_void_scene_row.setVisible(mode == "scene")
+            self._wdg_void_damage_row.setVisible(mode != "death")
+            self._store_scene_state(save_project=True, update_status=False)
+
+        self._combo_dgen_void_behavior.currentIndexChanged.connect(_void_behavior_changed)
+        void_row.addWidget(self._combo_dgen_void_behavior, 1)
+        beh_v.addLayout(void_row)
+
+        dmg_row = QHBoxLayout()
+        dmg_row.addWidget(QLabel("  Dommages chute :"))
+        self._spin_dgen_void_damage = QSpinBox()
+        self._spin_dgen_void_damage.setRange(0, 255)
+        self._spin_dgen_void_damage.setValue(0)
+        self._spin_dgen_void_damage.setToolTip(
+            "DUNGEONGEN_VOID_DAMAGE — dommages infligés lors de la chute (0 = aucun).\n"
+            "Interprété par le game code.")
+        self._spin_dgen_void_damage.valueChanged.connect(
+            lambda: self._store_scene_state(save_project=True, update_status=False))
+        dmg_row.addWidget(self._spin_dgen_void_damage)
+        dmg_row.addStretch()
+        self._wdg_void_damage_row = QWidget()
+        self._wdg_void_damage_row.setLayout(dmg_row)
+        self._wdg_void_damage_row.setVisible(False)
+        beh_v.addWidget(self._wdg_void_damage_row)
+
+        vs_row = QHBoxLayout()
+        vs_row.addWidget(QLabel("  Scène cible :"))
+        self._combo_dgen_void_scene = QComboBox()
+        self._combo_dgen_void_scene.addItem("(aucune)", "")
+        self._combo_dgen_void_scene.setToolTip(
+            "DUNGEONGEN_VOID_SCENE_ID — scène vers laquelle transiter lors d'une chute.")
+        self._combo_dgen_void_scene.currentIndexChanged.connect(
+            lambda: self._store_scene_state(save_project=True, update_status=False))
+        vs_row.addWidget(self._combo_dgen_void_scene, 1)
+        self._wdg_void_scene_row = QWidget()
+        self._wdg_void_scene_row.setLayout(vs_row)
+        self._wdg_void_scene_row.setVisible(False)
+        beh_v.addWidget(self._wdg_void_scene_row)
+
+        v.addWidget(grp_behav)
+
+        # ── Entites ──────────────────────────────────────────────────────
+        grp_ent = QGroupBox("Entites — ennemis + item (sprites GFX_SPR)")
+        ent_v = QVBoxLayout(grp_ent)
+        ent_v.setSpacing(4)
+
+        en_row = QHBoxLayout()
+        en_row.addWidget(QLabel("Ennemis min:"))
+        self._spin_dgen_enemy_min = QSpinBox()
+        self._spin_dgen_enemy_min.setRange(0, 8)
+        self._spin_dgen_enemy_min.setValue(0)
+        self._spin_dgen_enemy_min.setToolTip("DUNGEONGEN_ENEMY_MIN — nombre minimum d'ennemis par salle.")
+        en_row.addWidget(self._spin_dgen_enemy_min)
+        en_row.addWidget(QLabel("max:"))
+        self._spin_dgen_enemy_max = QSpinBox()
+        self._spin_dgen_enemy_max.setRange(0, 8)
+        self._spin_dgen_enemy_max.setValue(3)
+        self._spin_dgen_enemy_max.setToolTip(
+            "DUNGEONGEN_ENEMY_MAX — plafond absolu d'ennemis. Le cap reel est auto-calcule\n"
+            "selon la surface interieure / ENEMY_DENSITY, borne par [min, max].")
+        en_row.addWidget(self._spin_dgen_enemy_max)
+        en_row.addStretch()
+        ent_v.addLayout(en_row)
+
+        dens_row = QHBoxLayout()
+        dens_row.addWidget(QLabel("Densite (cellules/ennemi):"))
+        self._spin_dgen_enemy_density = QSpinBox()
+        self._spin_dgen_enemy_density.setRange(4, 64)
+        self._spin_dgen_enemy_density.setValue(16)
+        self._spin_dgen_enemy_density.setToolTip(
+            "DUNGEONGEN_ENEMY_DENSITY — surface interieure (cellules) par ennemi autorise.\n"
+            "Petite valeur = plus d'ennemis dans les grandes salles. 16 = 1 ennemi / 16 cellules.")
+        dens_row.addWidget(self._spin_dgen_enemy_density)
+        dens_row.addStretch()
+        ent_v.addLayout(dens_row)
+
+        ene2_row = QHBoxLayout()
+        ene2_row.addWidget(QLabel("% petit ennemi (ENE2 8x8):"))
+        self._spin_dgen_ene2_pct = QSpinBox()
+        self._spin_dgen_ene2_pct.setRange(0, 100)
+        self._spin_dgen_ene2_pct.setValue(50)
+        self._spin_dgen_ene2_pct.setSuffix("%")
+        self._spin_dgen_ene2_pct.setToolTip(
+            "DUNGEONGEN_ENE2_PCT — % de chance qu'un ennemi soit ENE2 (8x8, 1 sprite slot).\n"
+            "Le reste sera ENE1 (16x16, 4 sprite slots).\n"
+            "0% = tous ENE1.  100% = tous ENE2.")
+        ene2_row.addWidget(self._spin_dgen_ene2_pct)
+        ene2_row.addStretch()
+        ent_v.addLayout(ene2_row)
+
+        item_row = QHBoxLayout()
+        item_row.addWidget(QLabel("Item par salle:"))
+        self._spin_dgen_item_freq = QSpinBox()
+        self._spin_dgen_item_freq.setRange(0, 100)
+        self._spin_dgen_item_freq.setValue(50)
+        self._spin_dgen_item_freq.setSuffix("%")
+        self._spin_dgen_item_freq.setToolTip("DUNGEONGEN_ITEM_FREQ — % de chance d'un item 16x16 dans la salle. 0=desactive.")
+        item_row.addWidget(self._spin_dgen_item_freq)
+        item_row.addStretch()
+        ent_v.addLayout(item_row)
+
+        ent_note = QLabel(
+            "Sprites sur GFX_SPR.  Taille detectee depuis _mspr.c  (8x8=1 slot, 16x16=4, 32x32=16).\n"
+            "Definir les sprites dans les pools ci-dessous. Slots = enemy_max * max_sz_pool + 4 item.")
+        ent_note.setWordWrap(True)
+        ent_note.setStyleSheet("color:#aaa;font-size:10px;")
+        ent_v.addWidget(ent_note)
+        v.addWidget(grp_ent)
+
+        # ── Pool ennemis ─────────────────────────────────────────────────
+        grp_ene_pool = QGroupBox("Pool ennemis — sprites selectionnes pour ce donjon")
+        ene_pool_v = QVBoxLayout(grp_ene_pool)
+        ene_pool_v.setSpacing(4)
+
+        ene_pool_note = QLabel(
+            "Chaque entree : un sprite ennemi + poids (proba relative) + max instances/salle.\n"
+            "Le comportement peut etre force explicitement par entree, avec un parametre selon le mode.\n"
+            "32x32 plafonne a max=2. Poids 0 = exclure. Vide = utilise legacy ENE1/ENE2.")
+        ene_pool_note.setWordWrap(True)
+        ene_pool_note.setStyleSheet("color:#aaa;font-size:10px;")
+        ene_pool_v.addWidget(ene_pool_note)
+
+        self._tbl_dgen_ene_pool = QTableWidget(0, 5)
+        self._tbl_dgen_ene_pool.setHorizontalHeaderLabels(
+            ["Entite (role=enemy)", "Poids", "Max/salle", "Comportement", "Param"]
+        )
+        self._tbl_dgen_ene_pool.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self._tbl_dgen_ene_pool.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        self._tbl_dgen_ene_pool.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self._tbl_dgen_ene_pool.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self._tbl_dgen_ene_pool.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self._tbl_dgen_ene_pool.setColumnWidth(1, 75)
+        self._tbl_dgen_ene_pool.setColumnWidth(2, 80)
+        self._tbl_dgen_ene_pool.setColumnWidth(3, 165)
+        self._tbl_dgen_ene_pool.setColumnWidth(4, 76)
+        self._tbl_dgen_ene_pool.setMaximumHeight(130)
+        self._tbl_dgen_ene_pool.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        ene_pool_v.addWidget(self._tbl_dgen_ene_pool)
+
+        ene_pool_btn_row = QHBoxLayout()
+        btn_ene_add = QPushButton("+ Ajouter")
+        btn_ene_add.setFixedWidth(90)
+        btn_ene_add.clicked.connect(lambda: self._dgen_pool_add_row(
+            self._tbl_dgen_ene_pool, "enemy", "", 1, 4))
+        btn_ene_rem = QPushButton("- Supprimer")
+        btn_ene_rem.setFixedWidth(90)
+        btn_ene_rem.clicked.connect(lambda: self._dgen_pool_remove_row(
+            self._tbl_dgen_ene_pool))
+        ene_pool_btn_row.addWidget(btn_ene_add)
+        ene_pool_btn_row.addWidget(btn_ene_rem)
+        ene_pool_btn_row.addStretch()
+        ene_pool_v.addLayout(ene_pool_btn_row)
+        v.addWidget(grp_ene_pool)
+
+        # ── Pool items ───────────────────────────────────────────────────
+        grp_item_pool = QGroupBox("Pool items — sprites selectionnes pour ce donjon")
+        item_pool_v = QVBoxLayout(grp_item_pool)
+        item_pool_v.setSpacing(4)
+
+        item_pool_note = QLabel(
+            "Chaque entree : un sprite item + poids. Max 16x16 (32x32 non supporte pour les items).\n"
+            "Vide = utilise legacy ITEM.")
+        item_pool_note.setWordWrap(True)
+        item_pool_note.setStyleSheet("color:#aaa;font-size:10px;")
+        item_pool_v.addWidget(item_pool_note)
+
+        self._tbl_dgen_item_pool = QTableWidget(0, 2)
+        self._tbl_dgen_item_pool.setHorizontalHeaderLabels(["Entite (role=item)", "Poids"])
+        self._tbl_dgen_item_pool.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self._tbl_dgen_item_pool.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        self._tbl_dgen_item_pool.setColumnWidth(1, 60)
+        self._tbl_dgen_item_pool.setMaximumHeight(110)
+        self._tbl_dgen_item_pool.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        item_pool_v.addWidget(self._tbl_dgen_item_pool)
+
+        item_pool_btn_row = QHBoxLayout()
+        btn_item_add = QPushButton("+ Ajouter")
+        btn_item_add.setFixedWidth(90)
+        btn_item_add.clicked.connect(lambda: self._dgen_pool_add_row(
+            self._tbl_dgen_item_pool, "item", "", 1, None))
+        btn_item_rem = QPushButton("- Supprimer")
+        btn_item_rem.setFixedWidth(90)
+        btn_item_rem.clicked.connect(lambda: self._dgen_pool_remove_row(
+            self._tbl_dgen_item_pool))
+        item_pool_btn_row.addWidget(btn_item_add)
+        item_pool_btn_row.addWidget(btn_item_rem)
+        item_pool_btn_row.addStretch()
+        item_pool_v.addLayout(item_pool_btn_row)
+        v.addWidget(grp_item_pool)
+
+        # ── Player ───────────────────────────────────────────────────────
+        grp_player = QGroupBox("Player — sprite utilise dans ce donjon")
+        player_v = QVBoxLayout(grp_player)
+        player_v.setSpacing(4)
+
+        player_note = QLabel(
+            "Selectionnez l'entite avec gameplay_role=player utilisee par le joueur.\n"
+            "Quand DungeonGen est actif, le canvas est completement ignore a l'export —\n"
+            "seules les pools et ce choix definissent les entites de la scene.")
+        player_note.setWordWrap(True)
+        player_note.setStyleSheet("color:#aaa;font-size:10px;")
+        player_v.addWidget(player_note)
+
+        player_row = QHBoxLayout()
+        player_row.addWidget(QLabel("Entite player:"))
+        self._combo_dgen_player = QComboBox()
+        self._combo_dgen_player.setToolTip(
+            "Entite avec role=player. Canvas ignore quand DungeonGen est actif.")
+        self._combo_dgen_player.currentIndexChanged.connect(
+            lambda _: self._store_scene_state(save_project=True, update_status=False))
+        player_row.addWidget(self._combo_dgen_player, 1)
+        player_row.addStretch()
+        player_v.addLayout(player_row)
+        v.addWidget(grp_player)
+
+        # ── Navigation ───────────────────────────────────────────────────
+        grp_nav = QGroupBox("Navigation — rooms avant boss")
+        nav_v = QVBoxLayout(grp_nav)
+        nav_v.setSpacing(4)
+
+        nr_row = QHBoxLayout()
+        nr_row.addWidget(QLabel("Rooms avant boss (0 = infini):"))
+        self._spin_dgen_n_rooms = QSpinBox()
+        self._spin_dgen_n_rooms.setRange(0, 9999)
+        self._spin_dgen_n_rooms.setValue(0)
+        self._spin_dgen_n_rooms.setToolTip(
+            "DUNGEONGEN_N_ROOMS — nombre de salles a visiter avant de declencher le boss.\n"
+            "0 = pas de limite. Exporte comme constante C pour le code de jeu.\n"
+            "Usage : if (rooms_visited >= DUNGEONGEN_N_ROOMS && DUNGEONGEN_N_ROOMS) { goto boss; }")
+        nr_row.addWidget(self._spin_dgen_n_rooms)
+        nr_row.addStretch()
+        nav_v.addLayout(nr_row)
+
+        ramp_row = QHBoxLayout()
+        ramp_row.addWidget(QLabel("Ramp difficulte tous les N rooms (0 = off):"))
+        self._spin_dgen_enemy_ramp_rooms = QSpinBox()
+        self._spin_dgen_enemy_ramp_rooms.setRange(0, 999)
+        self._spin_dgen_enemy_ramp_rooms.setValue(0)
+        self._spin_dgen_enemy_ramp_rooms.setToolTip(
+            "DUNGEONGEN_ENEMY_RAMP_ROOMS — +1 ennemi max tous les N rooms jusqu'a ENEMY_MAX.\n"
+            "0 = desactive. Ex : 5 → cap+1 room 5, cap+2 room 10...")
+        ramp_row.addWidget(self._spin_dgen_enemy_ramp_rooms)
+        ramp_row.addStretch()
+        nav_v.addLayout(ramp_row)
+
+        safe_row = QHBoxLayout()
+        safe_row.addWidget(QLabel("Safe room toutes les N rooms (0 = off):"))
+        self._spin_dgen_safe_room_every = QSpinBox()
+        self._spin_dgen_safe_room_every.setRange(0, 999)
+        self._spin_dgen_safe_room_every.setValue(0)
+        self._spin_dgen_safe_room_every.setToolTip(
+            "DUNGEONGEN_SAFE_ROOM_EVERY — toutes les N rooms : 0 ennemi + item garanti.\n"
+            "0 = desactive. Ex : 5 → rooms 5,10,15... sont des checkpoints.")
+        safe_row.addWidget(self._spin_dgen_safe_room_every)
+        safe_row.addStretch()
+        nav_v.addLayout(safe_row)
+
+        mexits_row = QHBoxLayout()
+        mexits_row.addWidget(QLabel("Sorties min par salle (0 = pas de contrainte):"))
+        self._spin_dgen_min_exits = QSpinBox()
+        self._spin_dgen_min_exits.setRange(0, 4)
+        self._spin_dgen_min_exits.setValue(0)
+        self._spin_dgen_min_exits.setToolTip(
+            "DUNGEONGEN_MIN_EXITS — rejette les styles ayant moins de N sorties.\n"
+            "0 = pas de contrainte. 1 = dead-end OK. 2 = au moins 2 sorties.")
+        mexits_row.addWidget(self._spin_dgen_min_exits)
+        mexits_row.addStretch()
+        nav_v.addLayout(mexits_row)
+
+        cl_row = QHBoxLayout()
+        cl_row.addWidget(QLabel("Taille max cluster (2-4 rooms):"))
+        self._spin_dgen_cluster_size_max = QSpinBox()
+        self._spin_dgen_cluster_size_max.setRange(2, 4)
+        self._spin_dgen_cluster_size_max.setValue(4)
+        self._spin_dgen_cluster_size_max.setToolTip(
+            "DUNGEONGEN_CLUSTER_SIZE_MAX — nombre max de salles par cluster.\n"
+            "Un cluster = un lot de salles formant un arbre local avec backtrack libre.\n"
+            "La transition entre clusters se fait via l'escalier (one-way).\n"
+            "2 = lineaire (entry + leaf+stair), 3 = recommande, 4 = max.")
+        cl_row.addWidget(self._spin_dgen_cluster_size_max)
+        cl_row.addStretch()
+        nav_v.addLayout(cl_row)
+
+        nav_note = QLabel(
+            "Modele cluster : chaque lot de salles forme un arbre local (2-4 rooms).\n"
+            "Backtrack libre dans le cluster. L'escalier mene au cluster suivant (one-way).\n"
+            "Navigation geree par ngpc_cluster.c — le module expose exits + has_stair.")
+        nav_note.setWordWrap(True)
+        nav_note.setStyleSheet("color:#aaa;font-size:10px;")
+        nav_v.addWidget(nav_note)
+        v.addWidget(grp_nav)
+
+        # ── Tiers de difficulte ───────────────────────────────────────────
+        grp_tier = QGroupBox("Tiers de difficulte")
+        tier_v = QVBoxLayout(grp_tier)
+        tier_v.setSpacing(4)
+
+        tier_cols_row = QHBoxLayout()
+        tier_cols_row.addWidget(QLabel("Nombre de tiers (0 = desactive):"))
+        self._spin_dgen_tier_cols = QSpinBox()
+        self._spin_dgen_tier_cols.setRange(0, 10)
+        self._spin_dgen_tier_cols.setValue(0)
+        self._spin_dgen_tier_cols.setToolTip(
+            "DUNGEONGEN_TIER_COLS — nombre de paliers de difficulte.\n"
+            "0 = desactive (utilise les frequences statiques).\n"
+            "Appeler ngpc_dungeongen_set_tier(i) depuis le code de jeu apres un boss/zone.")
+        tier_cols_row.addWidget(self._spin_dgen_tier_cols)
+        tier_cols_row.addStretch()
+        tier_v.addLayout(tier_cols_row)
+
+        tier_note = QLabel(
+            "Valeurs par tier separees par virgules (autant que le nombre de tiers).\n"
+            "Ramp s'applique en bonus sur enemy_max du tier courant.")
+        tier_note.setWordWrap(True)
+        tier_note.setStyleSheet("color:#aaa;font-size:10px;")
+        tier_v.addWidget(tier_note)
+
+        for lbl_text, attr in [
+            ("Enemy max par tier:",   "_edit_dgen_tier_ene_max"),
+            ("Item freq par tier:",   "_edit_dgen_tier_item_freq"),
+            ("Eau freq par tier:",    "_edit_dgen_tier_eau_freq"),
+            ("Vide freq par tier:",   "_edit_dgen_tier_vide_freq"),
+        ]:
+            row = QHBoxLayout()
+            row.addWidget(QLabel(lbl_text))
+            edit = QLineEdit("1, 2, 3")
+            edit.setPlaceholderText("ex: 1, 2, 3, 4, 5")
+            setattr(self, attr, edit)
+            row.addWidget(edit)
+            tier_v.addLayout(row)
+
+        v.addWidget(grp_tier)
+
+        # ── Multi-floor ──────────────────────────────────────────────────
+        grp_floor = QGroupBox("Multi-floor progression")
+        floor_v = QVBoxLayout(grp_floor)
+        floor_v.setSpacing(4)
+
+        self._chk_dgen_multifloor = QCheckBox("Enable multi-floor")
+        self._chk_dgen_multifloor.setToolTip(
+            "Exporte DUNGEONGEN_MULTIFLOOR, FLOOR_VAR, MAX_FLOORS dans dungeongen_config.h.")
+        floor_v.addWidget(self._chk_dgen_multifloor)
+
+        fvar_row = QHBoxLayout()
+        fvar_row.addWidget(QLabel("Floor variable index (0-7):"))
+        self._spin_dgen_floor_var = QSpinBox()
+        self._spin_dgen_floor_var.setRange(0, 7)
+        self._spin_dgen_floor_var.setValue(0)
+        self._spin_dgen_floor_var.setToolTip("Slot game_vars[] qui stocke l'etage courant (DUNGEONGEN_FLOOR_VAR).")
+        fvar_row.addWidget(self._spin_dgen_floor_var)
+        fvar_row.addStretch()
+        floor_v.addLayout(fvar_row)
+
+        mf_row = QHBoxLayout()
+        mf_row.addWidget(QLabel("Max floors (0 = infini):"))
+        self._spin_dgen_max_floors = QSpinBox()
+        self._spin_dgen_max_floors.setRange(0, 99)
+        self._spin_dgen_max_floors.setValue(0)
+        self._spin_dgen_max_floors.setToolTip("DUNGEONGEN_MAX_FLOORS — apres N etages, goto boss scene. 0=boucle infinie.")
+        mf_row.addWidget(self._spin_dgen_max_floors)
+        mf_row.addStretch()
+        floor_v.addLayout(mf_row)
+
+        boss_row = QHBoxLayout()
+        boss_row.addWidget(QLabel("Boss/end scene:"))
+        self._combo_dgen_boss_scene = QComboBox()
+        self._combo_dgen_boss_scene.addItem("(none)", "")
+        self._combo_dgen_boss_scene.setToolTip("Scene de destination quand max_floors est atteint (DUNGEONGEN_BOSS_SCENE_ID).")
+        boss_row.addWidget(self._combo_dgen_boss_scene, 1)
+        floor_v.addLayout(boss_row)
+        v.addWidget(grp_floor)
+
+        # ── Export ───────────────────────────────────────────────────────
+        self._btn_export_dgen_config = QPushButton("Export  dungeongen_config.h")
+        self._btn_export_dgen_config.setToolTip(
+            "Ecrit GraphX/gen/dungeongen_config.h avec tous les #define DUNGEONGEN_*.\n"
+            "Inclure ce fichier AVANT #include \"ngpc_dungeongen/ngpc_dungeongen.h\".")
+        self._btn_export_dgen_config.clicked.connect(self._export_dungeongen_config)
+        v.addWidget(self._btn_export_dgen_config)
+
+        export_note = QLabel(
+            "Ajouter au Makefile:\n"
+            "  OBJS += $(OBJ_DIR)/optional/ngpc_dungeongen/ngpc_dungeongen.rel\n"
+            "  OBJS += $(OBJ_DIR)/GraphX/tiles_procgen.rel\n"
+            "  OBJS += $(OBJ_DIR)/GraphX/sprites_lab.rel\n"
+            "Dans le code : #include \"GraphX/gen/dungeongen_config.h\" avant ngpc_dungeongen.h"
+        )
+        export_note.setWordWrap(True)
+        export_note.setStyleSheet("color:#aaa;font-size:10px;font-family:monospace;")
+        v.addWidget(export_note)
+
+        scroll.setWidget(inner)
+        outer = QVBoxLayout(tab)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+        return tab
+
+    def _export_dungeongen_config(self) -> None:
+        """Write GraphX/gen/dungeongen_config.h from the DungeonGen sub-tab params."""
+        try:
+            from core.procgen_config_gen import make_dungeongen_config_h
+            self._store_scene_state(save_project=False, update_status=False)
+            gen_dir = self._procgen_gen_dir()
+            content = make_dungeongen_config_h(
+                scene=self._scene,
+                project_data=self._project_data_root if isinstance(self._project_data_root, dict) else None,
+            )
+            out = gen_dir / "dungeongen_config.h"
+            out.write_text(content, encoding="utf-8")
+            QMessageBox.information(self, "Export", f"Written: {out}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Export error", str(exc))
+
+    # ------------------------------------------------------------------
+    # DungeonGen entity pool helpers
+    # ------------------------------------------------------------------
+
+    def _dgen_behavior_entries(self) -> list[tuple[str, str]]:
+        """User-facing DungeonGen enemy behavior choices."""
+        return [
+            ("Auto (depuis move_type du sprite)", "auto"),
+            ("Patrouille ligne droite", "patrol"),
+            ("Patrouille aleatoire", "random"),
+            ("Chasse joueur", "chase"),
+            ("Fuite du joueur", "flee"),
+            ("Fixe / immobile", "fixed"),
+        ]
+
+    def _dgen_behavior_param_meta(self, behavior: str) -> dict[str, object]:
+        """Describe the optional per-behavior numeric parameter."""
+        mode = str(behavior or "auto").strip().lower()
+        if mode == "random":
+            return {
+                "enabled": True,
+                "default": 24,
+                "minimum": 4,
+                "maximum": 255,
+                "suffix": " fr",
+                "tooltip": (
+                    "Intervalle de changement de direction pour la patrouille aleatoire.\n"
+                    "Valeur en frames. Plus petit = plus nerveux."
+                ),
+            }
+        if mode in ("chase", "flee"):
+            return {
+                "enabled": True,
+                "default": 5,
+                "minimum": 1,
+                "maximum": 31,
+                "suffix": " t",
+                "tooltip": (
+                    "Rayon d'aggro en tiles de 8 px.\n"
+                    "Dans ce rayon l'ennemi chasse le joueur, ou le fuit selon le comportement."
+                ),
+            }
+        return {
+            "enabled": False,
+            "default": 0,
+            "minimum": 0,
+            "maximum": 255,
+            "suffix": "",
+            "tooltip": "Aucun parametre supplementaire pour ce comportement.",
+        }
+
+    def _sync_dgen_behavior_param_spin(
+        self,
+        behavior: str,
+        spin: QSpinBox | None,
+        force_default: bool = False,
+    ) -> None:
+        """Refresh one behavior param spin according to the selected behavior."""
+        if spin is None:
+            return
+        meta = self._dgen_behavior_param_meta(behavior)
+        enabled = bool(meta["enabled"])
+        minimum = int(meta["minimum"])
+        maximum = int(meta["maximum"])
+        default = int(meta["default"])
+        spin.blockSignals(True)
+        spin.setRange(minimum, maximum)
+        spin.setSuffix(str(meta["suffix"]))
+        spin.setToolTip(str(meta["tooltip"]))
+        spin.setEnabled(enabled)
+        if not enabled:
+            spin.setValue(0)
+        else:
+            cur = int(spin.value())
+            if force_default or cur < minimum or cur > maximum or cur == 0:
+                spin.setValue(default)
+        spin.blockSignals(False)
+
+    def _make_dgen_behavior_param_spin(
+        self,
+        behavior: str = "auto",
+        value: int | None = None,
+        on_change=None,
+    ) -> QSpinBox:
+        """Build a spinbox for the optional DungeonGen enemy behavior parameter."""
+        spin = QSpinBox()
+        spin.setRange(0, 255)
+        spin.setAccelerated(True)
+        spin.setFixedWidth(72)
+        spin.setAlignment(Qt.AlignmentFlag.AlignRight)
+        if value is not None:
+            spin.setValue(max(0, min(255, int(value))))
+        self._sync_dgen_behavior_param_spin(behavior, spin, force_default=(value is None))
+        if on_change is not None:
+            spin.valueChanged.connect(lambda _: on_change())
+        return spin
+
+    def _make_dgen_behavior_combo(
+        self,
+        behavior: str = "auto",
+        on_change=None,
+    ) -> QComboBox:
+        """Build a behavior combo for DungeonGen enemy pool rows."""
+        combo = QComboBox()
+        for label, value in self._dgen_behavior_entries():
+            combo.addItem(label, value)
+        combo.setToolTip(
+            "Comportement de l'ennemi généré par DungeonGen.\n"
+            "Auto = ancien comportement déduit depuis move_type.\n"
+            "Patrouille ligne droite = mur à mur.\n"
+            "Patrouille aléatoire = direction pseudo-aléatoire.\n"
+            "Chasse/Fuite = utilise le rayon d'aggro du champ Param.\n"
+            "Fixe = ne bouge pas."
+        )
+        idx = combo.findData(str(behavior or "auto"))
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        if on_change is not None:
+            combo.currentIndexChanged.connect(lambda _: on_change())
+        return combo
+
+    def _dgen_pool_add_row(
+        self,
+        table: QTableWidget,
+        role: str,
+        entity_id: str = "",
+        weight: int = 1,
+        max_count: int | None = 4,
+        behavior: str = "auto",
+        behavior_arg: int | None = None,
+    ) -> None:
+        """Append one row to a DungeonGen entity pool table."""
+        row = table.rowCount()
+        table.insertRow(row)
+
+        combo = QComboBox()
+        combo.addItem("(aucune)", "")
+        role_map = self._entity_roles or {}
+        for name, r in sorted(role_map.items()):
+            if str(r or "").lower() == role.lower():
+                combo.addItem(name, name)
+        idx = combo.findData(entity_id)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.currentIndexChanged.connect(
+            lambda _: self._store_scene_state(save_project=True, update_status=False))
+        table.setCellWidget(row, 0, combo)
+
+        w_spin = QSpinBox()
+        w_spin.setRange(1, 100)
+        w_spin.setValue(max(1, int(weight or 1)))
+        w_spin.valueChanged.connect(
+            lambda _: self._store_scene_state(save_project=True, update_status=False))
+        table.setCellWidget(row, 1, w_spin)
+
+        if table.columnCount() >= 3 and max_count is not None:
+            mc_spin = QSpinBox()
+            mc_spin.setRange(1, 8)
+            mc_spin.setValue(max(1, min(8, int(max_count or 4))))
+            mc_spin.setToolTip(
+                "Nombre max d'instances de ce sprite par salle.\n"
+                "32x32 est automatiquement plafonne a 2 a l'export.")
+            mc_spin.valueChanged.connect(
+                lambda _: self._store_scene_state(save_project=True, update_status=False))
+            table.setCellWidget(row, 2, mc_spin)
+
+        if table.columnCount() >= 4 and str(role or "").lower() == "enemy":
+            beh_combo = self._make_dgen_behavior_combo(
+                behavior=behavior,
+                on_change=None,
+            )
+            table.setCellWidget(row, 3, beh_combo)
+            if table.columnCount() >= 5:
+                arg_spin = self._make_dgen_behavior_param_spin(
+                    behavior=behavior,
+                    value=behavior_arg,
+                    on_change=lambda: self._store_scene_state(save_project=True, update_status=False),
+                )
+                table.setCellWidget(row, 4, arg_spin)
+                beh_combo.currentIndexChanged.connect(
+                    lambda _, _combo=beh_combo, _spin=arg_spin: (
+                        self._sync_dgen_behavior_param_spin(str(_combo.currentData() or "auto"), _spin),
+                        self._store_scene_state(save_project=True, update_status=False)
+                    )
+                )
+            else:
+                beh_combo.currentIndexChanged.connect(
+                    lambda _: self._store_scene_state(save_project=True, update_status=False)
+                )
+
+    def _dgen_pool_remove_row(self, table: QTableWidget) -> None:
+        """Remove selected rows from a DungeonGen pool table."""
+        rows = sorted({idx.row() for idx in table.selectedIndexes()}, reverse=True)
+        for r in rows:
+            table.removeRow(r)
+        if not rows and table.rowCount() > 0:
+            table.removeRow(table.rowCount() - 1)
+        self._store_scene_state(save_project=True, update_status=False)
+
+    def _get_dgen_pool(self, table: QTableWidget, has_max: bool = False) -> list[dict]:
+        """Collect pool data from a pool table. Returns list of dicts."""
+        result = []
+        for r in range(table.rowCount()):
+            combo = table.cellWidget(r, 0)
+            w_spin = table.cellWidget(r, 1)
+            entity_id = str(combo.currentData() or "") if combo else ""
+            if not entity_id:
+                continue
+            entry: dict = {
+                "entity_id": entity_id,
+                "weight":    int(w_spin.value()) if w_spin else 1,
+            }
+            if has_max:
+                mc_spin = table.cellWidget(r, 2)
+                entry["max_count"] = int(mc_spin.value()) if mc_spin else 4
+            if table.columnCount() >= 4:
+                beh_combo = table.cellWidget(r, 3)
+                if isinstance(beh_combo, QComboBox):
+                    entry["behavior"] = str(beh_combo.currentData() or "auto")
+            if table.columnCount() >= 5:
+                arg_spin = table.cellWidget(r, 4)
+                if isinstance(arg_spin, QSpinBox):
+                    entry["behavior_arg"] = int(arg_spin.value())
+            result.append(entry)
+        return result
+
+    def _set_dgen_pool(
+        self,
+        table: QTableWidget,
+        role: str,
+        pool_data: list,
+        has_max: bool = False,
+    ) -> None:
+        """Load pool data into a pool table, replacing existing rows."""
+        table.setRowCount(0)
+        for entry in (pool_data or []):
+            if not isinstance(entry, dict):
+                continue
+            entity_id = str(entry.get("entity_id", "") or "")
+            weight    = max(1, int(entry.get("weight", 1) or 1))
+            max_count = max(1, int(entry.get("max_count", 4) or 4)) if has_max else None
+            behavior = str(entry.get("behavior", "auto") or "auto")
+            behavior_arg = entry.get("behavior_arg", None)
+            self._dgen_pool_add_row(table, role, entity_id, weight, max_count, behavior, behavior_arg)
+
+    def _refresh_dgen_pool_combos(self) -> None:
+        """Rebuild entity comboboxes in DungeonGen pool tables and player combo."""
+        role_map = dict(self._entity_roles or {})
+        for _et in (getattr(self, "_project_entity_types", None) or []):
+            if not isinstance(_et, dict):
+                continue
+            _et_name = str(_et.get("name") or "").strip()
+            if not _et_name or _et_name in role_map:
+                continue
+            _et_role = str(_et.get("role") or "prop").strip().lower()
+            if _et_role:
+                role_map[_et_name] = _et_role
+        for table, role, has_max in [
+            (getattr(self, "_tbl_dgen_ene_pool",  None), "enemy", True),
+            (getattr(self, "_tbl_dgen_item_pool", None), "item",  False),
+        ]:
+            if table is None:
+                continue
+            for r in range(table.rowCount()):
+                combo = table.cellWidget(r, 0)
+                if not isinstance(combo, QComboBox):
+                    continue
+                cur = str(combo.currentData() or "")
+                combo.blockSignals(True)
+                combo.clear()
+                combo.addItem("(aucune)", "")
+                for name, rl in sorted(role_map.items()):
+                    if str(rl or "").lower() == role.lower():
+                        combo.addItem(name, name)
+                idx = combo.findData(cur)
+                combo.setCurrentIndex(idx if idx >= 0 else 0)
+                combo.blockSignals(False)
+        player_combo = getattr(self, "_combo_dgen_player", None)
+        if player_combo is not None:
+            cur = str(player_combo.currentData() or "")
+            player_combo.blockSignals(True)
+            player_combo.clear()
+            player_combo.addItem("(aucune)", "")
+            for name, rl in sorted(role_map.items()):
+                if str(rl or "").lower() == "player":
+                    player_combo.addItem(name, name)
+            idx = player_combo.findData(cur)
+            player_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            player_combo.blockSignals(False)
+
     def _build_procgen_dfs_tab(self) -> QWidget:
         """Build and return the Dungeon DFS runtime configuration sub-tab."""
         tab = QWidget()
@@ -12052,6 +13129,669 @@ class LevelTab(QWidget):
         outer_v.setContentsMargins(0, 0, 0, 0)
         outer_v.addWidget(scroll)
         return tab
+
+    def _build_procgen_assets_tab(self) -> QWidget:
+        """Build and return the Procgen Assets sub-tab (project-level DungeonGen tileset config)."""
+        from core.dungeongen_tiles_export import TILE_ROLE_ORDER, COMPACT_SOURCE_ROLES, COMPACT_DERIVED_ROLES
+
+        tab = QWidget()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(scroll.Shape.NoFrame)
+        inner = QWidget()
+        v = QVBoxLayout(inner)
+        v.setContentsMargins(6, 6, 6, 6)
+        v.setSpacing(8)
+
+        note = QLabel(
+            "Configuration au niveau PROJET — s'applique à toutes les scènes DungeonGen.\n"
+            "Les fichiers tiles_procgen.h/c sont regénérés à chaque export."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #aaa; font-size: 10px;")
+        v.addWidget(note)
+
+        grp_ts = QGroupBox("DungeonGen Tileset")
+        ts_v = QVBoxLayout(grp_ts)
+        ts_v.setSpacing(5)
+
+        png_row = QHBoxLayout()
+        png_row.addWidget(QLabel("Tileset PNG:"))
+        self._lbl_dgen_pa_png = QLabel("(aucun)")
+        self._lbl_dgen_pa_png.setStyleSheet("color: #bbb; font-size: 10px;")
+        self._lbl_dgen_pa_png.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        png_row.addWidget(self._lbl_dgen_pa_png, 1)
+        btn_browse_png = QPushButton("Browse…")
+        btn_browse_png.setFixedWidth(70)
+        btn_browse_png.clicked.connect(self._pick_dgen_pa_png)
+        png_row.addWidget(btn_browse_png)
+        ts_v.addLayout(png_row)
+
+        cell_row = QHBoxLayout()
+        cell_row.addWidget(QLabel("Taille cellule source:"))
+        self._combo_dgen_pa_cell_size = QComboBox()
+        self._combo_dgen_pa_cell_size.addItem("8×8 px  (1 tile NGPC)",  "8x8")
+        self._combo_dgen_pa_cell_size.addItem("16×16 px (2×2 tiles NGPC)", "16x16")
+        self._combo_dgen_pa_cell_size.addItem("32×32 px (4×4 tiles NGPC)", "32x32")
+        self._combo_dgen_pa_cell_size.setCurrentIndex(1)
+        self._combo_dgen_pa_cell_size.setToolTip(
+            "Taille d'une cellule dans le PNG source.\n"
+            "8×8 : chaque cellule = 1 tile NGPC — index tile = index cellule.\n"
+            "16×16 : chaque cellule = 2×2 tiles NGPC (4 tiles) — mode recommandé.\n"
+            "32×32 : chaque cellule = 4×4 tiles NGPC (16 tiles).\n\n"
+            "Doit correspondre à la grille du PNG tileset.\n"
+            "Mettre à jour aussi 'Taille cellule (tiles NGPC)' dans l'onglet DungeonGen de chaque scène."
+        )
+        self._combo_dgen_pa_cell_size.currentIndexChanged.connect(
+            lambda _: (self._save_procgen_assets_state(), self._refresh_dgen_pa_preview()))
+        cell_row.addWidget(self._combo_dgen_pa_cell_size, 1)
+        ts_v.addLayout(cell_row)
+
+        self._dgen_pa_preview = QLabel()
+        self._dgen_pa_preview.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self._dgen_pa_preview.setMinimumHeight(120)
+        self._dgen_pa_preview.setMaximumHeight(320)
+        self._dgen_pa_preview.setStyleSheet("background: #1a1a26; border: 1px solid #333;")
+        self._dgen_pa_preview.setText("<span style='color:#555; font-size:10px;'>Charger un PNG pour voir l'aperçu…</span>")
+        self._dgen_pa_preview.setTextFormat(Qt.TextFormat.RichText)
+        ts_v.addWidget(self._dgen_pa_preview)
+
+        v.addWidget(grp_ts)
+
+        grp_roles = QGroupBox("Tile Roles — index dans le PNG")
+        roles_v = QVBoxLayout(grp_roles)
+        roles_v.setSpacing(4)
+
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(6)
+        mode_row.addWidget(QLabel("Mode tileset :"))
+        self._combo_dgen_tileset_mode = QComboBox()
+        self._combo_dgen_tileset_mode.addItem("Full (26 rôles, tous en PNG)", "full")
+        self._combo_dgen_tileset_mode.addItem("Compact (13 source + rot/flip outil+HW)", "compact")
+        self._combo_dgen_tileset_mode.setToolTip(
+            "Full : chaque rôle directionnel a sa propre cellule dans le PNG (26 cellules min).\n"
+            "Compact : seulement wall_s, corner_nw, int_wall_s, int_corner_nw, door_s.\n"
+            "  - wall_s = mur extérieur plein du bas, corner_nw = coin extérieur haut-gauche\n"
+            "  - int_wall_s = mur intérieur plein du bas, int_corner_nw = coin intérieur haut-gauche\n"
+            "  - door_s = ouverture/porte du bas (ne pas utiliser une arche verticale ici)\n"
+            "  • wall_e = rotation 90°CCW de wall_s (outil à l'export)\n"
+            "  • int_wall_e = rotation 90°CCW de int_wall_s (outil à l'export)\n"
+            "  • door_e = rotation 90°CCW de door_s (outil à l'export)\n"
+            "  • wall_n/w = flip hardware V/H de wall_s/wall_e\n"
+            "  • corners ext/int = flip hardware de corner_nw / int_corner_nw\n"
+            "Économise ~13 cellules dans le PNG."
+        )
+        mode_row.addWidget(self._combo_dgen_tileset_mode)
+        mode_row.addStretch()
+        roles_v.addLayout(mode_row)
+
+        roles_note = QLabel(
+            "Index = numéro de la cellule dans le PNG (gauche→droite, haut→bas, depuis 0).\n"
+            "La taille d'une cellule est définie par 'Taille cellule source' ci-dessus."
+        )
+        roles_note.setWordWrap(True)
+        roles_note.setStyleSheet("color: #aaa; font-size: 10px;")
+        roles_v.addWidget(roles_note)
+
+        _compact_source_keys: set[str] = {rk for rk, _ in COMPACT_SOURCE_ROLES}
+        _full_keys: set[str]    = {rk for rk, _ in TILE_ROLE_ORDER}
+        _all_role_list: list[tuple[str, str]] = list(TILE_ROLE_ORDER)
+        for rk, cs in COMPACT_SOURCE_ROLES:
+            if rk not in _full_keys:
+                _all_role_list.append((rk, cs))
+
+        _derived_info: dict[str, str] = {}
+        for drk, _dcs, src_key, hflip, vflip, is_rot in COMPACT_DERIVED_ROLES:
+            if is_rot:
+                _derived_info[drk] = f"→ rotation 90°CCW de '{src_key}' (outil export)"
+            elif hflip and vflip:
+                _derived_info[drk] = f"→ flip HV de '{src_key}' (hardware)"
+            elif hflip:
+                _derived_info[drk] = f"→ flip H de '{src_key}' (hardware)"
+            else:
+                _derived_info[drk] = f"→ flip V de '{src_key}' (hardware)"
+        _derived_info["door"] = "→ remplacé par 'door_s' en mode compact"
+
+        self._dgen_pa_role_spins: dict[str, QSpinBox] = {}
+        self._dgen_pa_role_rows:  dict[str, QWidget]  = {}
+
+        for role_key, c_suffix in _all_role_list:
+            row_wdg = QWidget()
+            row_wdg.setContentsMargins(0, 0, 0, 0)
+            row_h = QHBoxLayout(row_wdg)
+            row_h.setContentsMargins(0, 0, 0, 0)
+            row_h.setSpacing(6)
+            lbl = QLabel(f"{role_key}")
+            lbl.setFixedWidth(130)
+            lbl.setStyleSheet("font-size: 10px;")
+            lbl.setToolTip(f"C define: TILE_{c_suffix}")
+            row_h.addWidget(lbl)
+
+            is_derived = role_key in _derived_info and role_key not in _compact_source_keys and role_key != "door_s"
+            if is_derived:
+                spin = QSpinBox()
+                spin.setRange(-1, 9999)
+                spin.setValue(-1)
+                spin.setSpecialValueText("—")
+                spin.setFixedWidth(90)
+                spin.setMinimumWidth(90)
+                spin.setToolTip(f"Index cellule PNG pour le rôle '{role_key}' (TILE_{c_suffix})\n— = rôle non utilisé")
+                spin.valueChanged.connect(lambda _, _k=role_key: self._save_procgen_assets_state())
+                row_h.addWidget(spin)
+                info_lbl = QLabel(_derived_info.get(role_key, ""))
+                info_lbl.setStyleSheet("color: #666; font-size: 9px; font-style: italic;")
+                row_h.addWidget(info_lbl)
+                self._dgen_pa_role_spins[role_key] = spin
+            else:
+                spin = QSpinBox()
+                spin.setRange(-1, 9999)
+                spin.setValue(-1)
+                spin.setSpecialValueText("—")
+                spin.setFixedWidth(90)
+                spin.setMinimumWidth(90)
+                spin.setToolTip(f"Index cellule PNG pour le rôle '{role_key}' (TILE_{c_suffix})\n— = rôle non utilisé")
+                spin.valueChanged.connect(lambda _, _k=role_key: self._save_procgen_assets_state())
+                row_h.addWidget(spin)
+                self._dgen_pa_role_spins[role_key] = spin
+
+            row_h.addStretch()
+            roles_v.addWidget(row_wdg)
+            self._dgen_pa_role_rows[role_key] = row_wdg
+
+        self._combo_dgen_tileset_mode.currentIndexChanged.connect(
+            lambda _: self._update_tile_role_mode_visibility()
+        )
+        self._update_tile_role_mode_visibility()
+
+        v.addWidget(grp_roles)
+
+        grp_ene = QGroupBox("Pool Ennemis — sprites VRAM (sprites_lab.h)")
+        ene_v = QVBoxLayout(grp_ene)
+        ene_v.setSpacing(4)
+        ene_note = QLabel(
+            "Ces entités sont chargées en VRAM et utilisées par ngpc_dungeongen_spawn().\n"
+            "Chaque entrée doit avoir un fichier *_mspr.c dans GraphX/.\n"
+            "Le comportement exporté peut être défini explicitement par entrée."
+        )
+        ene_note.setWordWrap(True)
+        ene_note.setStyleSheet("color: #aaa; font-size: 10px;")
+        ene_v.addWidget(ene_note)
+        self._tbl_dgen_pa_ene_pool = QTableWidget(0, 5)
+        self._tbl_dgen_pa_ene_pool.setHorizontalHeaderLabels(
+            ["Entité (entity_id)", "Poids", "Max/salle", "Comportement", "Param"]
+        )
+        self._tbl_dgen_pa_ene_pool.horizontalHeader().setStretchLastSection(False)
+        self._tbl_dgen_pa_ene_pool.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self._tbl_dgen_pa_ene_pool.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        self._tbl_dgen_pa_ene_pool.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self._tbl_dgen_pa_ene_pool.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self._tbl_dgen_pa_ene_pool.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self._tbl_dgen_pa_ene_pool.setColumnWidth(1, 75)
+        self._tbl_dgen_pa_ene_pool.setColumnWidth(2, 80)
+        self._tbl_dgen_pa_ene_pool.setColumnWidth(3, 165)
+        self._tbl_dgen_pa_ene_pool.setColumnWidth(4, 76)
+        self._tbl_dgen_pa_ene_pool.setFixedHeight(120)
+        self._tbl_dgen_pa_ene_pool.itemChanged.connect(lambda _: self._save_procgen_assets_state())
+        ene_v.addWidget(self._tbl_dgen_pa_ene_pool)
+        ene_btns = QHBoxLayout()
+        btn_ene_add = QPushButton("+ Ajouter")
+        btn_ene_add.setFixedWidth(80)
+        btn_ene_add.clicked.connect(self._dgen_pa_ene_add_row)
+        btn_ene_rem = QPushButton("− Supprimer")
+        btn_ene_rem.setFixedWidth(90)
+        btn_ene_rem.clicked.connect(self._dgen_pa_ene_remove_row)
+        ene_btns.addWidget(btn_ene_add)
+        ene_btns.addWidget(btn_ene_rem)
+        ene_btns.addStretch()
+        ene_v.addLayout(ene_btns)
+        v.addWidget(grp_ene)
+
+        grp_item = QGroupBox("Pool Items — sprites VRAM (sprites_lab.h)")
+        item_v = QVBoxLayout(grp_item)
+        item_v.setSpacing(4)
+        item_note = QLabel("Ces entités items sont chargées en VRAM (max 16×16 px).")
+        item_note.setWordWrap(True)
+        item_note.setStyleSheet("color: #aaa; font-size: 10px;")
+        item_v.addWidget(item_note)
+        self._tbl_dgen_pa_item_pool = QTableWidget(0, 3)
+        self._tbl_dgen_pa_item_pool.setHorizontalHeaderLabels(["Entité (entity_id)", "Poids", "Max/salle"])
+        self._tbl_dgen_pa_item_pool.horizontalHeader().setStretchLastSection(False)
+        self._tbl_dgen_pa_item_pool.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self._tbl_dgen_pa_item_pool.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        self._tbl_dgen_pa_item_pool.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self._tbl_dgen_pa_item_pool.setColumnWidth(1, 75)
+        self._tbl_dgen_pa_item_pool.setColumnWidth(2, 80)
+        self._tbl_dgen_pa_item_pool.setFixedHeight(100)
+        self._tbl_dgen_pa_item_pool.itemChanged.connect(lambda _: self._save_procgen_assets_state())
+        item_v.addWidget(self._tbl_dgen_pa_item_pool)
+        item_btns = QHBoxLayout()
+        btn_item_add = QPushButton("+ Ajouter")
+        btn_item_add.setFixedWidth(80)
+        btn_item_add.clicked.connect(self._dgen_pa_item_add_row)
+        btn_item_rem = QPushButton("− Supprimer")
+        btn_item_rem.setFixedWidth(90)
+        btn_item_rem.clicked.connect(self._dgen_pa_item_remove_row)
+        item_btns.addWidget(btn_item_add)
+        item_btns.addWidget(btn_item_rem)
+        item_btns.addStretch()
+        item_v.addLayout(item_btns)
+        v.addWidget(grp_item)
+
+        v.addStretch()
+        scroll.setWidget(inner)
+        outer_v = QVBoxLayout(tab)
+        outer_v.setContentsMargins(0, 0, 0, 0)
+        outer_v.addWidget(scroll)
+        return tab
+
+    def _dgen_pa_ene_add_row(self) -> None:
+        tbl = self._tbl_dgen_pa_ene_pool
+        tbl.blockSignals(True)
+        r = tbl.rowCount()
+        tbl.insertRow(r)
+        tbl.setItem(r, 0, QTableWidgetItem(""))
+        tbl.setItem(r, 1, QTableWidgetItem("1"))
+        tbl.setItem(r, 2, QTableWidgetItem("4"))
+        beh_combo = self._make_dgen_behavior_combo(behavior="auto", on_change=None)
+        arg_spin = self._make_dgen_behavior_param_spin(
+            behavior="auto",
+            value=None,
+            on_change=self._save_procgen_assets_state,
+        )
+        tbl.setCellWidget(r, 3, beh_combo)
+        tbl.setCellWidget(r, 4, arg_spin)
+        beh_combo.currentIndexChanged.connect(
+            lambda _, _combo=beh_combo, _spin=arg_spin: (
+                self._sync_dgen_behavior_param_spin(str(_combo.currentData() or "auto"), _spin),
+                self._save_procgen_assets_state()
+            )
+        )
+        tbl.blockSignals(False)
+        self._save_procgen_assets_state()
+
+    def _dgen_pa_ene_remove_row(self) -> None:
+        tbl = self._tbl_dgen_pa_ene_pool
+        rows = sorted(set(i.row() for i in tbl.selectedItems()), reverse=True)
+        if not rows:
+            r = tbl.rowCount() - 1
+            if r >= 0:
+                rows = [r]
+        for r in rows:
+            tbl.removeRow(r)
+        self._save_procgen_assets_state()
+
+    def _dgen_pa_item_add_row(self) -> None:
+        tbl = self._tbl_dgen_pa_item_pool
+        tbl.blockSignals(True)
+        r = tbl.rowCount()
+        tbl.insertRow(r)
+        tbl.setItem(r, 0, QTableWidgetItem(""))
+        tbl.setItem(r, 1, QTableWidgetItem("1"))
+        tbl.setItem(r, 2, QTableWidgetItem("1"))
+        tbl.blockSignals(False)
+        self._save_procgen_assets_state()
+
+    def _dgen_pa_item_remove_row(self) -> None:
+        tbl = self._tbl_dgen_pa_item_pool
+        rows = sorted(set(i.row() for i in tbl.selectedItems()), reverse=True)
+        if not rows:
+            r = tbl.rowCount() - 1
+            if r >= 0:
+                rows = [r]
+        for r in rows:
+            tbl.removeRow(r)
+        self._save_procgen_assets_state()
+
+    def _pick_dgen_pa_png(self) -> None:
+        """File picker for the DungeonGen tileset PNG."""
+        start = QSettings("NGPCraft", "Engine").value("level/dgen_pa_png_dir", "", str)
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Sélectionner le tileset DungeonGen", start,
+            "Images PNG (*.png);;Tous les fichiers (*)"
+        )
+        if not path:
+            return
+        p = Path(path)
+        QSettings("NGPCraft", "Engine").setValue("level/dgen_pa_png_dir", str(p.parent))
+        rel = path
+        if self._base_dir:
+            try:
+                rel = str(p.relative_to(self._base_dir))
+            except ValueError:
+                rel = path
+        self._dgen_pa_png_rel = rel
+        self._lbl_dgen_pa_png.setText(p.name)
+        self._lbl_dgen_pa_png.setToolTip(rel)
+        self._save_procgen_assets_state()
+        self._refresh_dgen_pa_preview()
+
+    def _save_procgen_assets_state(self) -> None:
+        """Persist DungeonGen procgen assets config to project_data_root and trigger project save."""
+        if not isinstance(self._project_data_root, dict):
+            return
+        pa = self._project_data_root.setdefault("procgen_assets", {})
+        if not isinstance(pa, dict):
+            pa = {}
+            self._project_data_root["procgen_assets"] = pa
+        da = pa.get("dungeongen")
+        if not isinstance(da, dict):
+            da = {}
+        pa["dungeongen"] = da
+
+        da["tileset_png"] = str(getattr(self, "_dgen_pa_png_rel", "") or "").strip()
+
+        cell_combo = getattr(self, "_combo_dgen_pa_cell_size", None)
+        cell_size_key = "16x16"
+        if cell_combo is not None:
+            cell_size_key = str(cell_combo.currentData() or "16x16")
+            da["cell_size"] = cell_size_key
+
+        _cell_tiles = {"8x8": 1, "16x16": 2, "32x32": 4}
+        _ct = _cell_tiles.get(cell_size_key, 2)
+        for _spin_name in ("_spin_dgen_cell_w", "_spin_dgen_cell_h"):
+            _sp = getattr(self, _spin_name, None)
+            if _sp is not None and _sp.value() != _ct:
+                _sp.blockSignals(True)
+                _sp.setValue(_ct)
+                _sp.blockSignals(False)
+
+        _mode_combo = getattr(self, "_combo_dgen_tileset_mode", None)
+        _tmode = "full"
+        if _mode_combo is not None:
+            _tmode = str(_mode_combo.currentData() or "full")
+        da["tileset_mode"] = _tmode
+
+        role_spins = getattr(self, "_dgen_pa_role_spins", {})
+        tile_roles = {}
+        for role_key, spin in role_spins.items():
+            v = spin.value()
+            if v >= 0:
+                tile_roles[role_key] = [v]
+        da["tile_roles"] = tile_roles
+
+        tbl_ene = getattr(self, "_tbl_dgen_pa_ene_pool", None)
+        if tbl_ene is not None:
+            ene_pool = []
+            for row in range(tbl_ene.rowCount()):
+                eid_item = tbl_ene.item(row, 0)
+                w_item   = tbl_ene.item(row, 1)
+                mx_item  = tbl_ene.item(row, 2)
+                beh_combo = tbl_ene.cellWidget(row, 3)
+                arg_spin = tbl_ene.cellWidget(row, 4) if tbl_ene.columnCount() >= 5 else None
+                eid = (eid_item.text().strip() if eid_item else "")
+                if not eid:
+                    continue
+                try:
+                    w = max(1, int(w_item.text())) if w_item else 1
+                except ValueError:
+                    w = 1
+                try:
+                    mx = max(1, int(mx_item.text())) if mx_item else 4
+                except ValueError:
+                    mx = 4
+                behavior = str(beh_combo.currentData() or "auto") if isinstance(beh_combo, QComboBox) else "auto"
+                behavior_arg = int(arg_spin.value()) if isinstance(arg_spin, QSpinBox) else 0
+                ene_pool.append({
+                    "entity_id": eid,
+                    "weight": w,
+                    "max_count": mx,
+                    "behavior": behavior,
+                    "behavior_arg": behavior_arg,
+                })
+            da["enemy_pool"] = ene_pool
+
+        tbl_item = getattr(self, "_tbl_dgen_pa_item_pool", None)
+        if tbl_item is not None:
+            item_pool = []
+            for row in range(tbl_item.rowCount()):
+                eid_item = tbl_item.item(row, 0)
+                w_item   = tbl_item.item(row, 1)
+                mx_item  = tbl_item.item(row, 2)
+                eid = (eid_item.text().strip() if eid_item else "")
+                if not eid:
+                    continue
+                try:
+                    w = max(1, int(w_item.text())) if w_item else 1
+                except ValueError:
+                    w = 1
+                try:
+                    mx = max(1, int(mx_item.text())) if mx_item else 1
+                except ValueError:
+                    mx = 1
+                item_pool.append({"entity_id": eid, "weight": w, "max_count": mx})
+            da["item_pool"] = item_pool
+
+        if self._on_save:
+            self._on_save()
+
+    def _update_tile_role_mode_visibility(self) -> None:
+        """Show/hide tile role rows based on current tileset mode (full or compact)."""
+        try:
+            from core.dungeongen_tiles_export import TILE_ROLE_ORDER, COMPACT_SOURCE_ROLES
+        except ImportError:
+            return
+        _mode_combo = getattr(self, "_combo_dgen_tileset_mode", None)
+        mode = "full"
+        if _mode_combo is not None:
+            mode = str(_mode_combo.currentData() or "full")
+
+        role_rows = getattr(self, "_dgen_pa_role_rows", {})
+        if not role_rows:
+            return
+
+        if mode == "compact":
+            _visible_keys: set[str] = {rk for rk, _ in COMPACT_SOURCE_ROLES}
+        else:
+            _visible_keys = {rk for rk, _ in TILE_ROLE_ORDER}
+
+        for role_key, row_wdg in role_rows.items():
+            row_wdg.setVisible(role_key in _visible_keys)
+
+    def _restore_procgen_assets_state(self) -> None:
+        """Restore Procgen Assets UI widgets from project_data_root."""
+        pd = self._project_data_root if isinstance(self._project_data_root, dict) else {}
+        pa = (pd.get("procgen_assets") or {}) if pd else {}
+        da = (pa.get("dungeongen") or {}) if isinstance(pa, dict) else {}
+        if not isinstance(da, dict):
+            da = {}
+
+        png_rel = str(da.get("tileset_png", "") or "").strip()
+        self._dgen_pa_png_rel = png_rel
+        lbl = getattr(self, "_lbl_dgen_pa_png", None)
+        if lbl is not None:
+            lbl.setText(Path(png_rel).name if png_rel else "(aucun)")
+            lbl.setToolTip(png_rel)
+
+        cell_combo = getattr(self, "_combo_dgen_pa_cell_size", None)
+        if cell_combo is not None:
+            idx = cell_combo.findData(da.get("cell_size", "16x16"))
+            cell_combo.blockSignals(True)
+            cell_combo.setCurrentIndex(idx if idx >= 0 else 1)
+            cell_combo.blockSignals(False)
+
+        _mode_combo = getattr(self, "_combo_dgen_tileset_mode", None)
+        if _mode_combo is not None:
+            _tmode = str(da.get("tileset_mode", "full") or "full")
+            _tmode_idx = _mode_combo.findData(_tmode)
+            _mode_combo.blockSignals(True)
+            _mode_combo.setCurrentIndex(_tmode_idx if _tmode_idx >= 0 else 0)
+            _mode_combo.blockSignals(False)
+            self._update_tile_role_mode_visibility()
+
+        role_spins = getattr(self, "_dgen_pa_role_spins", {})
+        tile_roles = da.get("tile_roles", {}) or {}
+        for role_key, spin in role_spins.items():
+            vals = tile_roles.get(role_key)
+            if isinstance(vals, list):
+                val = vals[0] if vals else -1
+            elif vals is None:
+                val = -1
+            else:
+                val = int(vals)
+            spin.blockSignals(True)
+            spin.setValue(max(-1, int(val)))
+            spin.blockSignals(False)
+
+        tbl_ene = getattr(self, "_tbl_dgen_pa_ene_pool", None)
+        if tbl_ene is not None:
+            tbl_ene.blockSignals(True)
+            tbl_ene.setRowCount(0)
+            for entry in (da.get("enemy_pool") or []):
+                if not isinstance(entry, dict):
+                    continue
+                r = tbl_ene.rowCount()
+                tbl_ene.insertRow(r)
+                tbl_ene.setItem(r, 0, QTableWidgetItem(str(entry.get("entity_id", ""))))
+                tbl_ene.setItem(r, 1, QTableWidgetItem(str(entry.get("weight", 1))))
+                tbl_ene.setItem(r, 2, QTableWidgetItem(str(entry.get("max_count", 4))))
+                _beh = str(entry.get("behavior", "auto") or "auto")
+                _arg = entry.get("behavior_arg", None)
+                _beh_combo = self._make_dgen_behavior_combo(
+                    behavior=_beh,
+                    on_change=None,
+                )
+                _arg_spin = self._make_dgen_behavior_param_spin(
+                    behavior=_beh,
+                    value=_arg,
+                    on_change=self._save_procgen_assets_state,
+                )
+                tbl_ene.setCellWidget(r, 3, _beh_combo)
+                tbl_ene.setCellWidget(r, 4, _arg_spin)
+                _beh_combo.currentIndexChanged.connect(
+                    lambda _, _combo=_beh_combo, _spin=_arg_spin: (
+                        self._sync_dgen_behavior_param_spin(str(_combo.currentData() or "auto"), _spin),
+                        self._save_procgen_assets_state()
+                    )
+                )
+            tbl_ene.blockSignals(False)
+
+        tbl_item = getattr(self, "_tbl_dgen_pa_item_pool", None)
+        if tbl_item is not None:
+            tbl_item.blockSignals(True)
+            tbl_item.setRowCount(0)
+            for entry in (da.get("item_pool") or []):
+                if not isinstance(entry, dict):
+                    continue
+                r = tbl_item.rowCount()
+                tbl_item.insertRow(r)
+                tbl_item.setItem(r, 0, QTableWidgetItem(str(entry.get("entity_id", ""))))
+                tbl_item.setItem(r, 1, QTableWidgetItem(str(entry.get("weight", 1))))
+                tbl_item.setItem(r, 2, QTableWidgetItem(str(entry.get("max_count", 1))))
+            tbl_item.blockSignals(False)
+
+        self._refresh_dgen_pa_preview()
+
+    def _refresh_dgen_pa_preview(self) -> None:
+        """Redraw the tileset PNG preview with grid overlay and cell index labels."""
+        from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QFont, QFontMetrics
+        from PyQt6.QtCore import Qt as _Qt
+
+        lbl = getattr(self, "_dgen_pa_preview", None)
+        if lbl is None:
+            return
+
+        png_rel = str(getattr(self, "_dgen_pa_png_rel", "") or "").strip()
+        if not png_rel:
+            lbl.setText("<span style='color:#555; font-size:10px;'>Charger un PNG pour voir l'aperçu…</span>")
+            lbl.setTextFormat(_Qt.TextFormat.RichText)
+            lbl.setPixmap(QPixmap())
+            return
+
+        png_path = Path(png_rel) if Path(png_rel).is_absolute() else None
+        if png_path is None and self._base_dir:
+            png_path = self._base_dir / png_rel
+        if png_path is None or not png_path.exists():
+            lbl.setText(f"<span style='color:#a55; font-size:10px;'>PNG introuvable : {png_rel}</span>")
+            lbl.setTextFormat(_Qt.TextFormat.RichText)
+            lbl.setPixmap(QPixmap())
+            return
+
+        cell_combo = getattr(self, "_combo_dgen_pa_cell_size", None)
+        cell_size_key = str(cell_combo.currentData() or "16x16") if cell_combo else "16x16"
+        cell_px = {"8x8": 8, "16x16": 16, "32x32": 32}.get(cell_size_key, 16)
+
+        src = QPixmap(str(png_path))
+        if src.isNull():
+            lbl.setText(f"<span style='color:#a55; font-size:10px;'>Impossible de charger le PNG.</span>")
+            lbl.setTextFormat(_Qt.TextFormat.RichText)
+            lbl.setPixmap(QPixmap())
+            return
+
+        img_w = src.width()
+        img_h = src.height()
+
+        if cell_px > img_w or cell_px > img_h:
+            lbl.setText(
+                f"<span style='color:#a55; font-size:10px;'>"
+                f"PNG {img_w}×{img_h}px trop petit pour cell_size={cell_size_key}.</span>"
+            )
+            lbl.setTextFormat(_Qt.TextFormat.RichText)
+            lbl.setPixmap(QPixmap())
+            return
+
+        n_cols = max(1, img_w // cell_px)
+        n_rows = max(1, img_h // cell_px)
+
+        TARGET_CELL_DISP = 40
+        MAX_W = 560
+        MAX_SCALE = 4.0
+
+        scale_for_target = TARGET_CELL_DISP / cell_px
+        scale_for_maxw   = MAX_W / img_w
+        scale = min(scale_for_target, scale_for_maxw, MAX_SCALE)
+        scale = max(scale, 0.5)
+
+        disp_w    = max(1, int(img_w * scale))
+        disp_h    = max(1, int(img_h * scale))
+        cell_disp = max(1, int(cell_px * scale))
+
+        canvas = QPixmap(disp_w, disp_h)
+        canvas.fill(QColor("#1a1a26"))
+
+        painter = QPainter(canvas)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+
+        scaled_src = src.scaled(disp_w, disp_h,
+                                _Qt.AspectRatioMode.IgnoreAspectRatio,
+                                _Qt.TransformationMode.SmoothTransformation)
+        painter.drawPixmap(0, 0, scaled_src)
+
+        grid_pen = QPen(QColor(255, 200, 0, 160))
+        grid_pen.setWidth(1)
+        painter.setPen(grid_pen)
+        for col in range(n_cols + 1):
+            x = col * cell_disp
+            painter.drawLine(x, 0, x, disp_h)
+        for row in range(n_rows + 1):
+            y = row * cell_disp
+            painter.drawLine(0, y, disp_w, y)
+
+        LABEL_THRESHOLD = 22
+        if cell_disp >= LABEL_THRESHOLD:
+            font_sz = max(7, min(10, cell_disp // 4))
+            fnt = QFont("monospace", font_sz)
+            fnt.setBold(True)
+            painter.setFont(fnt)
+            fm = QFontMetrics(fnt)
+            th = fm.ascent()
+
+            for row in range(n_rows):
+                for col in range(n_cols):
+                    idx = row * n_cols + col
+                    txt = str(idx)
+                    x0 = col * cell_disp + 2
+                    y0 = row * cell_disp + th + 1
+                    painter.setPen(QColor(0, 0, 0, 210))
+                    painter.drawText(x0 + 1, y0 + 1, txt)
+                    painter.setPen(QColor(255, 230, 50))
+                    painter.drawText(x0, y0, txt)
+
+        painter.end()
+
+        lbl.setPixmap(canvas)
+        lbl.setTextFormat(_Qt.TextFormat.PlainText)
+        lbl.setMinimumHeight(min(disp_h, 320))
+        lbl.setMaximumHeight(max(disp_h + 4, 120))
 
     # ------------------------------------------------------------------
     # Procedural generation
@@ -16525,6 +18265,65 @@ class LevelTab(QWidget):
                 "gen_scr2":         self._chk_gen_scr2.isChecked(),
                 "tile_src":         str(self._combo_tile_src.currentData() or "auto"),
             }
+        except Exception:
+            pass
+        # ── Runtime DungeonGen params ────────────────────────────────────
+        try:
+            if self._chk_dgen_enabled.isChecked():
+                self._scene["rt_dungeongen_params"] = {
+                    "enabled":        True,
+                    "seed_mode":      self._combo_dgen_seed_mode.currentData(),
+                    "seed_fixed":     int(self._spin_dgen_seed_value.value()),
+                    "room_mw_min":    int(self._spin_dgen_mw_min.value()),
+                    "room_mw_max":    int(self._spin_dgen_mw_max.value()),
+                    "room_mh_min":    int(self._spin_dgen_mh_min.value()),
+                    "room_mh_max":    int(self._spin_dgen_mh_max.value()),
+                    "max_exits":      int(self._spin_dgen_max_exits.value()),
+                    "cell_w_tiles":   int(self._spin_dgen_cell_w.value()),
+                    "cell_h_tiles":   int(self._spin_dgen_cell_h.value()),
+                    "ground_pct_1":   int(self._spin_dgen_gpc1.value()),
+                    "ground_pct_2":   int(self._spin_dgen_gpc2.value()),
+                    "ground_pct_3":   int(self._spin_dgen_gpc3.value()),
+                    "eau_freq":       int(self._spin_dgen_eau_freq.value()),
+                    "vide_freq":      int(self._spin_dgen_vide_freq.value()),
+                    "vide_margin":    int(self._spin_dgen_vide_margin.value()),
+                    "tonneau_freq":   int(self._spin_dgen_tonneau_freq.value()),
+                    "tonneau_max":    int(self._spin_dgen_tonneau_max.value()),
+                    "enemy_min":      int(self._spin_dgen_enemy_min.value()),
+                    "enemy_max":      int(self._spin_dgen_enemy_max.value()),
+                    "enemy_density":  int(self._spin_dgen_enemy_density.value()),
+                    "ene2_pct":       int(self._spin_dgen_ene2_pct.value()),
+                    "item_freq":      int(self._spin_dgen_item_freq.value()),
+                    "n_rooms":           int(self._spin_dgen_n_rooms.value()),
+                    "enemy_ramp_rooms":  int(self._spin_dgen_enemy_ramp_rooms.value()),
+                    "safe_room_every":   int(self._spin_dgen_safe_room_every.value()),
+                    "min_exits":         int(self._spin_dgen_min_exits.value()),
+                    "cluster_size_max":  int(self._spin_dgen_cluster_size_max.value()),
+                    "tier_cols":         int(self._spin_dgen_tier_cols.value()),
+                    "tier_ene_max":      [int(x.strip()) for x in self._edit_dgen_tier_ene_max.text().split(",") if x.strip()],
+                    "tier_item_freq":    [int(x.strip()) for x in self._edit_dgen_tier_item_freq.text().split(",") if x.strip()],
+                    "tier_eau_freq":     [int(x.strip()) for x in self._edit_dgen_tier_eau_freq.text().split(",") if x.strip()],
+                    "tier_vide_freq":    [int(x.strip()) for x in self._edit_dgen_tier_vide_freq.text().split(",") if x.strip()],
+                    "multifloor":        bool(self._chk_dgen_multifloor.isChecked()),
+                    "floor_var":      int(self._spin_dgen_floor_var.value()),
+                    "max_floors":     int(self._spin_dgen_max_floors.value()),
+                    "boss_scene":     str(self._combo_dgen_boss_scene.currentData() or ""),
+                    "enemy_pool":     self._get_dgen_pool(
+                        getattr(self, "_tbl_dgen_ene_pool", None) or QTableWidget(),
+                        has_max=True),
+                    "item_pool":      self._get_dgen_pool(
+                        getattr(self, "_tbl_dgen_item_pool", None) or QTableWidget(),
+                        has_max=False),
+                    "player_entity_id": str(
+                        (getattr(self, "_combo_dgen_player", None) and
+                         self._combo_dgen_player.currentData()) or ""),
+                    "water_behavior":   str(self._combo_dgen_water_col.currentData() or "water"),
+                    "void_behavior":    str(self._combo_dgen_void_behavior.currentData() or "death"),
+                    "void_damage":      int(self._spin_dgen_void_damage.value()),
+                    "void_scene":       str(self._combo_dgen_void_scene.currentData() or ""),
+                }
+            else:
+                self._scene.pop("rt_dungeongen_params", None)
         except Exception:
             pass
         # ── Runtime DFS + Cave params ────────────────────────────────────

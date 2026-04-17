@@ -66,6 +66,11 @@ typedef struct {
     u8  stair_room;                      /* index de la leaf avec l'escalier */
     u8  current_room;                    /* room courante dans le cluster */
     u8  took_stair;                      /* 1 si le joueur vient de prendre l'escalier */
+    /* Navigation directionnelle (mis a jour par cluster_enter / go_forward_dir) */
+    u8  entry_dir[4];   /* DGN_EXIT_* : direction prise DEPUIS le parent pour atteindre room i.
+                           0xFF pour la room 0 (Entry, pas de parent). */
+    u8  fwd_dirs[4][3]; /* Direction de sortie vers chaque enfant j de la room i.
+                           0xFF si le slot n'est pas utilise. */
 } NgpcCluster;
 
 /* =========================================================================
@@ -92,12 +97,14 @@ void ngpc_cluster_gen(NgpcCluster *cl, u16 cluster_seed);
 void ngpc_cluster_enter(NgpcCluster *cl, u8 room_idx, u16 base_seed);
 
 /*
- * Avance vers le N-ieme enfant de la room courante (exit_child_idx = 0..n_children-1).
- * Met a jour cl->current_room et rappelle ngpc_cluster_enter pour la nouvelle room.
- * Ne fait rien si exit_child_idx >= n_children[current].
- * base_seed : meme valeur que lors de l'appel initial a ngpc_cluster_enter.
+ * Avance vers l'enfant associe a la direction dir_bit (DGN_EXIT_N/S/E/W).
+ * Recherche dans fwd_dirs[current_room] l'enfant correspondant, puis entre dans la room.
+ * - Si la room courante est la stair_room et a un escalier : pose took_stair=1 et
+ *   retourne sans changer de room (le code appelant doit generer un nouveau cluster).
+ * - Ne fait rien si dir_bit ne correspond a aucun enfant.
+ * base_seed : meme valeur que lors de l'appel a ngpc_cluster_enter initial.
  */
-void ngpc_cluster_go_forward(NgpcCluster *cl, u8 exit_child_idx, u16 base_seed);
+void ngpc_cluster_go_forward_dir(NgpcCluster *cl, u8 dir_bit, u16 base_seed);
 
 /*
  * Revient vers le parent de la room courante.
@@ -133,5 +140,28 @@ u8 ngpc_cluster_forward_count(const NgpcCluster *cl);
  * = (current_room != Entry).
  */
 u8 ngpc_cluster_has_back(const NgpcCluster *cl);
+
+/*
+ * Retourne le bitmask DGN_EXIT_* de la sortie "back" de la room courante.
+ * = opp(entry_dir[current_room]), ou 0xFF si c'est l'Entry (pas de parent).
+ * Utiliser pour detecter quelle direction mene au parent.
+ */
+u8 ngpc_cluster_back_dir(const NgpcCluster *cl);
+
+/*
+ * Retourne le bitmask DGN_EXIT_* de la sortie "forward" vers l'enfant child_idx.
+ * child_idx : 0..n_children[current_room]-1.
+ * Retourne 0xFF si child_idx invalide ou slot non initialise.
+ */
+u8 ngpc_cluster_fwd_dir(const NgpcCluster *cl, u8 child_idx);
+
+/*
+ * Retourne le bitmask DGN_EXIT_* des sorties cluster de la room courante.
+ * = back_dir | fwd_dirs[0] | fwd_dirs[1] | fwd_dirs[2] (slots valides seulement).
+ * Utiliser a la place de ngpc_dgroom.exits pour la detection de sortie, car
+ * DUNGEONGEN_MIN_EXITS peut ajouter des sorties graphiques supplementaires
+ * qui ne correspondent a aucun enfant cluster.
+ */
+u8 ngpc_cluster_exits_mask(const NgpcCluster *cl);
 
 #endif /* NGPC_CLUSTER_H */

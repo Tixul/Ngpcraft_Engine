@@ -55,15 +55,27 @@ except ImportError:
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
-FONT_COLS       = 16          # characters per row in the PNG
-FONT_ROWS       = 6           # rows in the PNG
-FONT_TILE_COUNT = FONT_COLS * FONT_ROWS   # 96
 TILE_W = TILE_H = 8
-PNG_W = FONT_COLS * TILE_W    # 128
-PNG_H = FONT_ROWS * TILE_H    # 48
 WORDS_PER_TILE  = 8           # one u16 word per pixel row
+FONT_TILE_COUNT = 96          # always 96 tiles (ASCII 32–127)
 
 DEFAULT_TILE_BASE = 32        # ASCII mapping: tile_slot == ascii_code
+
+# Supported PNG layouts: (font_cols, font_rows, png_w, png_h)
+# 128x48 / 256x24 → 96 tiles for ASCII 32–127 (tile_base defaults to 32)
+# 256x32          → 128 tiles for ASCII 0–127  (tile_base defaults to 0)
+_FONT_LAYOUTS: dict[str, tuple[int, int, int, int]] = {
+    "128x48": (16, 6, 128, 48),
+    "256x24": (32, 3, 256, 24),
+    "256x32": (32, 4, 256, 32),
+}
+
+# Default tile_base per layout
+_LAYOUT_TILE_BASE: dict[str, int] = {
+    "128x48": 32,
+    "256x24": 32,
+    "256x32": 0,   # full 128-char font starts at tile slot 0
+}
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -87,6 +99,26 @@ def _is_transparent(r: int, g: int, b: int, a: int) -> bool:
     return False
 
 
+def _detect_layout(img: Image.Image) -> tuple[str, tuple[int, int, int, int]]:
+    """Return (format_key, (font_cols, font_rows, png_w, png_h)) from image dimensions."""
+    for key, layout in _FONT_LAYOUTS.items():
+        _, _, pw, ph = layout
+        if img.width == pw and img.height == ph:
+            return key, layout
+    # Flexible fallback: accept any width that is a multiple of 8.
+    # Partial last row (height not a multiple of 8) is silently cropped.
+    if img.width % TILE_W == 0 and img.width >= TILE_W and img.height >= TILE_H:
+        font_cols = img.width // TILE_W
+        font_rows = img.height // TILE_H
+        key = f"{img.width}x{img.height}"
+        return key, (font_cols, font_rows, img.width, img.height)
+    supported = ", ".join(f"{k} ({v[2]}×{v[3]})" for k, v in _FONT_LAYOUTS.items())
+    raise ValueError(
+        f"Font PNG must be one of the supported formats: {supported}.\n"
+        f"Got: {img.width}×{img.height}. Width must be a multiple of 8."
+    )
+
+
 def build_color_map(img_rgba: Image.Image) -> dict[tuple[int, int, int], int]:
     """
     Scan the entire image and assign color indices 1-3 to the (up to 3)
@@ -100,8 +132,10 @@ def build_color_map(img_rgba: Image.Image) -> dict[tuple[int, int, int], int]:
     pixels = img_rgba.load()
     assert pixels is not None
 
-    for y in range(PNG_H):
-        for x in range(PNG_W):
+    png_w = img_rgba.width
+    png_h = img_rgba.height
+    for y in range(png_h):
+        for x in range(png_w):
             r, g, b, a = pixels[x, y]
             if _is_transparent(r, g, b, a):
                 continue
@@ -145,19 +179,54 @@ def tile_words_from_indices(tile_indices: list[int]) -> list[int]:
     return words
 
 
+def apply_outline(tile_indices: list[int]) -> list[int]:
+    """
+    Generate a 1-pixel black outline around glyph body pixels (8-connectivity).
+
+    Input:  index 0 = transparent, any non-zero = body
+    Output: index 0 = transparent, 1 = black outline, 2 = white body
+
+    Used when the source PNG has a single visible color (the glyph body).
+    The outline is synthesized algorithmically so the exported font has
+    an opaque black ring around each character on a transparent background.
+    """
+    W = H = 8
+    body = [1 if idx != 0 else 0 for idx in tile_indices]
+    result = [0] * 64
+    for y in range(H):
+        for x in range(W):
+            pos = y * W + x
+            if body[pos]:
+                result[pos] = 2
+            else:
+                outline = False
+                for dy in (-1, 0, 1):
+                    for dx in (-1, 0, 1):
+                        nx, ny = x + dx, y + dy
+                        if 0 <= nx < W and 0 <= ny < H and body[ny * W + nx]:
+                            outline = True
+                            break
+                    if outline:
+                        break
+                result[pos] = 1 if outline else 0
+    return result
+
+
 def extract_tiles(img_rgba: Image.Image,
-                  color_map: dict[tuple[int, int, int], int]
+                  color_map: dict[tuple[int, int, int], int],
+                  outline: bool = False,
                   ) -> list[list[int]]:
     """
     Extract FONT_TILE_COUNT tiles from the PNG in reading order.
     Returns a list of FONT_TILE_COUNT tile_words lists (each 8 u16 ints).
     """
+    _, (font_cols, font_rows, _, _) = _detect_layout(img_rgba)
     pixels = img_rgba.load()
     assert pixels is not None
     tiles: list[list[int]] = []
 
-    for tile_row in range(FONT_ROWS):
-        for tile_col in range(FONT_COLS):
+    for tile_row in range(font_rows):
+        for tile_col in range(font_cols):
             ox = tile_col * TILE_W
             oy = tile_row * TILE_H
             indices: list[int] = []
@@ -165,6 +234,8 @@ def extract_tiles(img_rgba: Image.Image,
                 for px in range(TILE_W):
                     r, g, b, a = pixels[ox + px, oy + py]
                     indices.append(pixel_to_index(r, g, b, a, color_map))
+            if outline:
+                indices = apply_outline(indices)
             tiles.append(tile_words_from_indices(indices))
 
     return tiles
@@ -213,12 +284,7 @@ extern const u16 NGP_FAR {sym}_tiles[NGPC_FONT_TILE_COUNT * {wpt}u];
 /* Load the custom font into Character RAM.
  * Call once at startup, replaces ngpc_load_sysfont().
  * After this call ngpc_text_print() uses the custom font. */
-static inline void {sym}_load(void)
-{{
-    ngpc_gfx_load_tiles_at({sym}_tiles,
-                           NGPC_FONT_TILE_COUNT * {wpt}u,
-                           NGPC_FONT_TILE_BASE);
-}}
+#define {sym}_load() ngpc_gfx_load_tiles_at({sym}_tiles, NGPC_FONT_TILE_COUNT * {wpt}u, NGPC_FONT_TILE_BASE)
 
 #endif /* {guard} */
 """
@@ -249,28 +315,58 @@ def write_c(path: str, sym: str, src_name: str,
 
 
 def write_h(path: str, sym: str, src_name: str,
-            hdr_basename: str, tile_base: int, tile_count: int) -> None:
+            hdr_basename: str, tile_base: int, tile_count: int,
+            color_map: dict[tuple[int, int, int], int] | None = None,
+            outline_applied: bool = False) -> None:
     guard = f"NGPC_{sym.upper()}_H"
+    if outline_applied:
+        # Synthesized outline: C1=black outline, C2=white body
+        pal: list[tuple[int, int, int]] = [(0, 0, 0), (15, 15, 15), (0, 0, 0), (0, 0, 0)]
+    else:
+        # Palette: index 0 = transparent/bg (black), indices 1-3 from PNG (RGB888->RGB444)
+        pal = [(0, 0, 0), (15, 15, 15), (0, 0, 0), (0, 0, 0)]
+        if color_map:
+            for (r, g, b), idx in color_map.items():
+                if 1 <= idx <= 3:
+                    pal[idx] = (r >> 4, g >> 4, b >> 4)
+    SYM = sym.upper()
+    pal_block = "\n/* Font palette extracted from PNG source */\n"
+    for i, (r, g, b) in enumerate(pal):
+        pal_block += f"#define {SYM}_PAL_C{i}  RGB({r},{g},{b})\n"
+    pal_block += (
+        f"#define {sym}_set_palette(plane, pal_slot)"
+        f" ngpc_gfx_set_palette(plane, (u8)(pal_slot),"
+        f" {SYM}_PAL_C0, {SYM}_PAL_C1, {SYM}_PAL_C2, {SYM}_PAL_C3)\n"
+    )
+    body = _H_TEMPLATE.format(
+        src_name=src_name,
+        guard=guard,
+        tile_base=tile_base,
+        tile_count=tile_count,
+        ascii_first=tile_base,
+        ascii_last=tile_base + tile_count - 1,
+        wpt=WORDS_PER_TILE,
+        sym=sym,
+        hdr_basename=hdr_basename,
+    )
+    # Insert palette block just before the closing #endif
+    endif_marker = f"#endif /* {guard} */"
+    body = body.replace(endif_marker, pal_block + endif_marker)
     with open(path, "w", encoding="utf-8") as f:
-        f.write(_H_TEMPLATE.format(
-            src_name=src_name,
-            guard=guard,
-            tile_base=tile_base,
-            tile_count=tile_count,
-            ascii_first=tile_base,
-            ascii_last=tile_base + tile_count - 1,
-            wpt=WORDS_PER_TILE,
-            sym=sym,
-            hdr_basename=hdr_basename,
-        ))
+        f.write(body)
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def export_font(png_path: str, output_base: str, name: str | None = None,
-                tile_base: int = DEFAULT_TILE_BASE) -> tuple[str, str]:
+                tile_base: int | None = None,
+                outline: bool | None = None) -> tuple[str, str]:
     """
     Export a font PNG to NGPC .c/.h files.
+
+    outline=None  → auto: apply outline generation when PNG has exactly 1 visible color
+    outline=True  → always generate outline
+    outline=False → never generate outline (use PNG colors as-is)
 
     Returns (c_path, h_path).
     Raises ValueError / IOError on bad input.
@@ -282,13 +378,13 @@ def export_font(png_path: str, output_base: str, name: str | None = None,
         raise IOError(f"Cannot open '{png_path}': {exc}") from exc
 
     img = img.convert("RGBA")
-    if img.width != PNG_W or img.height != PNG_H:
-        raise ValueError(
-            f"Font PNG must be exactly {PNG_W}×{PNG_H} pixels "
-            f"(16 chars × {TILE_W}px wide, {FONT_ROWS} rows × {TILE_H}px tall = "
-            f"{FONT_TILE_COUNT} tiles).\n"
-            f"Got: {img.width}×{img.height}."
-        )
+    fmt_key, _ = _detect_layout(img)  # raises ValueError on unsupported dimensions
+
+    # Use layout-appropriate default tile_base when not explicitly provided
+    if tile_base is None:
+        _, (font_cols_tmp, font_rows_tmp, _, _) = _detect_layout(img)
+        tile_count_tmp = font_cols_tmp * font_rows_tmp
+        tile_base = _LAYOUT_TILE_BASE.get(fmt_key, DEFAULT_TILE_BASE if tile_count_tmp <= 96 else 0)
 
     # ── build global color map ────────────────────────────────────────────
     color_map = build_color_map(img)
@@ -296,8 +392,17 @@ def export_font(png_path: str, output_base: str, name: str | None = None,
     if n_colors == 0:
         print("Warning: font image appears to be fully transparent.", file=sys.stderr)
 
+    # ── auto outline detection ────────────────────────────────────────────
+    # When the PNG has exactly 1 visible color (body only, no baked outline),
+    # synthesize a 1-pixel black outline around each glyph algorithmically.
+    if outline is None:
+        outline = (n_colors == 1)
+    if outline:
+        print("Outline mode: generating black outline around glyph body pixels.")
+
     # ── extract tiles ─────────────────────────────────────────────────────
-    tiles = extract_tiles(img, color_map)
+    tiles = extract_tiles(img, color_map, outline=outline)
+    tile_count = len(tiles)
 
     # ── resolve output paths & symbol ────────────────────────────────────
     c_path = output_base + ".c"
@@ -314,11 +419,11 @@ def export_font(png_path: str, output_base: str, name: str | None = None,
     # ── write files ───────────────────────────────────────────────────────
     os.makedirs(os.path.dirname(os.path.abspath(c_path)), exist_ok=True)
     write_c(c_path, name, src_name, tiles, tile_base)
-    write_h(h_path, name, src_name, hdr_basename, tile_base, FONT_TILE_COUNT)
+    write_h(h_path, name, src_name, hdr_basename, tile_base, tile_count, color_map, outline)
 
-    print(f"Font export: {FONT_TILE_COUNT} tiles, {n_colors} visible color(s)")
-    print(f"  → {c_path}")
-    print(f"  → {h_path}")
+    print(f"Font export: {tile_count} tiles ({fmt_key}), {n_colors} visible color(s)")
+    print(f"  -> {c_path}")
+    print(f"  -> {h_path}")
     return c_path, h_path
 
 
@@ -335,10 +440,15 @@ def main() -> None:
                         help="C symbol prefix (default: derived from output basename)")
     parser.add_argument("--tile-base", type=int, default=DEFAULT_TILE_BASE,
                         help=f"VRAM tile slot for ASCII 32 / space (default: {DEFAULT_TILE_BASE})")
+    outline_grp = parser.add_mutually_exclusive_group()
+    outline_grp.add_argument("--outline", dest="outline", action="store_true", default=None,
+                             help="Force outline generation (default: auto when 1 visible color)")
+    outline_grp.add_argument("--no-outline", dest="outline", action="store_false",
+                             help="Disable outline generation")
     args = parser.parse_args()
 
     try:
-        export_font(args.png, args.output, args.name, args.tile_base)
+        export_font(args.png, args.output, args.name, args.tile_base, args.outline)
     except (ValueError, IOError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(1)

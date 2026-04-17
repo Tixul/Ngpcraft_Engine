@@ -173,6 +173,47 @@ def _check_tilemap(scene_label: str, project_dir: Path, tm: dict) -> list[Templa
     return issues
 
 
+def _check_dgen_tileset(project_dir: Path, project_data: dict) -> list[TemplateIssue]:
+    """Check the DungeonGen tileset PNG for NGPC color constraints (max 3 per 8×8 block)."""
+    issues: list[TemplateIssue] = []
+    pa = project_data.get("procgen_assets", {}) if isinstance(project_data, dict) else {}
+    da = (pa.get("dungeongen") or {}) if isinstance(pa, dict) else {}
+    if not isinstance(da, dict):
+        return issues
+
+    png_rel = str(da.get("tileset_png") or "").strip()
+    if not png_rel:
+        return issues
+
+    png_path = Path(png_rel) if Path(png_rel).is_absolute() else project_dir / png_rel
+    if not png_path.exists():
+        # File-not-found already reported by export_validation; skip here.
+        return issues
+
+    try:
+        img = Image.open(png_path).convert("RGBA")
+    except Exception as exc:
+        issues.append(TemplateIssue("project", "DungeonGen tileset", f"cannot open image: {exc}"))
+        return issues
+
+    # Pad to 8px multiple just in case
+    if (img.width % 8) or (img.height % 8):
+        pw = ((img.width + 7) // 8) * 8
+        ph = ((img.height + 7) // 8) * 8
+        padded = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
+        padded.paste(img, (0, 0))
+        img = padded
+
+    color_issue = _first_tilemap_color_issue(img)
+    if color_issue:
+        issues.append(TemplateIssue(
+            "project",
+            f"DungeonGen tileset ({png_path.name})",
+            color_issue,
+        ))
+    return issues
+
+
 def collect_template_2026_issues(
     *,
     project_data: dict,
@@ -192,6 +233,8 @@ def collect_template_2026_issues(
         for tm in scene.get("tilemaps") or []:
             if isinstance(tm, dict) and _is_enabled(tm):
                 issues.extend(_check_tilemap(scene_label, project_dir, tm))
+    # DungeonGen tileset — project-level color check (same hardware constraint as tilemaps)
+    issues.extend(_check_dgen_tileset(project_dir, project_data))
     return issues
 
 

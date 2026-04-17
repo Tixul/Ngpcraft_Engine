@@ -25,6 +25,7 @@ def _make_relpath(path: Path, base_dir: Path) -> str:
 
 _OBJ_REL_RE = re.compile(r"\$\(OBJ_DIR\)/([^\s]+?\.rel)")
 _FLASH_SAVE_ASSIGN_RE = re.compile(r"(?m)^\s*NGP_ENABLE_FLASH_SAVE\s*(?:\?=|:=|=)\s*([0-9]+)\s*$")
+_MAKEFILE_OBJ_ASSIGN_RE = re.compile(r"^\s*(OBJS|NGPNG_EXTRA_OBJS)\s*(?:\+?=|:=|=)")
 
 _MSPR_TILE_BASE_RE = re.compile(r"const\s+u16\s+\w+_tile_base\s*=\s*(\d+)\s*u\s*;")
 _MSPR_TILES_COUNT_RE = re.compile(r"const\s+u16\s+\w+_tiles_count\s*=\s*(\d+)\s*u\s*;")
@@ -72,7 +73,16 @@ def _read_explicit_makefile_objs(project_dir: Path) -> set[str]:
         text = makefile_path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         text = makefile_path.read_text(encoding="latin-1")
-    return {m.group(1).replace("\\", "/").lower() for m in _OBJ_REL_RE.finditer(text)}
+    # Only scan OBJS/NGPNG_EXTRA_OBJS assignment lines, not dependency rules like
+    #   $(OBJ_DIR)/foo.rel: $(headers)
+    # which look identical to the regex but are NOT OBJS additions.
+    result: set[str] = set()
+    for line in text.splitlines():
+        if not _MAKEFILE_OBJ_ASSIGN_RE.match(line):
+            continue
+        for m in _OBJ_REL_RE.finditer(line):
+            result.add(m.group(1).replace("\\", "/").lower())
+    return result
 
 
 def _makefile_sets_flash_save(project_dir: Path) -> bool:
@@ -133,6 +143,7 @@ def write_assets_autogen_mk(
     project_dir: Path,
     export_dir: Path,
     has_save: bool = False,
+    no_sysfont: bool = False,
 ) -> Path:
     """
     Scan export_dir recursively for *.c and generate:
@@ -170,6 +181,7 @@ def write_assets_autogen_mk(
 
     rel_objs: list[str] = []
     has_mapstream = False
+    has_dungeongen = (export_dir / "dungeongen_config.h").exists()
     for c in sorted(c_files, key=_link_order_key):
         rel_rel = _make_relpath(c, project_dir)
         if rel_rel.lower().endswith(".c"):
@@ -201,6 +213,24 @@ def write_assets_autogen_mk(
             lines.append("# ngpc_mapstream: required when any scene uses large-map streaming\n")
             lines.append("CDEFS += -DNGPNG_HAS_MAPSTREAM=1\n")
             lines.append(f"OBJS += $(OBJ_DIR)/{ms_rel}\n")
+    if has_dungeongen:
+        dgen_rel = "optional/ngpc_dungeongen/ngpc_dungeongen.rel"
+        clus_rel = "optional/ngpc_dungeongen/ngpc_cluster.rel"
+        rtc_rel  = "src/core/ngpc_rtc.rel"
+        lines.append("# ngpc_dungeongen: required when any scene uses dungeon generation\n")
+        lines.append("CDEFS += -DNGPNG_HAS_DUNGEONGEN=1\n")
+        if dgen_rel.lower() not in explicit_objs:
+            lines.append(f"OBJS += $(OBJ_DIR)/{dgen_rel}\n")
+        if clus_rel.lower() not in explicit_objs:
+            lines.append(f"OBJS += $(OBJ_DIR)/{clus_rel}\n")
+        # ngpc_dungeongen uses ngpc_rtc_get() — re-add ngpc_rtc via NGPNG_EXTRA_OBJS
+        # (OBJS += here would be filtered out by NGPNG_TRIM_UNUSED; EXTRA_OBJS is
+        #  appended by the template makefile AFTER the trim block)
+        lines.append(f"NGPNG_EXTRA_OBJS += $(OBJ_DIR)/{rtc_rel}\n")
+    if no_sysfont:
+        lines.append("# Custom font: disable BIOS system font, add generated font to include path\n")
+        lines.append("CDEFS += -DNO_SYSFONT=1\n")
+        lines.append("CDEFS += -IGraphX/gen\n")
     if has_save:
         lines.append("# Flash save: standalone AMD stubs (no system.lib required)\n")
         lines.append("NGP_ENABLE_FLASH_SAVE = 1\n")

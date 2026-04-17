@@ -35,6 +35,7 @@
 #define NGPNG_BEHAVIOR_CHASE  1
 #define NGPNG_BEHAVIOR_FIXED  2
 #define NGPNG_BEHAVIOR_RANDOM 3
+#define NGPNG_BEHAVIOR_FLEE   4
 #endif
 
 /* ---- Animation state codes ---- */

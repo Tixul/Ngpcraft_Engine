@@ -183,43 +183,6 @@ def _sync_optional_module(project_root: Path, module_rel: str) -> None:
             dst_file.write_text(src_file.read_text(encoding="utf-8"), encoding="utf-8")
 
 
-def _run_font_export(project_root: Path, font_png_rel: str) -> None:
-    """Run ngpc_font_export.py to generate GraphX/ngpc_custom_font.c/.h.
-
-    font_png_rel: path to the font PNG, relative to project_root (or absolute).
-    The output is always written to {project_root}/src/GraphX/ngpc_custom_font.
-    Silently skips if the PNG cannot be found (export still proceeds; the
-    Makefile will fail at compile time with a clearer error).
-    """
-    from core.project_scaffold import find_template_root
-    engine_tpl = find_template_root() or (
-        Path(__file__).resolve().parent.parent / "templates" / "NgpCraft_base_template"
-    )
-    tool = engine_tpl / "tools" / "ngpc_font_export.py"
-    if not tool.is_file():
-        return  # tool missing, skip silently
-
-    png_path = Path(font_png_rel) if Path(font_png_rel).is_absolute() else project_root / font_png_rel
-    if not png_path.is_file():
-        return  # PNG not found, skip silently
-
-    out_dir = project_root / "src" / "GraphX"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_base = str(out_dir / "ngpc_custom_font")
-
-    import sys as _sys
-    import subprocess
-    try:
-        subprocess.run(
-            [_sys.executable, str(tool), str(png_path), "-o", out_base],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError:
-        pass  # export proceeds; Makefile will surface the error
-
-
 def _sync_validated_sprite_runtime(project_root: Path) -> None:
     """
     Copy the validated sprite-shadow runtime (bundled in runtime/) into the
@@ -943,6 +906,8 @@ def patch_makefile_for_autogen(*, template_root: Path, export_dir_rel: str, enab
     _feat = _detect_features(project_data or {}) if project_data else {}
     _export_dir_abs = (template_root / export_dir_rel) if export_dir_rel else None
     _enemy_parts_max = _compute_enemy_parts_max(project_data, _export_dir_abs) if has_enemy and project_data else 1
+    _has_dgen = bool(_feat.get("has_dungeongen", False))
+    _dgen_player_spr_base = _compute_dungeongen_player_spr_base(project_data, _export_dir_abs) if (_has_dgen and project_data) else 0
     _slot_layout = _compute_sprite_layout(
         player_slot_count=player_slot_count if player_slot_count > 0 else (4 if has_player_actors else 0),
         has_enemy=has_enemy,
@@ -952,6 +917,7 @@ def patch_makefile_for_autogen(*, template_root: Path, export_dir_rel: str, enab
         has_prop_actor=has_prop_actor,
         project_data=project_data,
         enemy_slot_count_override=(_ps["max_enemies"] * _enemy_parts_max) if (has_enemy and _ps) else None,
+        dungeongen_player_spr_base=_dgen_player_spr_base,
     )
     _perf7_slot_layout = _compute_sprite_layout(
         player_slot_count=player_slot_count if player_slot_count > 0 else (4 if has_player_actors else 0),
@@ -962,9 +928,11 @@ def patch_makefile_for_autogen(*, template_root: Path, export_dir_rel: str, enab
         has_prop_actor=has_prop_actor,
         project_data=project_data,
         enemy_slot_count_override=(_ps["max_enemies"] * _enemy_parts_max) if (has_enemy and _ps) else None,
+        dungeongen_player_spr_base=_dgen_player_spr_base,
     )
     has_palfx            = bool(_feat.get("has_palfx", False))
     has_dialogues        = bool(_feat.get("has_dialogues", False))
+    has_dungeongen       = bool(_feat.get("has_dungeongen", False))
     has_water            = has_water            or bool(_feat.get("has_water", False))
     has_topdown_physics  = has_topdown_physics  or bool(_feat.get("has_topdown_physics", False))
     has_platform_physics = has_platform_physics or bool(_feat.get("has_platform_physics", False))
@@ -1009,6 +977,8 @@ def patch_makefile_for_autogen(*, template_root: Path, export_dir_rel: str, enab
             block.append("OBJS := $(filter-out $(OBJ_DIR)/src/fx/ngpc_palfx.rel,$(OBJS))")
         block.append("endif")
         block.append("endif")
+        block.append("# Post-trim: re-add modules that optional features require (set by assets_autogen.mk)")
+        block.append("OBJS += $(NGPNG_EXTRA_OBJS)")
     # B-1: ngpng static modules — include export_dir so runtime headers can
     # resolve scenes_autogen.h, while keeping GraphX/ for legacy hand-written
     # assets and src/ngpng/ for cross-module headers.
@@ -1050,6 +1020,15 @@ def patch_makefile_for_autogen(*, template_root: Path, export_dir_rel: str, enab
         block.append("OBJS += $(OBJ_DIR)/optional/ngpc_dialog/ngpc_font_data.rel")
         block.append("OBJS += $(OBJ_DIR)/optional/ngpc_soam/ngpc_soam_c.rel")
         block.append("OBJS += $(OBJ_DIR)/optional/ngpc_soam/ngpc_soam_flush.rel")
+    if has_dungeongen:
+        block.append("# DungeonGen runtime: procgen room generator + cluster navigation.")
+        block.append("CDEFS += -Ioptional")
+        block.append("CDEFS += -DNGPNG_HAS_DUNGEONGEN=1")
+        block.append("OBJS += $(OBJ_DIR)/optional/ngpc_dungeongen/ngpc_dungeongen.rel")
+        block.append("OBJS += $(OBJ_DIR)/optional/ngpc_dungeongen/ngpc_cluster.rel")
+        # ngpc_dungeongen_set_rtc_seed() needs ngpc_rtc — deduplicate then re-add.
+        block.append("OBJS := $(filter-out $(OBJ_DIR)/src/core/ngpc_rtc.rel,$(OBJS))")
+        block.append("OBJS += $(OBJ_DIR)/src/core/ngpc_rtc.rel")
     # B-3: trigger module - always compiled (ngpng_reset_scene_scroll_state needed even without triggers)
     block.append("# B-3: trigger condition evaluator and scroll state.")
     block.append("OBJS += $(OBJ_DIR)/src/ngpng/ngpng_triggers.rel")
@@ -1203,25 +1182,6 @@ def patch_makefile_for_autogen(*, template_root: Path, export_dir_rel: str, enab
             # MAX_WORLD_ENTITIES = total enemies across all scenes (max per scene) + buffer
             _max_we = (_ps["max_enemies"] if _ps else 16) + 4
             block.append(f"CDEFS += -DNGPNG_MAX_WORLD_ENTITIES={_max_we}")
-
-    # --- Dynamic palette recycling (LRU palman) ---
-    if project_data and has_enemy:
-        _pd = project_data if isinstance(project_data, dict) else {}
-        if _pd.get("dynamic_palettes"):
-            block.append("# Dynamic sprite palette slot recycling (LRU)")
-            block.append("CDEFS += -Ioptional")
-            block.append("CDEFS += -DNGPNG_DYNAMIC_PALETTES=1")
-            block.append("OBJS += $(OBJ_DIR)/optional/ngpc_palman/ngpc_palman.rel")
-
-    # --- No system font / custom font ---
-    _pd2 = project_data if isinstance(project_data, dict) else {}
-    _custom_font_png = str(_pd2.get("custom_font_png") or "").strip()
-    if _custom_font_png or _pd2.get("no_sysfont"):
-        block.append("# BIOS system font skipped — tile slots 32-127 available for user tiles")
-        block.append("CDEFS += -DNGPNG_NO_SYSFONT=1")
-    if _custom_font_png:
-        block.append("# Custom font tile data (generated by ngpc_font_export.py)")
-        block.append("OBJS += $(OBJ_DIR)/src/GraphX/ngpc_custom_font.rel")
 
     block.append(_MK_END)
     block_s = "\n".join(block) + "\n"
@@ -1435,6 +1395,51 @@ def _compute_enemy_parts_max(project_data: dict | None, export_dir: Path | None 
     return max_parts
 
 
+def _read_dungeongen_slot_sizes(export_dir_abs) -> tuple[int, int] | None:
+    """Return (enemy_slots_per, item_slots_per) from generated sprites_lab.h when available."""
+    if not export_dir_abs:
+        return None
+    try:
+        export_dir_abs = Path(export_dir_abs)
+        text = (export_dir_abs / "sprites_lab.h").read_text(encoding="utf-8", errors="replace")
+        m_ene = re.search(r"#define\s+DUNGEONGEN_ENE_SLOTS_PER\s+(\d+)u", text)
+        m_item = re.search(r"#define\s+DUNGEONGEN_ITEM_SLOTS_PER\s+(\d+)u", text)
+        if not m_ene or not m_item:
+            return None
+        return max(1, int(m_ene.group(1))), max(1, int(m_item.group(1)))
+    except Exception:
+        return None
+
+
+def _compute_dungeongen_player_spr_base(project_data: dict, export_dir_abs=None) -> int:
+    """Compute player OAM slot base when DungeonGen is active.
+
+    The generated C code reserves:
+      ENEMY_MAX * DUNGEONGEN_ENE_SLOTS_PER + DUNGEONGEN_ITEM_SLOTS_PER
+    slots before the player.  Makefile and generated C must use the exact same
+    reservation or runtime enemies can overwrite player OAM slots.
+
+    Prefer the generated sprites_lab.h values when available because they are
+    the authoritative result of the DungeonGen sprite export.
+    """
+    slot_sizes = _read_dungeongen_slot_sizes(export_dir_abs)
+    for sc in project_data.get("scenes", []):
+        rt = sc.get("rt_dungeongen_params", {})
+        if rt and rt.get("enabled"):
+            enemy_max = int(rt.get("enemy_max", 0) or 0)
+            if slot_sizes is not None:
+                ene_slots_per, item_slots_per = slot_sizes
+            else:
+                ep = rt.get("enemy_pool", []) or []
+                ip = rt.get("item_pool", []) or []
+                # Pool entries in project.ngpcraft usually do not store tile_count.
+                # Fall back to the same conservative default used by DungeonGen export.
+                ene_slots_per = max((int(e.get("tile_count", 4) or 4) for e in ep), default=4)
+                item_slots_per = max((int(e.get("tile_count", 4) or 4) for e in ip), default=4)
+            return enemy_max * ene_slots_per + item_slots_per
+    return 0
+
+
 def _compute_sprite_layout(
     *,
     player_slot_count: int,
@@ -1445,10 +1450,14 @@ def _compute_sprite_layout(
     has_prop_actor: bool,
     project_data: dict | None = None,
     enemy_slot_count_override: int | None = None,
+    dungeongen_player_spr_base: int = 0,
 ) -> dict:
     """
     Compute the fixed sprite-slot layout shared by generated autorun_main.c and
     the static ngpng runtime modules compiled separately.
+
+    When dungeongen is active, pass dungeongen_player_spr_base so that enemy/fx/prop
+    slots are placed AFTER the player (which itself is placed after dungeongen-owned slots).
 
     Slots 56..63 stay reserved for HUD/debug compatibility.
     """
@@ -1467,7 +1476,7 @@ def _compute_sprite_layout(
     else:
         fx_slot_count = 0
 
-    next_slot = player_slot_count
+    next_slot = dungeongen_player_spr_base + player_slot_count
     shot_slot_base_val = next_slot
     next_slot += shot_slot_count
     enemy_slot_base_val = next_slot
@@ -1696,6 +1705,13 @@ def _detect_features(project_data: dict) -> dict:
         len(sc.get("waves") or []) > 0
         for sc in scenes_list if isinstance(sc, dict)
     )
+    # DungeonGen: any scene with rt_dungeongen_params.enabled=True
+    has_dungeongen = any(
+        isinstance(sc.get("rt_dungeongen_params"), dict)
+        and bool(sc["rt_dungeongen_params"].get("enabled", False))
+        for sc in scenes_list if isinstance(sc, dict)
+    )
+
     # HUD and forms only meaningful when there is a player
     has_hud   = has_player and _has_hud_flags
     has_forms = has_player and has_forms
@@ -1760,6 +1776,7 @@ def _detect_features(project_data: dict) -> dict:
         "has_palfx":        has_palfx,
         "has_waves":        has_waves,
         "has_save":         has_save,
+        "has_dungeongen":   has_dungeongen,
     }
 
 
@@ -1922,15 +1939,17 @@ def write_autorun_main_c(
     has_topdown_advance  = feat.get("has_topdown_advance",  False)
     player_td_control    = feat.get("player_td_control",    "absolute")
     player_td_move       = feat.get("player_td_move",       "direct")
-    has_mapstream       = feat.get("has_mapstream", False)
-    mapstream_scenes    = feat.get("mapstream_scenes") or []
-    has_dialogues       = feat.get("has_dialogues", False)
-    dialog_scenes       = feat.get("dialog_scenes") or []
-    has_palfx           = feat.get("has_palfx", False)
-    has_waves           = feat.get("has_waves", False)
-    has_dynamic_palettes = bool((project_data or {}).get("dynamic_palettes", False)) if isinstance(project_data, dict) else False
-    _custom_font_rel     = str((project_data or {}).get("custom_font_png") or "").strip() if isinstance(project_data, dict) else ""
-    has_custom_font      = bool(_custom_font_rel)
+    has_mapstream    = feat.get("has_mapstream", False)
+    mapstream_scenes = feat.get("mapstream_scenes") or []
+    has_dialogues    = feat.get("has_dialogues", False)
+    dialog_scenes    = feat.get("dialog_scenes") or []
+    has_palfx        = feat.get("has_palfx", False)
+    has_waves        = feat.get("has_waves", False)
+    has_dungeongen   = feat.get("has_dungeongen", False)
+    scenes_list      = (project_data or {}).get("scenes") or []
+
+    if has_dungeongen and (not has_topdown_physics or has_platform_physics):
+        raise ValueError("DungeonGen export requires a top-down-only player project")
 
     # pause_quit_scene: label of the scene to go to when QUIT is selected in the pause menu.
     # Empty string = restart current scene (legacy behaviour).
@@ -2532,6 +2551,18 @@ def write_autorun_main_c(
         c.append('#include "fx/ngpc_palfx.h"\n')
     if has_waves and has_enemy:
         c.append('#include "../optional/ngpc_wave/ngpc_wave.h"\n')
+    if bool((project_data or {}).get("no_sysfont")):
+        c.append("#ifdef NO_SYSFONT\n")
+        c.append('#include "ngpc_custom_font.h"\n')
+        c.append("#endif\n")
+    if has_dungeongen:
+        _sync_optional_module(template_root, "optional/ngpc_dungeongen")
+        c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+        c.append('#include "dungeongen_config.h"\n')
+        c.append('#include "sprites_lab.h"\n')  # DUNGEONGEN_ENE_SLOTS_PER / _ITEM_SLOTS_PER
+        c.append('#include "../optional/ngpc_dungeongen/ngpc_dungeongen.h"\n')
+        c.append('#include "../optional/ngpc_dungeongen/ngpc_cluster.h"\n')
+        c.append("#endif\n")
     c.append("\n")
     c.append(f'#include "{inc_scenes}"\n')
     c.append('#include "ngpng/ngpng_engine.h"\n')
@@ -2547,12 +2578,6 @@ def write_autorun_main_c(
     # flags should not pay the cost of ngpng_hud_sync every frame.
     if has_hud:
         c.append('#include "ngpng/ngpng_hud.h"\n')
-    if has_dynamic_palettes and has_enemy:
-        _sync_optional_module(template_root, "optional/ngpc_palman")
-        c.append('#include "../optional/ngpc_palman/ngpc_palman.h"\n')
-    if has_custom_font:
-        _run_font_export(template_root, _custom_font_rel)
-        c.append('#include "GraphX/ngpc_custom_font.h"\n')
     if has_mapstream:
         _sync_optional_module(template_root, "optional/ngpc_mapstream")
         c.append('#include "../optional/ngpc_mapstream/ngpc_mapstream.h"\n')
@@ -2695,6 +2720,7 @@ def write_autorun_main_c(
             _l1_base += _p["l1_slots"]
     # Use the authoritative helper so both .c and Makefile agree on the total.
     _total_player_slots = compute_player_total_slots(players, export_dir_abs)
+    _dgen_player_spr_base_c = _compute_dungeongen_player_spr_base(project_data, export_dir_abs) if (has_dungeongen and project_data) else 0
     _slot_layout = _compute_sprite_layout(
         player_slot_count=_total_player_slots,
         has_enemy=has_enemy,
@@ -2703,6 +2729,7 @@ def write_autorun_main_c(
         has_fx=has_fx,
         has_prop_actor=has_prop_actor,
         project_data=project_data,
+        dungeongen_player_spr_base=_dgen_player_spr_base_c,
     )
     enemy_parts_max = _compute_enemy_parts_max(project_data) if has_enemy else 1
     player_slot_count = _slot_layout["player_slot_count"]
@@ -2810,7 +2837,17 @@ def write_autorun_main_c(
     c.append("#ifndef NGPNG_AUTORUN_HUD_PAL\n")
     c.append("#define NGPNG_AUTORUN_HUD_PAL 15u\n")
     c.append("#endif\n\n")
-    c.append(f"#define NGPNG_AUTORUN_PLAYER_SPR_BASE ((u8)NGPNG_AUTORUN_SPR_BASE)\n")
+    if has_dungeongen:
+        # Dungeongen owns OAM slots 0..(ENEMY_MAX*ENE_SLOTS_PER + ITEM_SLOTS_PER - 1).
+        # Player must start after those to avoid shadow-OAM conflict.
+        # DUNGEONGEN_ENE_SLOTS_PER / DUNGEONGEN_ITEM_SLOTS_PER are defined in sprites_lab.h.
+        c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+        c.append("#define NGPNG_AUTORUN_PLAYER_SPR_BASE ((u8)(DUNGEONGEN_ENEMY_MAX * DUNGEONGEN_ENE_SLOTS_PER + DUNGEONGEN_ITEM_SLOTS_PER))\n")
+        c.append("#else\n")
+        c.append("#define NGPNG_AUTORUN_PLAYER_SPR_BASE ((u8)NGPNG_AUTORUN_SPR_BASE)\n")
+        c.append("#endif\n")
+    else:
+        c.append(f"#define NGPNG_AUTORUN_PLAYER_SPR_BASE ((u8)NGPNG_AUTORUN_SPR_BASE)\n")
     c.append(f"#define NGPNG_AUTORUN_PLAYER_SLOT_COUNT ((u8){player_slot_count}u)\n")
     if has_shooting:
         c.append(f"#define NGPNG_AUTORUN_SHOT_SPR_BASE ((u8)(NGPNG_AUTORUN_SPR_BASE + {shot_slot_base_val}u))\n")
@@ -2869,6 +2906,7 @@ def write_autorun_main_c(
         c.append("static void ngpng_dialog_hide_portrait(void);\n\n")
         c.append("static void ngpng_dialog_abort(NgpcDlgRunner *r, u8 *scene_idx)\n{\n")
         c.append("    g_ngpng_entity_prio = (u8)SPR_FRONT;\n")
+        c.append("    HW_SCR_PRIO = (u8)(HW_SCR_PRIO & ~0x80u);\n")
         c.append("    ngpng_dialog_hide_portrait();\n")
         c.append("    s_dlg_full_screen = 0u;\n")
         c.append("    s_dlg_align_text_to_scr1 = 0u;\n")
@@ -2960,6 +2998,22 @@ def write_autorun_main_c(
                     c.append(f"            0x0000u, {_dsym_up}_DLG_PAL_1, {_dsym_up}_DLG_PAL_2, {_dsym_up}_DLG_PAL_3);\n")
                     c.append(f"        {_dsym}_dlg_open(r, seq_idx, 0u, {_box_by}u, 20u, {_box_bh}u,\n")
                     c.append(f"            (u8)NGPNG_AUTORUN_TEXT_PAL, (u16){_bg_sym}_tile_base, 14u);\n")
+                    # NO_SYSFONT two-plane: fill SCR1 interior with solid bg tile so custom font
+                    # transparent backgrounds (color 0 on SCR2) show the fill through.
+                    _iy0 = _box_by + 1
+                    _iy1 = _box_by + _box_bh - 2
+                    c.append(f"        /* NO_SYSFONT: SCR1 fill behind transparent SCR2 text tiles. */\n")
+                    c.append(f"        #ifdef NO_SYSFONT\n")
+                    c.append(f"        {{\n")
+                    c.append(f"            u8 _dfx, _dfy;\n")
+                    c.append(f"            ngpc_gfx_set_palette(GFX_SCR1, 14u,\n")
+                    c.append(f"                0x0000u, {_bg_sym}_palettes[1], 0x0000u, 0x0000u);\n")
+                    c.append(f"            for (_dfy = {_iy0}u; _dfy <= {_iy1}u; _dfy++)\n")
+                    c.append(f"                for (_dfx = 1u; _dfx <= 18u; _dfx++)\n")
+                    c.append(f"                    ngpc_gfx_put_tile(GFX_SCR1, _dfx, _dfy,\n")
+                    c.append(f"                        (u16)({_bg_sym}_tile_base + 2u), 14u);\n")
+                    c.append(f"        }}\n")
+                    c.append(f"        #endif\n")
                 else:
                     c.append(f"        /* Text palette on NGPNG_AUTORUN_TEXT_PAL slot (ASCII frame fallback). */\n")
                     c.append(f"        ngpc_gfx_set_palette(GFX_SCR2, (u8)NGPNG_AUTORUN_TEXT_PAL,\n")
@@ -3989,6 +4043,12 @@ def write_autorun_main_c(
                     c.append(f"static u8 s_{n}_l1_last_flags = 0xFFu;\n")
                     c.append(f"static u8 s_{n}_l1_visible = 0u;\n")
         c.append("\n")
+        if has_dungeongen:
+            c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+            c.append("static NgpcCluster s_dgn_cluster;\n")
+            c.append("static u16 s_dgn_cluster_seed = 0u;\n")
+            c.append("static u8  s_dgn_cluster_count = 0u;\n")
+            c.append("#endif\n")
 
     if has_topdown_facing or _has_mixed_td_relative or _has_mixed_td_vehicle:
         c.append("/* ---- Top-down directional facing ---- */\n")
@@ -4000,7 +4060,7 @@ def write_autorun_main_c(
         # override the static dir-frame table with animated cycling tables.
         _p0_anims = (players[0].get("anims") or {}) if players else {}
         _p0_fc    = int((players[0].get("frame_count") or 1) if players else 1)
-        def _td_anim(key: str) -> tuple[int, int, int]:
+        def _td_anim(key: str) -> tuple:
             """Return (start, count, spd) for a named anim, or (0, 0, 6) if absent."""
             a = _p0_anims.get(key) or {}
             s = max(0, int(a.get("start", 0) or 0))
@@ -4185,6 +4245,146 @@ def write_autorun_main_c(
         # No bullet sprite configured yet — array of 0xFFu (disabled, same as before)
         _sc_count = len((project_data or {}).get("scenes") or []) or 1
         c.append(f"static const u8 s_ngpng_player_btype[NGP_SCENE_COUNT] = {{{', '.join(['0xFFu'] * _sc_count)}}};\n\n")
+
+    if has_dungeongen and has_enemy:
+        _procgen_assets = ((project_data or {}).get("procgen_assets") or {}) if isinstance(project_data, dict) else {}
+        _project_dg_assets = (_procgen_assets.get("dungeongen") or {}) if isinstance(_procgen_assets, dict) else {}
+
+        def _dg_enemy_runtime_cfg(_entry: dict, _spr: dict) -> tuple[int, int]:
+            _move_type = int(((_spr.get("props") or {}).get("move_type", 0)) or 0) if isinstance(_spr, dict) else 0
+            _auto_data = 7 if _move_type == 1 else 6
+            _mode = str((_entry.get("behavior", "auto") or "auto")).strip().lower()
+            try:
+                _arg = int((_entry.get("behavior_arg", 0) or 0))
+            except Exception:
+                _arg = 0
+            if _mode in ("", "auto", "default"):
+                return 0xFF, _auto_data
+            if _mode == "patrol":
+                return 0, 0
+            if _mode == "chase":
+                if _arg <= 0:
+                    _arg = 5
+                return 1, max(1, min(31, _arg))
+            if _mode == "fixed":
+                return 2, 0
+            if _mode == "random":
+                if _arg <= 0:
+                    _arg = 24
+                return 3, max(4, min(255, _arg))
+            if _mode == "flee":
+                if _arg <= 0:
+                    _arg = 5
+                return 4, max(1, min(31, _arg))
+            return 0xFF, _auto_data
+
+        _dgn_runtime_cases: list[tuple[int, list[tuple[int, int, int]]]] = []
+        for _sc_idx, _dg_sc in enumerate(scenes_list):
+            if not isinstance(_dg_sc, dict):
+                continue
+            _rtdg = (_dg_sc.get("rt_dungeongen_params") or {}) if isinstance(_dg_sc, dict) else {}
+            if not _rtdg.get("enabled"):
+                continue
+            _pool = _rtdg.get("enemy_pool", []) or []
+            if not _pool and isinstance(_project_dg_assets, dict):
+                _pool = _project_dg_assets.get("enemy_pool", []) or []
+            if not _pool:
+                continue
+            _sprites = [s for s in (_dg_sc.get("sprites") or []) if isinstance(s, dict)]
+            _name_to_type: dict[str, int] = {}
+            for _type_idx, _spr in enumerate(_sprites):
+                _spr_name = str(_spr.get("name") or "").strip()
+                _spr_stem = Path(str(_spr.get("file") or "")).stem.strip()
+                if _spr_name:
+                    _name_to_type[_spr_name] = _type_idx
+                if _spr_stem:
+                    _name_to_type[_spr_stem] = _type_idx
+            _defs: list[tuple[int, int, int]] = []
+            for _entry in _pool:
+                if not isinstance(_entry, dict):
+                    _defs.append((0xFF, 0xFF, 6))
+                    continue
+                _eid = str(_entry.get("entity_id") or "").strip()
+                _type_idx = _name_to_type.get(_eid, None)
+                if _type_idx is None:
+                    _defs.append((0xFF, 0xFF, 6))
+                    continue
+                _spr = _sprites[_type_idx] if 0 <= _type_idx < len(_sprites) else {}
+                _behavior, _data = _dg_enemy_runtime_cfg(_entry, _spr)
+                _defs.append((_type_idx, _behavior, _data))
+            if any(_type_idx != 0xFF for _type_idx, _, _ in _defs):
+                _dgn_runtime_cases.append((_sc_idx, _defs))
+
+        c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+        c.append("typedef struct { u8 type; u8 behavior; u8 data; } NgpngDgEnemySpawnDef;\n")
+        if _dgn_runtime_cases:
+            for _case_idx, _defs in _dgn_runtime_cases:
+                _vals = ", ".join(f"{{{_type_idx}u, {_behavior}u, {_data}u}}" for _type_idx, _behavior, _data in _defs)
+                c.append(
+                    f"static const NgpngDgEnemySpawnDef s_ngpng_dg_enemy_defs_{_case_idx}[] = "
+                    f"{{{_vals}}};\n"
+                )
+            c.append("static u8 ngpng_dungeongen_scene_has_runtime_enemies(u8 scene_idx)\n{\n")
+            c.append("    switch (scene_idx) {\n")
+            for _case_idx, _defs in _dgn_runtime_cases:
+                c.append(f"        case {_case_idx}u: return 1u;\n")
+            c.append("        default: return 0u;\n")
+            c.append("    }\n")
+            c.append("}\n")
+            c.append("static u8 ngpng_dungeongen_spawn_runtime_enemies(u8 scene_idx, const NgpSceneDef *sc,\n")
+            c.append("    NgpngEnemy *enemies, u8 *enemy_active_count, u8 *enemy_alloc_idx)\n{\n")
+            c.append("    const NgpngDgEnemySpawnDef *defs = 0;\n")
+            c.append("    u8 def_count = 0u;\n")
+            c.append("    u8 i;\n")
+            c.append("    if (!sc || !enemies || !enemy_active_count || !enemy_alloc_idx) return 0u;\n")
+            c.append("    switch (scene_idx) {\n")
+            for _case_idx, _defs in _dgn_runtime_cases:
+                c.append(f"        case {_case_idx}u:\n")
+                c.append(f"            defs = s_ngpng_dg_enemy_defs_{_case_idx};\n")
+                c.append(f"            def_count = (u8){len(_defs)}u;\n")
+                c.append("            break;\n")
+            c.append("        default:\n")
+            c.append("            return 0u;\n")
+            c.append("    }\n")
+            c.append("    ngpng_enemies_clear(enemies, enemy_active_count, enemy_alloc_idx);\n")
+            c.append("    for (i = 0u; i < ngpc_dungeongen_enemy_count(); ++i) {\n")
+            c.append("        NgpngEnt src;\n")
+            c.append("        u8 pool_idx;\n")
+            c.append("        u8 before_count;\n")
+            c.append("        u8 spawned_idx;\n")
+            c.append("        pool_idx = ngpc_dungeongen_enemy_type_index(i);\n")
+            c.append("        if (pool_idx >= def_count) continue;\n")
+            c.append("        if (defs[pool_idx].type == 0xFFu) continue;\n")
+            c.append("        src.type = defs[pool_idx].type;\n")
+            c.append("        src.x = (u8)(ngpc_dungeongen_enemy_world_x(i) >> 3);\n")
+            c.append("        src.y = (u8)(ngpc_dungeongen_enemy_world_y(i) >> 3);\n")
+            c.append("        src.data = defs[pool_idx].data;\n")
+            c.append("        before_count = *enemy_active_count;\n")
+            c.append("        ngpng_enemy_spawn(sc, enemies, enemy_active_count, enemy_alloc_idx,\n")
+            c.append("            &src, 0xFFu, 0xFFu, defs[pool_idx].behavior, NGPNG_ENT_FLAG_CLAMP_MAP);\n")
+            c.append("        if (*enemy_active_count != before_count) {\n")
+            c.append("            spawned_idx = (*enemy_alloc_idx == 0u)\n")
+            c.append("                ? (u8)(NGPNG_AUTORUN_MAX_ENEMIES - 1u)\n")
+            c.append("                : (u8)(*enemy_alloc_idx - 1u);\n")
+            c.append("            enemies[spawned_idx].world_x = (s16)ngpc_dungeongen_enemy_world_x(i);\n")
+            c.append("            enemies[spawned_idx].world_y = (s16)ngpc_dungeongen_enemy_world_y(i);\n")
+            c.append("            enemies[spawned_idx].data = defs[pool_idx].data;\n")
+            c.append("        }\n")
+            c.append("    }\n")
+            c.append("    ngpc_dgroom.enemy_count = *enemy_active_count;\n")
+            c.append("    return 1u;\n")
+            c.append("}\n\n")
+        else:
+            c.append("static u8 ngpng_dungeongen_scene_has_runtime_enemies(u8 scene_idx)\n{\n")
+            c.append("    (void)scene_idx;\n")
+            c.append("    return 0u;\n")
+            c.append("}\n")
+            c.append("static u8 ngpng_dungeongen_spawn_runtime_enemies(u8 scene_idx, const NgpSceneDef *sc,\n")
+            c.append("    NgpngEnemy *enemies, u8 *enemy_active_count, u8 *enemy_alloc_idx)\n{\n")
+            c.append("    (void)scene_idx; (void)sc; (void)enemies; (void)enemy_active_count; (void)enemy_alloc_idx;\n")
+            c.append("    return 0u;\n")
+            c.append("}\n\n")
+        c.append("#endif\n")
 
     c.append("void main(void)\n{\n")
     c.append("    u16 tx = 0, ty = 0;\n")
@@ -4417,14 +4617,16 @@ def write_autorun_main_c(
         c.append("    dialog_runner.seq_idx = 0u;\n")
         c.append("    dialog_runner.portrait_id = 0xFFu;\n")
         c.append("\n")
+    _no_sysfont = bool((project_data or {}).get("no_sysfont"))
     c.append("    ngpc_init();\n")
-    if has_custom_font:
-        # Custom font replaces the BIOS sysfont; NGPNG_NO_SYSFONT=1 is set in Makefile.
-        c.append("    ngpc_custom_font_load();\n")
-    else:
-        c.append("#if !NGPNG_NO_SYSFONT\n")
+    if _no_sysfont:
+        c.append("#ifndef NO_SYSFONT\n")
         c.append("    ngpc_load_sysfont();\n")
+        c.append("#else\n")
+        c.append("    ngpc_custom_font_load();\n")
         c.append("#endif\n")
+    else:
+        c.append("    ngpc_load_sysfont();\n")
     c.append("\n")
     c.append("    /* Ensure we do not start on a blank white screen. */\n")
     c.append("    ngpc_gfx_scroll(GFX_SCR1, 0, 0);\n")
@@ -4449,9 +4651,24 @@ def write_autorun_main_c(
     c.append("    Sounds_Init();\n")
     c.append("    #endif\n")
     c.append("#endif\n")
-    if has_dynamic_palettes and has_enemy:
-        c.append("#if NGPNG_DYNAMIC_PALETTES\n")
-        c.append("    ngpc_palman_init();\n")
+    if has_dungeongen:
+        _dg_seed_mode  = "rtc"
+        _dg_seed_fixed = 1
+        _dg_boss_scene = ""
+        for _dg_sc in ((project_data or {}).get("scenes") or []):
+            _dg_p = _dg_sc.get("rt_dungeongen_params") if isinstance(_dg_sc, dict) else None
+            if isinstance(_dg_p, dict) and _dg_p.get("enabled"):
+                _dg_seed_mode  = str(_dg_p.get("seed_mode", "rtc"))
+                _dg_seed_fixed = max(1, min(65535, int(_dg_p.get("seed_fixed", 1))))
+                _dg_boss_scene = str(_dg_p.get("boss_scene") or "").strip()
+                break
+        c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+        if _dg_seed_mode == "fixed":
+            c.append(f"    /* DungeonGen: fixed seed {_dg_seed_fixed}u (set in Level > Procgen > DungeonGen). */\n")
+            c.append(f"    ngpc_dungeongen_set_seed({_dg_seed_fixed}u);\n")
+        else:
+            c.append("    /* DungeonGen: seed the RTC-based session random once at boot. */\n")
+            c.append("    ngpc_dungeongen_set_rtc_seed();\n")
         c.append("#endif\n")
     if has_save:
         c.append("    ngpng_save_init();\n")
@@ -4530,12 +4747,39 @@ def write_autorun_main_c(
         c.append("    {\n")
         c.append("        s16 spawn_x;\n")
         c.append("        s16 spawn_y;\n")
+        if has_dungeongen:
+            c.append("        s16 dgn_entry_cell_w_px;\n")
+            c.append("        s16 dgn_entry_cell_h_px;\n")
+            c.append("        s16 dgn_entry_door_cx;\n")
         c.append("        ngpng_scene_runtime_place_respawn(&g_ngp_scenes[cur_scene], cur_scene, checkpoint_scene, checkpoint_region, &cam_px, &cam_py, &tx, &ty, &spawn_x, &spawn_y);\n")
         n = players[0]["name"]
         VAR = n.upper()
         c.append(f"        {VAR}_CTRL_INIT(s_{n}, spawn_x, spawn_y);\n")
         c.append(f"        s_{n}.flags = player_ent_flags;\n")
         c.append(f"        ngpng_player_clamp_world(&g_ngp_scenes[cur_scene], &s_{n}, cam_px, cam_py, player_body_x, player_body_y, player_body_w, player_body_h, player_render_off_x, player_render_off_y, player_frame_w, player_frame_h);\n")
+        if has_dungeongen:
+            c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+            c.append("        /* DungeonGen: override cam to (0,0); enter room 0 through its entry doorway.\n")
+            c.append("         * ngpng_scene_runtime_enter_view() set cam from static tilemap\n")
+            c.append("         * scene data (cam_tile_y etc.) which does not apply to dungeon rooms. */\n")
+            c.append("        if (g_ngp_scenes[cur_scene].scene_flags & SCENE_FLAG_RUNTIME_DUNGEONGEN) {\n")
+            c.append("            s_dgn_cluster_count = 0u;\n")
+            c.append("            s_dgn_cluster_seed  = ngpc_dungeongen_room_seed(0u);\n")
+            c.append("            ngpc_cluster_gen(&s_dgn_cluster, s_dgn_cluster_seed);\n")
+            c.append("            ngpc_cluster_enter(&s_dgn_cluster, 0u, s_dgn_cluster_seed);\n")
+            c.append("            ngpc_dungeongen_spawn();\n")
+            c.append("            (void)ngpng_dungeongen_spawn_runtime_enemies(cur_scene, &g_ngp_scenes[cur_scene], enemies, &enemy_active_count, &enemy_alloc_idx);\n")
+            c.append("            cam_px = 0; cam_py = 0; tx = 0u; ty = 0u;\n")
+            c.append("            dgn_entry_cell_w_px = (s16)(DUNGEONGEN_CELL_W_TILES * 8u);\n")
+            c.append("            dgn_entry_cell_h_px = (s16)(DUNGEONGEN_CELL_H_TILES * 8u);\n")
+            c.append("            dgn_entry_door_cx = (s16)(((((s16)ngpc_dgroom.door_col_lo + (s16)ngpc_dgroom.door_col_hi) * dgn_entry_cell_w_px) / 2) + (dgn_entry_cell_w_px / 2));\n")
+            c.append(f"            s_{n}.x = (s16)(dgn_entry_door_cx - ((s16)player_body_w / 2) - player_body_x);\n")
+            c.append(f"            s_{n}.y = (s16)(dgn_entry_cell_h_px + ((dgn_entry_cell_h_px - (s16)player_body_h) / 2) - player_body_y);\n")
+            c.append(f"            s_{n}.vx = 0; s_{n}.vy = 0;\n")
+            c.append("            player_invul = 60u;\n")
+            c.append("            ngpng_update_plane_scroll(&g_ngp_scenes[cur_scene], 0, 0);\n")
+            c.append("        }\n")
+            c.append("#endif\n")
         c.append(f"        s_{n}_visible = 0u;\n")
         c.append(f"        s_{n}_last_x = (s16)-32768;\n")
         c.append(f"        s_{n}_last_y = (s16)-32768;\n")
@@ -4613,10 +4857,6 @@ def write_autorun_main_c(
     c.append("        _dbg_vb_prev = g_vb_counter;\n")
     c.append("#endif\n")
     c.append("        ngpc_vsync();\n")
-    if has_dynamic_palettes and has_enemy:
-        c.append("#if NGPNG_DYNAMIC_PALETTES\n")
-        c.append("        ngpc_palman_tick();\n")
-        c.append("#endif\n")
     c.append("#if NGP_ENABLE_DEBUG\n")
     c.append("        {\n")
     c.append("            char _dbg_str[7];\n")
@@ -4738,14 +4978,23 @@ def write_autorun_main_c(
         c.append("                    if (dialog_on_done_action == DLG_DONE_SET_FLAG || dialog_on_done_action == DLG_DONE_EMIT_EVENT) {\n")
         c.append("                        (void)dialog_on_done_arg;\n")
         c.append("                    }\n")
+        c.append("                    { u8 _closed_scene = dialog_scene;\n")
         c.append("                    ngpng_dialog_clear_box_for_scene(dialog_scene);\n")
         c.append("                    ngpng_dialog_abort(&dialog_runner, &dialog_scene);\n")
         c.append("                    s_dlg_full_screen = 0u;\n")
         c.append("                    HW_SCR_PRIO = (u8)(HW_SCR_PRIO & ~0x80u);\n")
+        c.append("                    g_ngpng_entity_prio = (u8)SPR_FRONT;\n")
         if has_mapstream:
             c.append("                    ngpng_mapstream_load_scene(cur_scene, cam_px, cam_py);\n")
+        else:
+            # Static tilemap: restore SCR1 via scene enter() when NO_SYSFONT two-plane mode.
+            c.append("                    #ifdef NO_SYSFONT\n")
+            c.append("                    if (_closed_scene < (u8)NGP_SCENE_COUNT)\n")
+            c.append("                        g_ngp_scenes[_closed_scene].enter();\n")
+            c.append("                    #endif\n")
         if has_triggers:
             c.append("                    s_player_input_locked = 0u;\n")
+        c.append("                    }\n")
         c.append("                }\n")
         c.append("            }\n")
         c.append("            else {\n")
@@ -4911,12 +5160,36 @@ def write_autorun_main_c(
         c.append("            {\n")
         c.append("                s16 spawn_x;\n")
         c.append("                s16 spawn_y;\n")
+        if has_dungeongen:
+            c.append("                s16 dgn_entry_cell_w_px;\n")
+            c.append("                s16 dgn_entry_cell_h_px;\n")
+            c.append("                s16 dgn_entry_door_cx;\n")
         c.append("                ngpng_scene_runtime_place_respawn(sc, cur_scene, checkpoint_scene, checkpoint_region, &cam_px, &cam_py, &tx, &ty, &spawn_x, &spawn_y);\n")
         n = players[0]["name"]
         VAR = n.upper()
         c.append(f"                {VAR}_CTRL_INIT(s_{n}, spawn_x, spawn_y);\n")
         c.append(f"                s_{n}.flags = player_ent_flags;\n")
         c.append(f"                ngpng_player_clamp_world(sc, &s_{n}, cam_px, cam_py, player_body_x, player_body_y, player_body_w, player_body_h, player_render_off_x, player_render_off_y, player_frame_w, player_frame_h);\n")
+        if has_dungeongen:
+            c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+            c.append("                /* DungeonGen: sc->enter() only reloaded assets; enter room 0 through its entry doorway. */\n")
+            c.append("                if (sc->scene_flags & SCENE_FLAG_RUNTIME_DUNGEONGEN) {\n")
+            c.append("                    s_dgn_cluster_count = 0u;\n")
+            c.append("                    s_dgn_cluster_seed  = ngpc_dungeongen_room_seed(0u);\n")
+            c.append("                    ngpc_cluster_gen(&s_dgn_cluster, s_dgn_cluster_seed);\n")
+            c.append("                    ngpc_cluster_enter(&s_dgn_cluster, 0u, s_dgn_cluster_seed);\n")
+            c.append("                    ngpc_dungeongen_spawn();\n")
+            c.append("                    (void)ngpng_dungeongen_spawn_runtime_enemies(cur_scene, sc, enemies, &enemy_active_count, &enemy_alloc_idx);\n")
+            c.append("                    cam_px = 0; cam_py = 0; tx = 0u; ty = 0u;\n")
+            c.append("                    dgn_entry_cell_w_px = (s16)(DUNGEONGEN_CELL_W_TILES * 8u);\n")
+            c.append("                    dgn_entry_cell_h_px = (s16)(DUNGEONGEN_CELL_H_TILES * 8u);\n")
+            c.append("                    dgn_entry_door_cx = (s16)(((((s16)ngpc_dgroom.door_col_lo + (s16)ngpc_dgroom.door_col_hi) * dgn_entry_cell_w_px) / 2) + (dgn_entry_cell_w_px / 2));\n")
+            c.append(f"                    s_{n}.x = (s16)(dgn_entry_door_cx - ((s16)player_body_w / 2) - player_body_x);\n")
+            c.append(f"                    s_{n}.y = (s16)(dgn_entry_cell_h_px + ((dgn_entry_cell_h_px - (s16)player_body_h) / 2) - player_body_y);\n")
+            c.append(f"                    s_{n}.vx = 0; s_{n}.vy = 0;\n")
+            c.append("                    ngpng_update_plane_scroll(sc, 0, 0);\n")
+            c.append("                }\n")
+            c.append("#endif\n")
         c.append(f"                s_{n}_visible = 0u;\n")
         c.append(f"                s_{n}_last_x = (s16)-32768;\n")
         c.append(f"                s_{n}_last_y = (s16)-32768;\n")
@@ -5096,6 +5369,165 @@ def write_autorun_main_c(
             c.append(f"                s_{n}.frame = (u8)(_td_base + s_td_anim_sub);\n")
             c.append(f"            }}\n")
         if has_topdown_physics:
+            if has_dungeongen:
+                # Dungeongen: AABB collision on metatile grid + room exit detection.
+                # ngpc_sprite_hide_all() inside ngpc_dungeongen_spawn() clears priority
+                # bits for ALL OAM slots — must reset visible cache so layer_sync forces
+                # a full mspr_draw (restoring SPR_FRONT) on the next frame.
+                c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+                c.append(f"            if (sc->scene_flags & SCENE_FLAG_RUNTIME_DUNGEONGEN) {{ s16 _wx; s16 _wy; s16 _rpw; s16 _rph; s16 _cell_w_px; s16 _cell_h_px; s16 _nx; s16 _ny; s16 _rx0; s16 _ry0; s16 _rx1; s16 _ry1; u8 _blk;\n")
+                c.append(f"              _wx = (s16)(cam_px + s_{n}.x); _wy = (s16)(cam_py + s_{n}.y);\n")
+                c.append(f"              _cell_w_px = (s16)(DUNGEONGEN_CELL_W_TILES * 8u);\n")
+                c.append(f"              _cell_h_px = (s16)(DUNGEONGEN_CELL_H_TILES * 8u);\n")
+                c.append(f"              _rpw = (s16)((s16)ngpc_dgroom.room_w * (s16)(DUNGEONGEN_CELL_W_TILES * 8u));\n")
+                c.append(f"              _rph = (s16)((s16)ngpc_dgroom.room_h * (s16)(DUNGEONGEN_CELL_H_TILES * 8u));\n")
+                c.append(f"              _blk = 0u;\n")
+                c.append(f"              if (s_{n}.vx != 0) {{\n")
+                c.append(f"                _nx = (s16)(_wx + s_{n}.vx);\n")
+                c.append(f"                _rx0 = (s16)(_nx + (s16)player_body_x);\n")
+                c.append(f"                _ry0 = (s16)(_wy + (s16)player_body_y);\n")
+                c.append(f"                _rx1 = (s16)(_rx0 + (s16)player_body_w - 1);\n")
+                c.append(f"                _ry1 = (s16)(_ry0 + (s16)player_body_h - 1);\n")
+                c.append(f"                _blk = ngpc_dungeongen_world_rect_hits_solid(_rx0, _ry0, _rx1, _ry1);\n")
+                c.append(f"                if (!_blk) {{ s_{n}.x = (s16)(s_{n}.x + s_{n}.vx); _wx = _nx; }} else {{ s_{n}.vx = 0; }}\n")
+                c.append(f"              }}\n")
+                c.append(f"              if (s_{n}.vy != 0) {{\n")
+                c.append(f"                _ny = (s16)(_wy + s_{n}.vy);\n")
+                c.append(f"                _rx0 = (s16)(_wx + (s16)player_body_x);\n")
+                c.append(f"                _ry0 = (s16)(_ny + (s16)player_body_y);\n")
+                c.append(f"                _rx1 = (s16)(_rx0 + (s16)player_body_w - 1);\n")
+                c.append(f"                _ry1 = (s16)(_ry0 + (s16)player_body_h - 1);\n")
+                c.append(f"                _blk = ngpc_dungeongen_world_rect_hits_solid(_rx0, _ry0, _rx1, _ry1);\n")
+                c.append(f"                if (!_blk) {{ s_{n}.y = (s16)(s_{n}.y + s_{n}.vy); _wy = _ny; }} else {{ s_{n}.vy = 0; }}\n")
+                c.append(f"              }}\n")
+                c.append(f"              {{ u8 _exited; u8 _fdir; s16 _swx; s16 _swy; s16 _door_cx; s16 _door_cy;\n"
+                         f"                u8 _dgn_dir; u8 _dgn_back; u8 _dgn_is_back; u8 _dgn_edsave; u8 _dgn_do_ri; u8 _dgn_prev_room; u8 _dgn_took_stair; u8 _cl_ex;\n"
+                         f"                u8 _vmx; u8 _vmy; u8 _vcol;\n")
+                c.append(f"                _exited = 0u; _fdir = 0u;\n")
+                # Use cluster exits mask (not ngpc_dgroom.exits) because DUNGEONGEN_MIN_EXITS
+                # can add extra graphical exits that have no cluster child assigned.
+                c.append(f"                _cl_ex = ngpc_cluster_exits_mask(&s_dgn_cluster);\n")
+                # Body-edge thresholds: trigger when body edge crosses room boundary (not center).
+                c.append(f"                if ((_cl_ex & DGN_EXIT_N) && (s16)(_wy + (s16)player_body_y) < 0)                                          {{ _exited = 1u; _fdir = 0u; }}\n")
+                c.append(f"                else if ((_cl_ex & DGN_EXIT_S) && (s16)(_wy + (s16)player_body_y + (s16)player_body_h) >= _rph)            {{ _exited = 1u; _fdir = 1u; }}\n")
+                c.append(f"                else if ((_cl_ex & DGN_EXIT_E) && (s16)(_wx + (s16)player_body_x + (s16)player_body_w) >= _rpw)            {{ _exited = 1u; _fdir = 2u; }}\n")
+                c.append(f"                else if ((_cl_ex & DGN_EXIT_W) && (s16)(_wx + (s16)player_body_x) < 0)                                     {{ _exited = 1u; _fdir = 3u; }}\n")
+                c.append(f"                if (_exited) {{\n")
+                # Convert _fdir (0=N,1=S,2=E,3=W) to DGN_EXIT_* bit
+                c.append(f"                  if      (_fdir == 0u) {{ _dgn_dir = DGN_EXIT_N; }}\n")
+                c.append(f"                  else if (_fdir == 1u) {{ _dgn_dir = DGN_EXIT_S; }}\n")
+                c.append(f"                  else if (_fdir == 2u) {{ _dgn_dir = DGN_EXIT_E; }}\n")
+                c.append(f"                  else                  {{ _dgn_dir = DGN_EXIT_W; }}\n")
+                c.append(f"                  _dgn_back    = ngpc_cluster_back_dir(&s_dgn_cluster);\n")
+                c.append(f"                  _dgn_is_back = (_dgn_back != 0xFFu && _dgn_dir == _dgn_back) ? 1u : 0u;\n")
+                c.append(f"                  _dgn_do_ri   = 1u;\n")
+                c.append(f"                  if (_dgn_is_back) {{\n")
+                # Going back: save entry_dir before go_back changes current_room
+                c.append(f"                    _dgn_edsave = s_dgn_cluster.entry_dir[s_dgn_cluster.current_room];\n")
+                c.append(f"                    ngpc_cluster_go_back(&s_dgn_cluster, s_dgn_cluster_seed);\n")
+                # entry_dir[child] = direction FROM parent TO child.
+                # Going back: player exits child via opp(entry_dir) and re-enters parent
+                # from the entry_dir side. spawn at that wall of parent.
+                # opp maps: N->S(_fdir=1), S->N(_fdir=0), E->W(_fdir=3), W->E(_fdir=2)
+                c.append(f"                    if      (_dgn_edsave == DGN_EXIT_N) {{ _fdir = 1u; }}\n")
+                c.append(f"                    else if (_dgn_edsave == DGN_EXIT_S) {{ _fdir = 0u; }}\n")
+                c.append(f"                    else if (_dgn_edsave == DGN_EXIT_E) {{ _fdir = 3u; }}\n")
+                c.append(f"                    else                               {{ _fdir = 2u; }}\n")
+                c.append(f"                  }} else {{\n")
+                # Going forward (or stair)
+                c.append(f"                    _dgn_prev_room = s_dgn_cluster.current_room;\n")
+                c.append(f"                    ngpc_cluster_go_forward_dir(&s_dgn_cluster, _dgn_dir, s_dgn_cluster_seed);\n")
+                c.append(f"                    _dgn_took_stair = ngpc_cluster_took_stair(&s_dgn_cluster);\n")
+                # No child found for that direction → no transition, cancel room reinit
+                c.append(f"                    if (!_dgn_took_stair && s_dgn_cluster.current_room == _dgn_prev_room) {{ _dgn_do_ri = 0u; }}\n")
+                c.append(f"                    else if (_dgn_took_stair) {{\n")
+                c.append(f"                      s_dgn_cluster_count = (u8)(s_dgn_cluster_count + 1u);\n")
+                # End condition: N clusters reached → boss/end scene
+                _dg_boss_sym = _dg_boss_scene.upper().replace(" ", "_") if _dg_boss_scene else ""
+                if _dg_boss_sym:
+                    c.append(f"#if (DUNGEONGEN_N_ROOMS > 0u)\n")
+                    c.append(f"                      if (s_dgn_cluster_count >= DUNGEONGEN_N_ROOMS) {{\n")
+                    c.append(f"                        cur_scene = (u8)NGP_SCENE_{_dg_boss_sym}_IDX;\n")
+                    c.append(f"                        _dgn_do_ri = 0u;\n")
+                    c.append(f"                      }} else\n")
+                    c.append(f"#endif\n")
+                c.append(f"                      {{\n")
+                c.append(f"                        s_dgn_cluster_seed = ngpc_dungeongen_room_seed(s_dgn_cluster_count);\n")
+                c.append(f"                        ngpc_cluster_gen(&s_dgn_cluster, s_dgn_cluster_seed);\n")
+                c.append(f"                        ngpc_cluster_enter(&s_dgn_cluster, 0u, s_dgn_cluster_seed);\n")
+                c.append(f"                        _fdir = 1u; /* new Entry: spawn near top */\n")
+                c.append(f"                      }}\n")
+                c.append(f"                    }}\n")
+                c.append(f"                    /* else: normal forward room — _fdir stays, spawn at opposite wall */\n")
+                c.append(f"                  }}\n")
+                # Room init: spawn + cam + player positioning (skipped if transitioning scene)
+                c.append(f"                  if (_dgn_do_ri) {{\n")
+                c.append(f"                    ngpc_dungeongen_spawn();\n")
+                c.append(f"                    (void)ngpng_dungeongen_spawn_runtime_enemies(cur_scene, sc, enemies, &enemy_active_count, &enemy_alloc_idx);\n")
+                c.append(f"                    cam_px = 0; cam_py = 0; tx = 0u; ty = 0u;\n")
+                c.append(f"                    _cell_w_px = (s16)(DUNGEONGEN_CELL_W_TILES * 8u);\n")
+                c.append(f"                    _cell_h_px = (s16)(DUNGEONGEN_CELL_H_TILES * 8u);\n")
+                c.append(f"                    _rpw = (s16)((s16)ngpc_dgroom.room_w * _cell_w_px);\n")
+                c.append(f"                    _rph = (s16)((s16)ngpc_dgroom.room_h * _cell_h_px);\n")
+                c.append(f"                    _door_cx = (s16)(((((s16)ngpc_dgroom.door_col_lo + (s16)ngpc_dgroom.door_col_hi) * _cell_w_px) / 2) + (_cell_w_px / 2));\n")
+                c.append(f"                    _door_cy = (s16)(((((s16)ngpc_dgroom.door_row_lo + (s16)ngpc_dgroom.door_row_hi) * _cell_h_px) / 2) + (_cell_h_px / 2));\n")
+                # Zelda-style spawn: opposite side from the exit taken.
+                # fdir=0 (exited N/top)  → spawn near bottom (row room_h-2)
+                # fdir=1 (exited S/bot)  → spawn near top    (row 1)
+                # fdir=2 (exited E/right)→ spawn near left   (col 1)
+                # fdir=3 (exited W/left) → spawn near right  (col room_w-2)
+                c.append(f"                    if (_fdir == 0u) {{ _swx = (s16)(_door_cx - ((s16)player_body_w / 2) - player_body_x); _swy = (s16)(((s16)(ngpc_dgroom.room_h - 2u) * _cell_h_px) + ((_cell_h_px - (s16)player_body_h) / 2) - player_body_y); }}\n")
+                c.append(f"                    else if (_fdir == 1u) {{ _swx = (s16)(_door_cx - ((s16)player_body_w / 2) - player_body_x); _swy = (s16)(_cell_h_px + ((_cell_h_px - (s16)player_body_h) / 2) - player_body_y); }}\n")
+                c.append(f"                    else if (_fdir == 2u) {{ _swx = (s16)(_cell_w_px + ((_cell_w_px - (s16)player_body_w) / 2) - player_body_x); _swy = (s16)(_door_cy - ((s16)player_body_h / 2) - player_body_y); }}\n")
+                c.append(f"                    else {{ _swx = (s16)(((s16)(ngpc_dgroom.room_w - 2u) * _cell_w_px) + ((_cell_w_px - (s16)player_body_w) / 2) - player_body_x); _swy = (s16)(_door_cy - ((s16)player_body_h / 2) - player_body_y); }}\n")
+                c.append(f"                    s_{n}.x = _swx; s_{n}.y = _swy; s_{n}.vx = 0; s_{n}.vy = 0;\n")
+                c.append(f"                    /* ngpc_dungeongen_spawn() called hide_all(): reset visible cache so\n")
+                c.append(f"                     * layer_sync forces mspr_draw next frame (restores SPR_FRONT bits). */\n")
+                c.append(f"                    s_{n}_visible = 0u;\n")
+                c.append(f"                    s_{n}_last_x = (s16)-32768;\n")
+                c.append(f"                    s_{n}_last_y = (s16)-32768;\n")
+                c.append(f"                    s_{n}_last_frame = 0xFFu;\n")
+                c.append(f"                    s_{n}_last_flags = 0xFFu;\n")
+                if players[0].get("has_layer1"):
+                    c.append(f"                    s_{n}_l1_visible = 0u;\n")
+                    c.append(f"                    s_{n}_l1_last_x = (s16)-32768;\n")
+                    c.append(f"                    s_{n}_l1_last_y = (s16)-32768;\n")
+                    c.append(f"                    s_{n}_l1_last_frame = 0xFFu;\n")
+                    c.append(f"                    s_{n}_l1_last_flags = 0xFFu;\n")
+                c.append(f"                    ngpng_update_plane_scroll(sc, 0, 0);\n")
+                c.append(f"                  }}\n")
+                c.append(f"                }}\n")
+                c.append(f"                if (!_exited && _wx >= 0 && _wy >= 0 && _wx < _rpw && _wy < _rph) {{\n")
+                c.append(f"                  _vmx = (u8)((u16)_wx / (u16)_cell_w_px);\n")
+                c.append(f"                  _vmy = (u8)((u16)_wy / (u16)_cell_h_px);\n")
+                c.append(f"                  _vcol = ngpc_dungeongen_collision_at(_vmx, _vmy);\n")
+                c.append(f"                  if (_vcol == (u8)DGNCOL_VOID && player_invul == 0u) {{ player_hp = 0; }}\n")
+                c.append(f"                  if (_vcol == (u8)DGNCOL_TRIGGER) {{\n")
+                c.append(f"                    s_dgn_cluster_count = (u8)(s_dgn_cluster_count + 1u);\n")
+                c.append(f"                    s_dgn_cluster_seed = ngpc_dungeongen_room_seed(s_dgn_cluster_count);\n")
+                c.append(f"                    ngpc_cluster_gen(&s_dgn_cluster, s_dgn_cluster_seed);\n")
+                c.append(f"                    ngpc_cluster_enter(&s_dgn_cluster, 0u, s_dgn_cluster_seed);\n")
+                c.append(f"                    ngpc_dungeongen_spawn();\n")
+                c.append(f"                    (void)ngpng_dungeongen_spawn_runtime_enemies(cur_scene, sc, enemies, &enemy_active_count, &enemy_alloc_idx);\n")
+                c.append(f"                    cam_px = 0; cam_py = 0; tx = 0u; ty = 0u;\n")
+                c.append(f"                    _cell_w_px = (s16)(DUNGEONGEN_CELL_W_TILES * 8u);\n")
+                c.append(f"                    _cell_h_px = (s16)(DUNGEONGEN_CELL_H_TILES * 8u);\n")
+                c.append(f"                    _rpw = (s16)((s16)ngpc_dgroom.room_w * _cell_w_px);\n")
+                c.append(f"                    _rph = (s16)((s16)ngpc_dgroom.room_h * _cell_h_px);\n")
+                c.append(f"                    _door_cx = (s16)(((((s16)ngpc_dgroom.door_col_lo + (s16)ngpc_dgroom.door_col_hi) * _cell_w_px) / 2) + (_cell_w_px / 2));\n")
+                c.append(f"                    s_{n}.x = (s16)(_door_cx - ((s16)player_body_w / 2) - player_body_x);\n")
+                c.append(f"                    s_{n}.y = (s16)(_cell_h_px + ((_cell_h_px - (s16)player_body_h) / 2) - player_body_y);\n")
+                c.append(f"                    s_{n}.vx = 0; s_{n}.vy = 0;\n")
+                c.append(f"                    s_{n}_visible = 0u;\n")
+                c.append(f"                    s_{n}_last_x = (s16)-32768;\n")
+                c.append(f"                    s_{n}_last_y = (s16)-32768;\n")
+                c.append(f"                    s_{n}_last_frame = 0xFFu;\n")
+                c.append(f"                    ngpng_update_plane_scroll(sc, 0, 0);\n")
+                c.append(f"                  }}\n")
+                c.append(f"                }}\n")
+                c.append(f"              }}\n")
+                c.append(f"            }} else {{\n")
+                c.append("#endif\n")
             if has_topdown_vehicle or has_topdown_advance:
                 c.append(f"            _td_vx_pre = s_{n}.vx;\n")
                 c.append(f"            _td_vy_pre = s_{n}.vy;\n")
@@ -5109,6 +5541,10 @@ def write_autorun_main_c(
                 c.append("            if (sc->scene_flags & SCENE_FLAG_HAS_SOLID_PROPS) {\n")
                 c.append(f"                ngpng_player_collide_solid_props(props, prop_count, cam_px, cam_py, &s_{n}.x, &s_{n}.y, &s_{n}.vx, &s_{n}.vy, player_body_x, player_body_y, player_body_w, player_body_h);\n")
                 c.append("            }\n")
+            if has_dungeongen:
+                c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+                c.append("            }\n")
+                c.append("#endif /* NGPNG_HAS_DUNGEONGEN */\n")
         else:
             if has_prop_actor:
                 c.append("            if (sc->scene_flags & SCENE_FLAG_HAS_PLATFORMS) {\n")
@@ -5124,7 +5560,15 @@ def write_autorun_main_c(
             c.append(f"            if (s_{n}.vy < 0 && prev_player_vy >= 0) player_jump_started = 1u;\n")
         c.append("            /* OPT-F: skip tile effects on odd frames — damage/spring/conveyor tolerate 1-frame latency. */\n")
         c.append("            if (!(timer & 1u)) {\n")
+        if has_dungeongen:
+            c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+            c.append("            if (!(sc->scene_flags & SCENE_FLAG_RUNTIME_DUNGEONGEN)) {\n")
+            c.append("#endif\n")
         c.append(f"                ngpng_player_apply_tile_effects(sc, _sc_tilecol, _sc_map_w, _sc_map_h, (s16)(cam_px + s_{players[0]['name']}.x), (s16)(cam_py + s_{players[0]['name']}.y), player_body_x, player_body_y, player_body_w, player_body_h, &s_{players[0]['name']}.vx, &s_{players[0]['name']}.vy, &s_{players[0]['name']}.on_ground, &s_{players[0]['name']}.coyote, &player_hp, &player_invul);\n")
+        if has_dungeongen:
+            c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+            c.append("            }\n")
+            c.append("#endif\n")
         c.append("            }\n")
         if has_topdown_physics and (has_topdown_vehicle or has_topdown_advance) and has_water:
             # For top-down vehicle/advance: apply_tile_effects halves vx/vy but CTRL_UPDATE
@@ -5135,7 +5579,7 @@ def write_autorun_main_c(
             c.append(f"            {{ s16 _wtd_xm; s16 _wtd_ym; s16 _wtd_cap;\n")
             c.append(f"              _wtd_xm = (s16)(cam_px + s_{n}.x + player_body_x + (player_body_w >> 1));\n")
             c.append(f"              _wtd_ym = (s16)(cam_py + s_{n}.y + player_body_y + (player_body_h >> 1));\n")
-            c.append(f"              if ((sc->scene_flags & SCENE_FLAG_HAS_WATER) && NGPNG_TILECOL_FAST(_sc_tilecol, _sc_map_w, _sc_map_h, _wtd_xm, _wtd_ym, TILE_PASS) == TILE_WATER) {{\n")
+            c.append(f"              if (!(sc->scene_flags & SCENE_FLAG_RUNTIME_DUNGEONGEN) && (sc->scene_flags & SCENE_FLAG_HAS_WATER) && NGPNG_TILECOL_FAST(_sc_tilecol, _sc_map_w, _sc_map_h, _wtd_xm, _wtd_ym, TILE_PASS) == TILE_WATER) {{\n")
             c.append(f"                  _wtd_cap = (s16)((s16)TD_SPEED_MAX >> 1);\n")
             c.append(f"                  if (s_td_speed > _wtd_cap) s_td_speed = _wtd_cap;\n")
             c.append(f"                  else if (s_td_speed < (s16)(-_wtd_cap)) s_td_speed = (s16)(-_wtd_cap);\n")
@@ -5172,8 +5616,33 @@ def write_autorun_main_c(
         c.append(f"                s16 player_world_y = (s16)(cam_py + s_{players[0]['name']}.y);\n")
         c.append(f"                s16 player_world_cx = (s16)(player_world_x + player_body_x + (player_body_w >> 1));\n")
         c.append(f"                s16 player_world_cy = (s16)(player_world_y + player_body_y + (player_body_h >> 1));\n")
+        c.append(f"                s16 _dgn_dzx;\n")
+        c.append(f"                s16 _dgn_dzy;\n")
+        c.append(f"                s16 _dgn_dmy;\n")
+        if has_dungeongen:
+            c.append(f"#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+            c.append(f"                if (sc->scene_flags & SCENE_FLAG_RUNTIME_DUNGEONGEN) {{\n")
+            c.append(f"                    /* DungeonGen: static cam_max_x/y = 0 (placeholder for static scenes).\n")
+            c.append(f"                     * Use runtime ngpc_dgroom.scroll_max_x/y as the real room scroll bounds. */\n")
+            c.append(f"                    _dgn_dzx = (s16)sc->cam_follow_deadzone_x;\n")
+            c.append(f"                    _dgn_dzy = (s16)sc->cam_follow_deadzone_y;\n")
+            c.append(f"                    _dgn_dmy = (s16)sc->cam_follow_drop_margin_y;\n")
+            c.append(f"                    if (player_world_cx < (s16)(cam_px + 80 - _dgn_dzx)) cam_px = (s16)(player_world_cx - (80 - _dgn_dzx));\n")
+            c.append(f"                    else if (player_world_cx > (s16)(cam_px + 80 + _dgn_dzx)) cam_px = (s16)(player_world_cx - (80 + _dgn_dzx));\n")
+            c.append(f"                    if (player_world_cy < (s16)(cam_py + 72 - _dgn_dzy)) cam_py = (s16)(player_world_cy - (72 - _dgn_dzy));\n")
+            c.append(f"                    else if (player_world_cy > (s16)(cam_py + 72 + _dgn_dzy + _dgn_dmy)) cam_py = (s16)(player_world_cy - (72 + _dgn_dzy + _dgn_dmy));\n")
+            c.append(f"                    if (cam_px < 0) cam_px = 0;\n")
+            c.append(f"                    if (cam_py < 0) cam_py = 0;\n")
+            c.append(f"                    if (cam_px > ngpc_dgroom.scroll_max_x) cam_px = ngpc_dgroom.scroll_max_x;\n")
+            c.append(f"                    if (cam_py > ngpc_dgroom.scroll_max_y) cam_py = ngpc_dgroom.scroll_max_y;\n")
+            c.append(f"                }} else {{\n")
+            c.append(f"#endif\n")
         c.append(f"                /* OPT-E: ngpng_update_camera folds follow+lock+lag+constraints in one call. */\n")
         c.append(f"                ngpng_update_camera(sc, player_world_cx, player_world_cy, &cam_px, &cam_py);\n")
+        if has_dungeongen:
+            c.append(f"#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+            c.append(f"                }}\n")
+            c.append(f"#endif\n")
         c.append(f"                s_{players[0]['name']}.x = (s16)(player_world_x - cam_px);\n")
         c.append(f"                s_{players[0]['name']}.y = (s16)(player_world_y - cam_py);\n")
         c.append(f"            }}\n")
@@ -5322,6 +5791,12 @@ def write_autorun_main_c(
             c.append(f"        ngpng_enemies_update(sc, _sc_tilecol, _sc_map_w, _sc_map_h, enemies, &enemy_active_count, cam_px, cam_py, (s16)(cam_px + s_{p0}.x), (s16)(cam_py + s_{p0}.y), (u8)timer);\n")
         else:
             c.append("        ngpng_enemies_update(sc, _sc_tilecol, _sc_map_w, _sc_map_h, enemies, &enemy_active_count, cam_px, cam_py, 0, 0, (u8)timer);\n")
+        if has_dungeongen:
+            c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+            c.append("        if ((sc->scene_flags & SCENE_FLAG_RUNTIME_DUNGEONGEN) && ngpng_dungeongen_scene_has_runtime_enemies(cur_scene)) {\n")
+            c.append("            ngpc_dgroom.enemy_count = enemy_active_count;\n")
+            c.append("        }\n")
+            c.append("#endif\n")
     if has_shooting and has_enemy:
         c.append("        ngpng_player_shots_update_and_collide(sc, shots, &player_shots_active, enemies, &enemy_active_count, &score, explosion_type, fx, &fx_active_count, &fx_alloc_idx, cam_px, cam_py);\n")
     if has_fx:
@@ -5329,6 +5804,12 @@ def write_autorun_main_c(
     if players:
         if has_combat:
             c.append(f"        ngpng_player_collide_enemies(sc, enemies, &enemy_active_count, s_{players[0]['name']}.x, &s_{players[0]['name']}.y, &s_{players[0]['name']}.vx, &s_{players[0]['name']}.vy, player_hb_x, player_hb_y, player_hb_w, player_hb_h, cam_px, cam_py, &player_hp, &player_invul, &score, explosion_type, fx, &fx_active_count, &fx_alloc_idx);\n")
+            if has_dungeongen:
+                c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+                c.append("        if ((sc->scene_flags & SCENE_FLAG_RUNTIME_DUNGEONGEN) && ngpng_dungeongen_scene_has_runtime_enemies(cur_scene)) {\n")
+                c.append("            ngpc_dgroom.enemy_count = enemy_active_count;\n")
+                c.append("        }\n")
+                c.append("#endif\n")
             if not has_topdown_physics:
                 c.append(f"        s_{players[0]['name']}.vx = ngpng_clamp_s8_range(s_{players[0]['name']}.vx, -{player_hspeed_cap}, {player_hspeed_cap});\n")
                 c.append(f"        if (s_{players[0]['name']}.vy < -{player_jump_up_cap}) s_{players[0]['name']}.vy = -{player_jump_up_cap};\n")
@@ -5600,14 +6081,14 @@ def write_autorun_main_c(
         _wave_next_expr = ("wave_seq.next" if (has_waves and has_enemy)
                            else "next_wave" if has_enemy
                            else "0u")
-        c.append(f"            fire = ngpng_trigger_cond_met(t->cond, t->region, t->value, in_reg, s_reg_prev, reg_n, tx, ty, timer, {_wave_next_expr}, player_hp, lives, enemy_active_count, collectible_count, ngpc_pad_pressed, player_jump_started, npc_talked, entity_contact);\n")
+        c.append(f"            fire = ngpng_trigger_cond_met(t->cond, t->region, t->value, in_reg, s_reg_prev, reg_n, tx, ty, timer, {_wave_next_expr}, player_hp, lives, enemy_active_count, collectible_count, ngpc_pad_pressed, player_jump_started, npc_talked, entity_contact, (u8)(dialog_result != DIALOG_RUNNING));\n")
         c.append("            if (fire && sc->trig_conds && sc->trig_cond_count && sc->trig_cond_start) {\n")
         c.append("                ccount = sc->trig_cond_count[i];\n")
         c.append("                cstart = sc->trig_cond_start[i];\n")
         c.append("                all_ok = 1u;\n")
         c.append("                for (cj = 0; cj < ccount; ++cj) {\n")
         c.append("                    const NgpngCond *ec = &sc->trig_conds[(u8)(cstart + cj)];\n")
-        c.append(f"                    if (!ngpng_trigger_cond_met(ec->cond, ec->region, ec->value, in_reg, s_reg_prev, reg_n, tx, ty, timer, {_wave_next_expr}, player_hp, lives, enemy_active_count, collectible_count, ngpc_pad_pressed, player_jump_started, npc_talked, entity_contact)) {{\n")
+        c.append(f"                    if (!ngpng_trigger_cond_met(ec->cond, ec->region, ec->value, in_reg, s_reg_prev, reg_n, tx, ty, timer, {_wave_next_expr}, player_hp, lives, enemy_active_count, collectible_count, ngpc_pad_pressed, player_jump_started, npc_talked, entity_contact, (u8)(dialog_result != DIALOG_RUNNING))) {{\n")
         c.append("                        all_ok = 0u;\n")
         c.append("                        break;\n")
         c.append("                    }\n")
@@ -5627,7 +6108,7 @@ def write_autorun_main_c(
         c.append("                    all_ok = 1u;\n")
         c.append("                    for (cj = 0u; cj < occount; ++cj) {\n")
         c.append("                        const NgpngCond *ec = &sc->trig_or_conds[(u8)(ocstart + cj)];\n")
-        c.append(f"                        if (!ngpng_trigger_cond_met(ec->cond, ec->region, ec->value, in_reg, s_reg_prev, reg_n, tx, ty, timer, {_wave_next_expr}, player_hp, lives, enemy_active_count, collectible_count, ngpc_pad_pressed, player_jump_started, npc_talked, entity_contact)) {{\n")
+        c.append(f"                        if (!ngpng_trigger_cond_met(ec->cond, ec->region, ec->value, in_reg, s_reg_prev, reg_n, tx, ty, timer, {_wave_next_expr}, player_hp, lives, enemy_active_count, collectible_count, ngpc_pad_pressed, player_jump_started, npc_talked, entity_contact, (u8)(dialog_result != DIALOG_RUNNING))) {{\n")
         c.append("                            all_ok = 0u;\n")
         c.append("                            break;\n")
         c.append("                        }\n")
@@ -5635,6 +6116,15 @@ def write_autorun_main_c(
         c.append("                    if (all_ok) fire = 1u;\n")
         c.append("                }\n")
         c.append("            }\n")
+        if has_dungeongen:
+            c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+            c.append("            if (!fire) {\n")
+            c.append("                if      (t->cond == TRIG_DGN_CLUSTER_GE)   fire = ((u16)s_dgn_cluster_count >= t->value) ? 1u : 0u;\n")
+            c.append("                else if (t->cond == TRIG_DGN_ROOM_TYPE_IS) fire = (ngpc_dgroom.room_type == (u8)t->value) ? 1u : 0u;\n")
+            c.append("                else if (t->cond == TRIG_DGN_HAS_STAIR)    fire = ngpc_dgroom.has_stair ? 1u : 0u;\n")
+            c.append("                else if (t->cond == TRIG_DGN_ROOM_CLEARED)  fire = (ngpc_dgroom.enemy_count == 0u) ? 1u : 0u;\n")
+            c.append("            }\n")
+            c.append("#endif\n")
         c.append("            if (!fire) continue;\n")
         c.append("            if (t->once) s_trig_fired[i] = 1;\n")
         c.append("#if NGPNG_AUTORUN_DEBUG_OVERLAY\n")
@@ -5969,6 +6459,32 @@ def write_autorun_main_c(
             c.append("            if (t->action == TRIG_ACT_FLIP_SPRITE_V) {\n")
             c.append(f"                s_{n}.face_vflip ^= 1u;\n")
             c.append("            }\n")
+        if has_dungeongen:
+            c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+            c.append("            if (t->action == TRIG_ACT_DGN_RESET) {\n")
+            c.append("                s_dgn_cluster_count = 0u;\n")
+            c.append("                s_dgn_cluster_seed = ngpc_dungeongen_room_seed(0u);\n")
+            c.append("                ngpc_cluster_gen(&s_dgn_cluster, s_dgn_cluster_seed);\n")
+            c.append("                ngpc_cluster_enter(&s_dgn_cluster, 0u, s_dgn_cluster_seed);\n")
+            c.append("                ngpc_dungeongen_spawn();\n")
+            c.append("                (void)ngpng_dungeongen_spawn_runtime_enemies(cur_scene, sc, enemies, &enemy_active_count, &enemy_alloc_idx);\n")
+            c.append("            }\n")
+            c.append("            if (t->action == TRIG_ACT_DGN_NEXT_CLUSTER) {\n")
+            c.append("                s_dgn_cluster_count = (u8)(s_dgn_cluster_count + 1u);\n")
+            c.append("                s_dgn_cluster_seed = ngpc_dungeongen_room_seed(s_dgn_cluster_count);\n")
+            c.append("                ngpc_cluster_gen(&s_dgn_cluster, s_dgn_cluster_seed);\n")
+            c.append("                ngpc_cluster_enter(&s_dgn_cluster, 0u, s_dgn_cluster_seed);\n")
+            c.append("                ngpc_dungeongen_spawn();\n")
+            c.append("                (void)ngpng_dungeongen_spawn_runtime_enemies(cur_scene, sc, enemies, &enemy_active_count, &enemy_alloc_idx);\n")
+            c.append("            }\n")
+            c.append("            if (t->action == TRIG_ACT_DGN_GO_BACK) {\n")
+            c.append("                if (ngpc_cluster_has_back(&s_dgn_cluster)) {\n")
+            c.append("                    ngpc_cluster_go_back(&s_dgn_cluster, s_dgn_cluster_seed);\n")
+            c.append("                    ngpc_dungeongen_spawn();\n")
+            c.append("                    (void)ngpng_dungeongen_spawn_runtime_enemies(cur_scene, sc, enemies, &enemy_active_count, &enemy_alloc_idx);\n")
+            c.append("                }\n")
+            c.append("            }\n")
+            c.append("#endif\n")
         c.append("        }\n")
     c.append("        if (!scene_changed && requested_scene < (u8)NGP_SCENE_COUNT && requested_scene != cur_scene) {\n")
     if has_dialogues:
@@ -6007,21 +6523,48 @@ def write_autorun_main_c(
         c.append("            {\n")
         c.append("                s16 spawn_x;\n")
         c.append("                s16 spawn_y;\n")
-        c.append("                /* If returning to the scene that holds our checkpoint, spawn at\n")
-        c.append("                 * that region instead of the default.  warp_to requested_spawn\n")
-        c.append("                 * still takes priority when it is not 0xFF. */\n")
-        c.append("                ngpng_scene_runtime_place_spawn(sc,\n")
-        c.append("                    (checkpoint_scene == cur_scene) ? checkpoint_region : (u8)0xFFu,\n")
-        c.append("                    requested_spawn, &cam_px, &cam_py, &tx, &ty, &spawn_x, &spawn_y);\n")
+        if has_dungeongen:
+            c.append("                s16 dgn_entry_cell_w_px;\n")
+            c.append("                s16 dgn_entry_cell_h_px;\n")
+            c.append("                s16 dgn_entry_door_cx;\n")
+        c.append("                ngpng_scene_runtime_place_spawn(sc, 0xFFu, requested_spawn, &cam_px, &cam_py, &tx, &ty, &spawn_x, &spawn_y);\n")
         n = players[0]["name"]
         VAR = n.upper()
         c.append(f"                {VAR}_CTRL_INIT(s_{n}, spawn_x, spawn_y);\n")
         c.append(f"                s_{n}.flags = player_ent_flags;\n")
         c.append(f"                ngpng_player_clamp_world(sc, &s_{n}, cam_px, cam_py, player_body_x, player_body_y, player_body_w, player_body_h, player_render_off_x, player_render_off_y, player_frame_w, player_frame_h);\n")
+        if has_dungeongen:
+            c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+            c.append("                /* DungeonGen: entering from another scene must also generate room 0. */\n")
+            c.append("                if (sc->scene_flags & SCENE_FLAG_RUNTIME_DUNGEONGEN) {\n")
+            c.append("                    s_dgn_cluster_count = 0u;\n")
+            c.append("                    s_dgn_cluster_seed  = ngpc_dungeongen_room_seed(0u);\n")
+            c.append("                    ngpc_cluster_gen(&s_dgn_cluster, s_dgn_cluster_seed);\n")
+            c.append("                    ngpc_cluster_enter(&s_dgn_cluster, 0u, s_dgn_cluster_seed);\n")
+            c.append("                    ngpc_dungeongen_spawn();\n")
+            c.append("                    (void)ngpng_dungeongen_spawn_runtime_enemies(cur_scene, sc, enemies, &enemy_active_count, &enemy_alloc_idx);\n")
+            c.append("                    cam_px = 0; cam_py = 0; tx = 0u; ty = 0u;\n")
+            c.append("                    dgn_entry_cell_w_px = (s16)(DUNGEONGEN_CELL_W_TILES * 8u);\n")
+            c.append("                    dgn_entry_cell_h_px = (s16)(DUNGEONGEN_CELL_H_TILES * 8u);\n")
+            c.append("                    dgn_entry_door_cx = (s16)(((((s16)ngpc_dgroom.door_col_lo + (s16)ngpc_dgroom.door_col_hi) * dgn_entry_cell_w_px) / 2) + (dgn_entry_cell_w_px / 2));\n")
+            c.append(f"                    s_{n}.x = (s16)(dgn_entry_door_cx - ((s16)player_body_w / 2) - player_body_x);\n")
+            c.append(f"                    s_{n}.y = (s16)(dgn_entry_cell_h_px + ((dgn_entry_cell_h_px - (s16)player_body_h) / 2) - player_body_y);\n")
+            c.append(f"                    s_{n}.vx = 0; s_{n}.vy = 0;\n")
+            c.append("                    player_invul = 60u;\n")
+            c.append("                    ngpng_update_plane_scroll(sc, 0, 0);\n")
+            c.append("                }\n")
+            c.append("#endif\n")
         c.append(f"                s_{n}_visible = 0u;\n")
         c.append(f"                s_{n}_last_x = (s16)-32768;\n")
         c.append(f"                s_{n}_last_y = (s16)-32768;\n")
         c.append(f"                s_{n}_last_frame = 0xFFu;\n")
+        c.append(f"                s_{n}_last_flags = 0xFFu;\n")
+        if players[0].get("has_layer1"):
+            c.append(f"                s_{n}_l1_visible = 0u;\n")
+            c.append(f"                s_{n}_l1_last_x = (s16)-32768;\n")
+            c.append(f"                s_{n}_l1_last_y = (s16)-32768;\n")
+            c.append(f"                s_{n}_l1_last_frame = 0xFFu;\n")
+            c.append(f"                s_{n}_l1_last_flags = 0xFFu;\n")
         for p in players[1:]:
             n = p["name"]
             c.append(f"                s_{n} = s_{players[0]['name']};\n")
@@ -6029,6 +6572,13 @@ def write_autorun_main_c(
             c.append(f"                s_{n}_last_x = (s16)-32768;\n")
             c.append(f"                s_{n}_last_y = (s16)-32768;\n")
             c.append(f"                s_{n}_last_frame = 0xFFu;\n")
+            c.append(f"                s_{n}_last_flags = 0xFFu;\n")
+            if p.get("has_layer1"):
+                c.append(f"                s_{n}_l1_visible = 0u;\n")
+                c.append(f"                s_{n}_l1_last_x = (s16)-32768;\n")
+                c.append(f"                s_{n}_l1_last_y = (s16)-32768;\n")
+                c.append(f"                s_{n}_l1_last_frame = 0xFFu;\n")
+                c.append(f"                s_{n}_l1_last_flags = 0xFFu;\n")
         c.append("            }\n")
     c.append("#if NGPNG_AUTORUN_DEBUG_OVERLAY\n")
     c.append("            print_scene_line(cur_scene);\n")
@@ -6038,6 +6588,10 @@ def write_autorun_main_c(
     c.append("        if (!scene_changed) {\n")
     if has_triggers:
         c.append("            for (rj = 0; rj < reg_n; ++rj) s_reg_prev[rj] = in_reg[rj];\n")
+    if has_dungeongen:
+        c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
+        c.append("            if ((sc->scene_flags & SCENE_FLAG_RUNTIME_DUNGEONGEN) && !ngpng_dungeongen_scene_has_runtime_enemies(cur_scene)) ngpc_dungeongen_sync_sprites((u8)cam_px, (u8)cam_py);\n")
+        c.append("#endif /* NGPNG_HAS_DUNGEONGEN */\n")
     if has_enemy:
         c.append("            ngpng_enemies_draw(sc, enemies, cam_px, cam_py);\n")
     if has_prop_actor:

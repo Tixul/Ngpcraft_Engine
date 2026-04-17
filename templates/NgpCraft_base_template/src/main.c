@@ -42,6 +42,10 @@
 #include "../sound/sound_data.h"
 #include "../GraphX/intro_ngpc_craft_png.h"
 
+#ifdef NO_SYSFONT
+#include "ngpc_custom_font.h"
+#endif
+
 /* ---- Game states ---- */
 
 typedef enum {
@@ -79,7 +83,11 @@ static void black_init(void)
 {
     ngpc_gfx_set_viewport(0, 0, SCREEN_W, SCREEN_H);
     HW_SCR_PRIO = 0x00;
+#ifndef NO_SYSFONT
     ngpc_load_sysfont();
+#else
+    ngpc_custom_font_load();
+#endif
 
     ngpc_gfx_scroll(GFX_SCR1, 0, 0);
     ngpc_gfx_scroll(GFX_SCR2, 0, 0);
@@ -113,7 +121,11 @@ void main(void)
     GameState prev_state;
 
     ngpc_init();
+#ifndef NO_SYSFONT
     ngpc_load_sysfont();
+#else
+    ngpc_custom_font_load();
+#endif
     Sounds_Init();
 
     prev_state = STATE_BLACK; /* force init on first frame */

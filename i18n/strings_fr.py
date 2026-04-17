@@ -121,17 +121,34 @@ STRINGS_FR: dict[str, str] = {
     "tab.hitbox": "Sprite Setup",
     "tab.globals": "Globals",
     "tab.font":    "Police",
+    "font.format_label":   "Format PNG :",
+    "font.format_128x48":  "128 × 48  (16 col × 6 lignes)",
+    "font.format_256x24":  "256 × 24  (32 col × 3 lignes)",
     "font.spec_title": "Format PNG attendu",
-    "font.spec_body": (
-        "• 128 × 48 pixels (16 colonnes × 6 lignes)\n"
-        "• 96 tiles de 8×8 px — caractères ASCII 32 → 127  (espace → ~)\n"
-        "• Ordre de lecture : gauche→droite, haut→bas\n"
-        "• Tile (col 0, ligne 0) = ASCII 32 espace\n"
-        "• Tile (col 1, ligne 0) = ASCII 33  !\n"
-        "• Tile (col 0, ligne 1) = ASCII 48  0\n"
-        "• Max 3 couleurs visibles + transparent\n"
-        "• Noir pur (0,0,0) ou alpha < 128 = couleur transparente (index 0)\n"
-        "• Les slots VRAM 32–127 sont occupés — cocher « Désactiver sysfont » est obligatoire."
+    "font.spec_body_128x48": (
+        "• 128 × 48 pixels — 16 colonnes × 6 lignes de tiles 8×8 px\n"
+        "• 96 caractères ASCII 32→127, ordre gauche→droite puis haut→bas\n"
+        "• Max 3 couleurs visibles + transparent  |  Noir pur (0,0,0) ou alpha<128 = transparent\n"
+        "• Les slots VRAM 32–127 sont occupés — « Désactiver sysfont » est obligatoire\n"
+        "\n"
+        "Ordre attendu dans le PNG :\n"
+        "  Ligne 0 :   ! \" # $ % & ' ( ) * + , - . /\n"
+        "  Ligne 1 :  0 1 2 3 4 5 6 7 8 9 : ; < = > ?\n"
+        "  Ligne 2 :  @ A B C D E F G H I J K L M N O\n"
+        "  Ligne 3 :  P Q R S T U V W X Y Z [ \\ ] ^ _\n"
+        "  Ligne 4 :  ` a b c d e f g h i j k l m n o\n"
+        "  Ligne 5 :  p q r s t u v w x y z { | } ~"
+    ),
+    "font.spec_body_256x24": (
+        "• 256 × 24 pixels — 32 colonnes × 3 lignes de tiles 8×8 px\n"
+        "• 96 caractères ASCII 32→127, ordre gauche→droite puis haut→bas\n"
+        "• Max 3 couleurs visibles + transparent  |  Noir pur (0,0,0) ou alpha<128 = transparent\n"
+        "• Les slots VRAM 32–127 sont occupés — « Désactiver sysfont » est obligatoire\n"
+        "\n"
+        "Ordre attendu dans le PNG :\n"
+        "  Ligne 0 :   ! \" # $ % & ' ( ) * + , - . / 0 1 2 3 4 5 6 7 8 9 : ; < = > ?\n"
+        "  Ligne 1 :  @ A B C D E F G H I J K L M N O P Q R S T U V W X Y Z [ \\ ] ^ _\n"
+        "  Ligne 2 :  ` a b c d e f g h i j k l m n o p q r s t u v w x y z { | } ~"
     ),
     "font.preview_label":  "Aperçu (cliquer pour charger)",
     "font.bg_light":       "Fond clair",
@@ -442,12 +459,12 @@ STRINGS_FR: dict[str, str] = {
     "proj.no_sysfont":           "Désactiver la police système BIOS (libère les tiles 32–127)",
     "proj.no_sysfont_tt":        "Par défaut, le BIOS charge sa police intégrée dans les slots tiles 32–127 (96 tiles × 8 mots).\n\nCocher cette option supprime cet appel et libère ces 96 slots pour tes propres tiles ou une police custom.\n\n⚠ Les fonctions ngpc_text_* utilisent la sysfont. Si tu les utilises, ne pas cocher cette option.\nLes tiles 0–31 restent réservés système quelle que soit l'option.",
     "proj.custom_font_section":  "Police personnalisée",
-    "proj.custom_font":          "Police custom (PNG 128×48) :",
-    "proj.custom_font_tt":       "PNG tilesheet 128×48 px contenant 96 caractères ASCII (32–127) en ordre croissant.\nLa police est chargée au démarrage à la place de la sysfont BIOS.\nToutes les fonctions ngpc_text_* continuent de fonctionner sans modification.",
+    "proj.custom_font":          "Police custom :",
+    "proj.custom_font_tt":       "PNG tilesheet contenant 96 caractères ASCII (32–127).\nFormats acceptés : 128×48 px (16×6 tiles) ou 256×24 px (32×3 tiles).\nLa police est chargée au démarrage à la place de la sysfont BIOS.\nToutes les fonctions ngpc_text_* continuent de fonctionner sans modification.",
     "proj.custom_font_none":     "(aucune — sysfont BIOS)",
     "proj.custom_font_browse":   "Parcourir…",
     "proj.custom_font_clear_tt": "Retirer la police custom (revenir à la sysfont BIOS)",
-    "proj.custom_font_drop":     "Cliquer pour charger une police PNG 128×48…",
+    "proj.custom_font_drop":     "Cliquer pour charger un PNG de police (128×48 ou 256×24)…",
     "proj.scenes_title": "Scènes",
     "proj.new_scene": "Nouvelle…",
     "proj.rename_scene": "Renommer…",

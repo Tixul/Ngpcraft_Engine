@@ -94,6 +94,7 @@ _TOPICS_FR = [
     "Éditeur de niveau",
     "Triggers & Régions",
     "Banque de dialogues",
+    "Scene Map",
     "Templates de projet",
     "Physique & IA ennemis",
     "Top-Down vs Plateforme",
@@ -121,6 +122,7 @@ _TOPICS_EN = [
     "Level Editor",
     "Triggers & Regions",
     "Dialogue Bank",
+    "Scene Map",
     "Project Templates",
     "Physics & Enemy AI",
     "Top-Down vs Platformer",
@@ -682,7 +684,7 @@ Il contient les constantes <code>GAME_FLAG_x</code>, <code>GAME_VAR_x</code> et 
 <p>Ces options sont indépendantes — elles peuvent être combinées librement.</p>
 
 <h2>Police personnalisée (Custom Font)</h2>
-<p>Le champ <b>Police custom (PNG 128×48)</b> permet de remplacer la police système BIOS
+<p>Le champ <b>Police custom</b> permet de remplacer la police système BIOS
 par ta propre police 8×8.  Une fois un PNG sélectionné :</p>
 <ul>
   <li>L'option "Désactiver la police système BIOS" est cochée automatiquement.</li>
@@ -693,21 +695,32 @@ par ta propre police 8×8.  Une fois un PNG sélectionné :</p>
   <li>Toutes les fonctions <code>ngpc_text_*</code> continuent de fonctionner sans
       modification (même mapping ASCII → tile index).</li>
 </ul>
-<h3>Format PNG obligatoire</h3>
-<pre>Dimensions  : 128 × 48 pixels  (16 chars × 8 px / 6 lignes × 8 px)
-Tiles       : 96 au total  →  ASCII 32 (espace) … 127 (DEL)
-Couleurs    : 4 max (2bpp hardware)
-  index 0  : fond / transparent  (alpha = 0  OU  noir pur #000000)
-  index 1  : couleur texte principale
-  index 2-3: secondaire, tertiaire (ombre, contour…)  — optionnel
+<h3>Prévisualisation</h3>
+<p>La preview affiche le PNG avec une grille tile par tile et le caractère ASCII dans chaque case.
+Utilise les boutons <b>2× 3× 4× 6×</b> pour zoomer, et le bouton <b>Fond clair / sombre</b>
+pour basculer l'arrière-plan.</p>
+<h3>Formats PNG acceptés</h3>
+<p>Sélectionne le format dans le menu déroulant <b>Format PNG</b> avant de charger le fichier.</p>
+<pre><b>Format 128 × 48</b>  (16 colonnes × 6 lignes)
+Tiles       : 96 au total  →  ASCII 32 (espace) … 127 (~)
+Couleurs    : max 3 visibles + transparent
+  Noir pur (0,0,0) ou alpha &lt; 128 = transparent (index 0)
 
-Ordre des tiles (lecture gauche→droite, ligne par ligne) :
+Ordre des tiles :
   Ligne 0  ASCII  32– 47  :  espace ! " # $ % &amp; ' ( ) * + , - . /
   Ligne 1  ASCII  48– 63  :  0 1 2 3 4 5 6 7 8 9 : ; &lt; = &gt; ?
   Ligne 2  ASCII  64– 79  :  @ A B C D E F G H I J K L M N O
   Ligne 3  ASCII  80– 95  :  P Q R S T U V W X Y Z [ \ ] ^ _
   Ligne 4  ASCII  96–111  :  ` a b c d e f g h i j k l m n o
-  Ligne 5  ASCII 112–127  :  p q r s t u v w x y z { | } ~  [DEL]</pre>
+  Ligne 5  ASCII 112–127  :  p q r s t u v w x y z { | } ~</pre>
+<pre><b>Format 256 × 24</b>  (32 colonnes × 3 lignes)
+Tiles       : 96 au total  →  ASCII 32 (espace) … 127 (~)
+Couleurs    : mêmes règles que ci-dessus
+
+Ordre des tiles :
+  Ligne 0  ASCII  32– 63  :  espace ! " # $ % &amp; ' ( ) * + , - . / 0 1 2 3 4 5 6 7 8 9 : ; &lt; = &gt; ?
+  Ligne 1  ASCII  64– 95  :  @ A B C D E F G H I J K L M N O P Q R S T U V W X Y Z [ \ ] ^ _
+  Ligne 2  ASCII  96–127  :  ` a b c d e f g h i j k l m n o p q r s t u v w x y z { | } ~</pre>
 <p><b>Outil :</b> <code>tools/ngpc_font_export.py</code> — utilisable aussi en ligne de commande :<br>
 <code>python tools/ngpc_font_export.py font.png -o GraphX/ngpc_custom_font</code></p>
 
@@ -2187,7 +2200,7 @@ The file is only written when at least one constant is defined and <b>Export dir
 <p>These options are independent and can be freely combined.</p>
 
 <h2>Custom Font</h2>
-<p>The <b>Custom font (PNG 128×48)</b> field lets you replace the BIOS system font with
+<p>The <b>Custom font</b> field lets you replace the BIOS system font with
 your own 8×8 pixel font.  When a PNG is selected:</p>
 <ul>
   <li>"Disable BIOS system font" is checked automatically.</li>
@@ -2198,21 +2211,32 @@ your own 8×8 pixel font.  When a PNG is selected:</p>
   <li>All <code>ngpc_text_*</code> functions keep working unchanged
       (same ASCII → tile index mapping).</li>
 </ul>
-<h3>Required PNG format</h3>
-<pre>Dimensions : 128 × 48 pixels  (16 chars × 8 px / 6 rows × 8 px)
-Tiles      : 96 total  →  ASCII 32 (space) … 127 (DEL)
-Colors     : 4 max (2bpp hardware limit)
-  index 0  : background / transparent  (alpha = 0  OR  pure black #000000)
-  index 1  : primary text color
-  index 2-3: secondary / tertiary (shadow, outline…)  — optional
+<h3>Preview</h3>
+<p>The preview shows the PNG with a per-tile grid and the ASCII character in each cell.
+Use the <b>2× 3× 4× 6×</b> buttons to zoom, and the <b>Light / Dark bg</b> button
+to toggle the background.</p>
+<h3>Accepted PNG formats</h3>
+<p>Select the format from the <b>PNG format</b> dropdown before loading the file.</p>
+<pre><b>Format 128 × 48</b>  (16 columns × 6 rows)
+Tiles   : 96 total  →  ASCII 32 (space) … 127 (~)
+Colors  : max 3 visible + transparent
+  Pure black (0,0,0) or alpha &lt; 128 = transparent (index 0)
 
-Tile order (left to right, row by row):
+Tile order:
   Row 0  ASCII  32– 47  :  space ! " # $ % &amp; ' ( ) * + , - . /
   Row 1  ASCII  48– 63  :  0 1 2 3 4 5 6 7 8 9 : ; &lt; = &gt; ?
   Row 2  ASCII  64– 79  :  @ A B C D E F G H I J K L M N O
   Row 3  ASCII  80– 95  :  P Q R S T U V W X Y Z [ \ ] ^ _
   Row 4  ASCII  96–111  :  ` a b c d e f g h i j k l m n o
-  Row 5  ASCII 112–127  :  p q r s t u v w x y z { | } ~  [DEL]</pre>
+  Row 5  ASCII 112–127  :  p q r s t u v w x y z { | } ~</pre>
+<pre><b>Format 256 × 24</b>  (32 columns × 3 rows)
+Tiles   : 96 total  →  ASCII 32 (space) … 127 (~)
+Colors  : same rules as above
+
+Tile order:
+  Row 0  ASCII  32– 63  :  space ! " # $ % &amp; ' ( ) * + , - . / 0 1 2 3 4 5 6 7 8 9 : ; &lt; = &gt; ?
+  Row 1  ASCII  64– 95  :  @ A B C D E F G H I J K L M N O P Q R S T U V W X Y Z [ \ ] ^ _
+  Row 2  ASCII  96–127  :  ` a b c d e f g h i j k l m n o p q r s t u v w x y z { | } ~</pre>
 <p><b>Tool:</b> <code>tools/ngpc_font_export.py</code> — also usable from the command line:<br>
 <code>python tools/ngpc_font_export.py font.png -o GraphX/ngpc_custom_font</code></p>
 
@@ -8120,6 +8144,14 @@ static const u8    g_menu_shop_goto[]  = { DLG_BUY, DLG_SELL, 0xFF };
 
 // Quête terminée
 [flag_set FLAG_QUEST_DONE]        → set_npc_dialogue NPC_elder "dlg_thanks"</pre>
+
+<h2>Aperçu temps réel</h2>
+<p>Le widget d'aperçu (3×, 160×40 px) reflète le rendu NGPC :</p>
+<ul>
+  <li><b>Police bitmap</b> : si le projet a une police custom (<code>custom_font_png</code>), les glyphes 8×8 réels sont utilisés à la place de Courier. Les pixels sombres (R,G,B&lt;64) = encre, colorisés avec la palette active.</li>
+  <li><b>Plein écran</b> : cochez <b>Plein écran</b> pour voir la boîte dans son contexte 160×152 avec la zone gameplay sombre au-dessus.</li>
+  <li><b>Compteur de tiles par ligne</b> : sous le champ texte, <code>L1:12/18  L2:8/18</code> — 18 colonnes sans portrait, 15 avec. Un ⚠ signale le débordement.</li>
+</ul>
 """
 
 
@@ -8233,6 +8265,14 @@ static const u8    g_menu_shop_goto[]  = { DLG_BUY, DLG_SELL, 0xFF };
 
 // Quest complete
 [flag_set FLAG_QUEST_DONE]         → set_npc_dialogue NPC_elder "dlg_thanks"</pre>
+
+<h2>Real-time preview</h2>
+<p>The preview widget (3×, 160×40 px) reflects the NGPC output:</p>
+<ul>
+  <li><b>Bitmap font</b>: if the project has a custom font (<code>custom_font_png</code>), the actual 8×8 glyphs are used instead of Courier. Dark pixels (R,G,B&lt;64) = ink, tinted with the active palette.</li>
+  <li><b>Fullscreen</b>: check <b>Fullscreen</b> to see the box in its 160×152 context with the dark gameplay area above.</li>
+  <li><b>Per-line tile counter</b>: below the text field, <code>L1:12/18  L2:8/18</code> — 18 columns without portrait, 15 with. A ⚠ warns about overflow.</li>
+</ul>
 """
 
 
@@ -8396,6 +8436,390 @@ The other plane must stay ≤ 32×32 to be loaded statically with
 """
 
 
+def _fr_scene_map() -> str:
+    return """
+<h1>Scene Map</h1>
+
+<p>L'onglet <b>Scene Map</b> (groupe Project) affiche toutes les scènes du projet sous forme de cartes
+draggables sur un canvas infini. Les flèches sont tracées automatiquement depuis les triggers
+<code>goto_scene</code> / <code>warp_to</code>.</p>
+
+<h2>Navigation</h2>
+<ul>
+  <li><b>Zoom</b> : molette souris.</li>
+  <li><b>Déplacer le canvas</b> : clic-gauche + glisser sur fond vide.</li>
+  <li><b>Déplacer une carte</b> : clic-gauche + glisser sur la carte.</li>
+  <li><b>Ouvrir une scène</b> : double-clic sur la carte → ouvre dans l'onglet Level.</li>
+  <li><b>Fit All</b> : bouton toolbar, recentre la vue sur toutes les cartes.</li>
+  <li><b>Auto Layout</b> : bouton toolbar, réorganise les cartes en grille propre.</li>
+</ul>
+
+<h2>Cartes — informations affichées</h2>
+<table>
+  <tr><th>Élément</th><th>Signification</th></tr>
+  <tr><td>Titre</td><td>Nom de la scène</td></tr>
+  <tr><td>Sous-titre</td><td>Profil de jeu (Platformer, Shmup, RPG…)</td></tr>
+  <tr><td>Dimensions</td><td>Taille en tiles (ex. 40×19 tiles)</td></tr>
+  <tr><td>Miniature droite</td><td>Aperçu de la première tilemap assignée à la scène</td></tr>
+  <tr><td><span style="color:#4caf70">●</span> Vert</td><td>Scène complète : tilemap assignée + entité joueur placée</td></tr>
+  <tr><td><span style="color:#e0a020">●</span> Orange</td><td>Tilemap présente mais pas d'entité joueur placée</td></tr>
+  <tr><td><span style="color:#555566">●</span> Gris</td><td>Aucune tilemap assignée</td></tr>
+  <tr><td><code>⬡ N</code></td><td>Nombre d'entités placées dans la scène</td></tr>
+  <tr><td>Bande verte + badge "▶ START"</td><td>Scène de départ du jeu</td></tr>
+</table>
+
+<h2>Flèches de transition</h2>
+<p>Chaque flèche représente un trigger <code>goto_scene</code> ou <code>warp_to</code>.
+Cliquez sur une flèche pour voir ses détails dans la bande d'info en bas :</p>
+<pre>Source  →  Destination   [condition]</pre>
+<p>Survoler une carte met ses flèches en évidence et atténue les autres — utile sur un grand projet.</p>
+
+<h2>Menu clic-droit</h2>
+<table>
+  <tr><th>Action</th><th>Effet</th></tr>
+  <tr><td>Open scene</td><td>Ouvre la scène dans l'onglet Level</td></tr>
+  <tr><td>Rename…</td><td>Renommer la scène</td></tr>
+  <tr><td>Duplicate</td><td>Copie complète de la scène (nouveau ID)</td></tr>
+  <tr><td>Set as start scene</td><td>Définit cette scène comme point d'entrée du jeu</td></tr>
+  <tr><td>Delete scene…</td><td>Suppression (confirmation requise)</td></tr>
+</table>
+
+<h2>Filtre par genre</h2>
+<p>Le combo <b>Filter</b> dans la toolbar liste les profils présents.
+Sélectionner un profil masque les autres scènes et leurs flèches.
+Utile sur un projet avec 20+ scènes de types variés.</p>
+
+<h2>Export PNG</h2>
+<p>Le bouton <b>Export PNG</b> exporte la carte complète en image pour de la documentation
+ou un partage rapide.</p>
+"""
+
+
+def _en_scene_map() -> str:
+    return """
+<h1>Scene Map</h1>
+
+<p>The <b>Scene Map</b> tab (Project group) displays all project scenes as draggable cards
+on an infinite canvas. Arrows are drawn automatically from <code>goto_scene</code> /
+<code>warp_to</code> triggers.</p>
+
+<h2>Navigation</h2>
+<ul>
+  <li><b>Zoom</b>: mouse wheel.</li>
+  <li><b>Pan canvas</b>: left-click + drag on empty background.</li>
+  <li><b>Move card</b>: left-click + drag on a card.</li>
+  <li><b>Open scene</b>: double-click on a card → opens in the Level tab.</li>
+  <li><b>Fit All</b>: toolbar button, re-centers the view on all cards.</li>
+  <li><b>Auto Layout</b>: toolbar button, reorganises cards into a clean grid.</li>
+</ul>
+
+<h2>Cards — information displayed</h2>
+<table>
+  <tr><th>Element</th><th>Meaning</th></tr>
+  <tr><td>Title</td><td>Scene name</td></tr>
+  <tr><td>Subtitle</td><td>Game profile (Platformer, Shmup, RPG…)</td></tr>
+  <tr><td>Dimensions</td><td>Size in tiles (e.g. 40×19 tiles)</td></tr>
+  <tr><td>Right thumbnail</td><td>Preview of the first tilemap assigned to the scene</td></tr>
+  <tr><td><span style="color:#4caf70">●</span> Green</td><td>Complete scene: tilemap assigned + player entity placed</td></tr>
+  <tr><td><span style="color:#e0a020">●</span> Orange</td><td>Tilemap present but no player entity placed</td></tr>
+  <tr><td><span style="color:#555566">●</span> Grey</td><td>No tilemap assigned</td></tr>
+  <tr><td><code>⬡ N</code></td><td>Number of entities placed in the scene</td></tr>
+  <tr><td>Green stripe + "▶ START" badge</td><td>Game entry point</td></tr>
+</table>
+
+<h2>Transition arrows</h2>
+<p>Each arrow represents a <code>goto_scene</code> or <code>warp_to</code> trigger.
+Click an arrow to see its details in the info strip at the bottom:</p>
+<pre>Source  →  Destination   [condition]</pre>
+<p>Hovering over a card highlights its arrows and dims all others — helpful in large projects.</p>
+
+<h2>Right-click menu</h2>
+<table>
+  <tr><th>Action</th><th>Effect</th></tr>
+  <tr><td>Open scene</td><td>Opens the scene in the Level tab</td></tr>
+  <tr><td>Rename…</td><td>Rename the scene</td></tr>
+  <tr><td>Duplicate</td><td>Full copy of the scene (new ID)</td></tr>
+  <tr><td>Set as start scene</td><td>Sets this scene as the game entry point</td></tr>
+  <tr><td>Delete scene…</td><td>Deletion (confirmation required)</td></tr>
+</table>
+
+<h2>Genre filter</h2>
+<p>The <b>Filter</b> combo in the toolbar lists the profiles present in the project.
+Selecting a profile hides other scenes and their arrows.
+Useful in projects with 20+ scenes of mixed types.</p>
+
+<h2>Export PNG</h2>
+<p>The <b>Export PNG</b> button exports the full map as an image for documentation
+or quick sharing.</p>
+"""
+
+
+def _fr_scene_map_nav() -> str:
+    return """
+<h1>Scene Map — Navigation &amp; Actions (MAP-3 à MAP-10)</h1>
+
+<h2>MAP-3 — Highlight connexions au survol</h2>
+<p>Survoler une carte met en évidence ses flèches entrantes/sortantes (bleu clair) et atténue toutes les autres.
+Indispensable quand le projet dépasse une dizaine de scènes.</p>
+
+<h2>MAP-4 — Menu contextuel clic-droit</h2>
+<p>Clic-droit sur une carte → menu contextuel :</p>
+<table>
+  <tr><th>Action</th><th>Effet</th></tr>
+  <tr><td>Open scene</td><td>Équivalent double-clic — ouvre la scène dans l'onglet Level</td></tr>
+  <tr><td>Rename…</td><td>Dialogue de saisie — renomme la scène sur le canvas et dans les données</td></tr>
+  <tr><td>Duplicate</td><td>Copie profonde de la scène (nouveau UUID, label " (copy)"), ajoutée en fin de liste</td></tr>
+  <tr><td>Set as start scene</td><td>Définit cette scène comme point d'entrée du jeu</td></tr>
+  <tr><td>Delete scene…</td><td>Suppression avec confirmation — irréversible</td></tr>
+</table>
+
+<h2>MAP-5 — Indicateur START amélioré</h2>
+<p>La scène de départ est distinguée par :</p>
+<ul>
+  <li>Une <b>bande verte</b> en haut de la carte.</li>
+  <li>Un <b>badge pill "▶ START"</b> fond vert en bas-droite.</li>
+  <li>La bordure verte existante.</li>
+</ul>
+
+<h2>MAP-6 — Info strip au clic sur une flèche</h2>
+<p>Cliquer sur une flèche de transition affiche une bande d'information en bas de la vue :</p>
+<pre>Source  →  Destination   [condition]</pre>
+<p>Le type de transition (<code>goto_scene</code> ou <code>⤳ Warp</code>) est indiqué.
+Cliquez ✕ ou ailleurs pour masquer la bande.</p>
+<p><b>Astuce :</b> la zone de clic des flèches est élargie (12 px) pour faciliter la sélection.</p>
+
+<h2>MAP-7 — Filtre par genre</h2>
+<p>Le combo <b>Filter</b> dans la toolbar liste tous les profils présents dans le projet.
+Sélectionner un profil masque les autres scènes (et leurs flèches).
+"All profiles" restaure la vue complète.</p>
+
+<h2>MAP-8 — Export PNG</h2>
+<p>Le bouton <b>Export PNG</b> dans la toolbar ouvre un dialogue de sauvegarde et génère une image PNG de
+toute la Scene Map avec le fond sombre correct.</p>
+
+<h2>MAP-10 — Badge count entités</h2>
+<p>Un badge <code>⬡ N</code> dans le coin bas-droit de la zone texte indique le nombre d'entités placées
+dans la scène. N=0 → badge masqué.</p>
+"""
+
+
+def _en_scene_map_nav() -> str:
+    return """
+<h1>Scene Map — Navigation &amp; Actions (MAP-3 to MAP-10)</h1>
+
+<h2>MAP-3 — Hover connection highlight</h2>
+<p>Hovering over a card brightens its connected arrows (light blue) and dims all others.
+Essential when the project has more than ~10 scenes.</p>
+
+<h2>MAP-4 — Right-click context menu</h2>
+<p>Right-click on a card to open a context menu:</p>
+<table>
+  <tr><th>Action</th><th>Effect</th></tr>
+  <tr><td>Open scene</td><td>Same as double-click — opens the scene in the Level tab</td></tr>
+  <tr><td>Rename…</td><td>Text input dialog — renames the scene on the canvas and in data</td></tr>
+  <tr><td>Duplicate</td><td>Deep copy of the scene (new UUID, label " (copy)"), appended to the list</td></tr>
+  <tr><td>Set as start scene</td><td>Sets this scene as the game entry point</td></tr>
+  <tr><td>Delete scene…</td><td>Deletion with confirmation — irreversible</td></tr>
+</table>
+
+<h2>MAP-5 — Improved START indicator</h2>
+<p>The start scene is distinguished by:</p>
+<ul>
+  <li>A <b>green stripe</b> at the top of the card.</li>
+  <li>A <b>"▶ START" pill badge</b> in the bottom-right corner.</li>
+  <li>The existing green border.</li>
+</ul>
+
+<h2>MAP-6 — Arrow info strip</h2>
+<p>Clicking a transition arrow shows an info strip at the bottom of the view:</p>
+<pre>Source  →  Destination   [condition]</pre>
+<p>The transition type (<code>goto_scene</code> or <code>⤳ Warp</code>) is shown.
+Click ✕ or anywhere else to dismiss it.</p>
+<p><b>Tip:</b> the arrow click area is widened to 12 px for easier selection.</p>
+
+<h2>MAP-7 — Genre filter</h2>
+<p>The <b>Filter</b> combo in the toolbar lists all profiles present in the project.
+Selecting a profile hides other scenes (and their arrows).
+"All profiles" restores the full view.</p>
+
+<h2>MAP-8 — Export PNG</h2>
+<p>The <b>Export PNG</b> toolbar button opens a save dialog and exports the full
+Scene Map as a PNG image with the correct dark background.</p>
+
+<h2>MAP-10 — Entity count badge</h2>
+<p>A <code>⬡ N</code> badge in the bottom-right of the text area shows how many entities
+are placed in the scene. Hidden when N=0.</p>
+"""
+
+
+def _fr_scene_map_map12() -> str:
+    return """
+<h1>Scene Map — Miniatures &amp; Badges de statut (MAP-1/2)</h1>
+
+<p>L'onglet <b>Scene Map</b> affiche toutes les scènes du projet sous forme de cartes draggables
+reliées par des flèches (transitions <code>goto_scene</code> / <code>warp_to</code>).
+Deux améliorations ont été ajoutées : miniature tilemap (MAP-1) et badge de statut coloré (MAP-2).</p>
+
+<h2>MAP-1 — Miniature tilemap</h2>
+<p>La première tilemap assignée à chaque scène est chargée et affichée dans la zone droite de la carte
+(50×38 px, chargement paresseux au premier affichage). Le fond reste sombre si aucune tilemap
+n'est encore assignée.</p>
+<ul>
+  <li>Source : <code>scene["tilemaps"][0]["path"]</code> — chemin relatif au projet.</li>
+  <li>Aucun thread dédié : chargement au premier <code>paint()</code>, mis en cache ensuite.</li>
+  <li>Largeur de carte portée à 192 px (était 168) pour accueillir la miniature.</li>
+</ul>
+
+<h2>MAP-2 — Badge de statut</h2>
+<p>Un point coloré en haut-droite de chaque carte résume l'état de la scène :</p>
+<table>
+  <tr><th>Couleur</th><th>Signification</th></tr>
+  <tr><td><span style="color:#4caf70">●</span> Vert</td><td>Tilemap assignée + entité joueur placée (ou profil sans joueur)</td></tr>
+  <tr><td><span style="color:#e0a020">●</span> Orange</td><td>Tilemap présente mais aucune entité joueur placée</td></tr>
+  <tr><td><span style="color:#555566">●</span> Gris</td><td>Aucune tilemap assignée — scène vide</td></tr>
+</table>
+<p>Profils exemptés du check joueur (toujours vert si tilemap présente) :
+<code>menu</code>, <code>visual_novel</code>, <code>puzzle</code>, <code>race</code>.</p>
+<p>La détection joueur repose sur <code>sprites[].gameplay_role == "player"</code> et la présence
+d'une entité de ce type dans <code>entities[]</code>.</p>
+"""
+
+
+def _en_scene_map_map12() -> str:
+    return """
+<h1>Scene Map — Thumbnails &amp; Status Badges (MAP-1/2)</h1>
+
+<p>The <b>Scene Map</b> tab displays all project scenes as draggable cards connected by arrows
+(<code>goto_scene</code> / <code>warp_to</code> transitions).
+Two improvements were added: tilemap thumbnail (MAP-1) and colored status badge (MAP-2).</p>
+
+<h2>MAP-1 — Tilemap thumbnail</h2>
+<p>The first tilemap assigned to a scene is loaded and displayed in the right area of its card
+(50×38 px, lazy-loaded on first paint). The area stays dark if no tilemap has been assigned yet.</p>
+<ul>
+  <li>Source: <code>scene["tilemaps"][0]["path"]</code> — path relative to the project.</li>
+  <li>No dedicated thread: loaded on the first <code>paint()</code> call, cached thereafter.</li>
+  <li>Card width increased to 192 px (was 168) to fit the thumbnail.</li>
+</ul>
+
+<h2>MAP-2 — Status badge</h2>
+<p>A colored dot in the top-right corner of each card summarises the scene state:</p>
+<table>
+  <tr><th>Color</th><th>Meaning</th></tr>
+  <tr><td><span style="color:#4caf70">●</span> Green</td><td>Tilemap assigned + player entity placed (or profile needs no player)</td></tr>
+  <tr><td><span style="color:#e0a020">●</span> Orange</td><td>Tilemap present but no player entity placed</td></tr>
+  <tr><td><span style="color:#555566">●</span> Gray</td><td>No tilemap assigned — empty scene</td></tr>
+</table>
+<p>Profiles exempt from the player check (always green when tilemap present):
+<code>menu</code>, <code>visual_novel</code>, <code>puzzle</code>, <code>race</code>.</p>
+<p>Player detection uses <code>sprites[].gameplay_role == "player"</code> cross-referenced with
+entities placed in <code>entities[]</code>.</p>
+"""
+
+
+def _fr_dialogue_preview() -> str:
+    return """
+<h1>Aperçu Dialogue — Police bitmap &amp; plein écran (DLG-1/2/3)</h1>
+
+<p>Trois améliorations ont été apportées à l'onglet <b>Dialogues</b> pour rendre l'aperçu fidèle
+au rendu NGPC réel : police bitmap custom (DLG-1), mode plein écran (DLG-2), compteur de tiles
+par ligne (DLG-3).</p>
+
+<h2>DLG-1 — Police bitmap custom</h2>
+<p>Si la scène utilise une <b>police custom</b> (<code>custom_font_png</code> dans les données projet),
+l'aperçu charge chaque glyphe (ASCII 32–127) depuis l'image PNG et les affiche en tiles 8×8,
+exactement comme le hardware le ferait.</p>
+<table>
+  <tr><th>Paramètre</th><th>Valeur attendue</th></tr>
+  <tr><td><code>custom_font_png</code></td><td>Chemin vers le PNG de police (128×48 ou 256×24)</td></tr>
+  <tr><td><code>font_format</code></td><td><code>"8x8"</code> (défaut) — 16 glyphes/ligne × 6 lignes</td></tr>
+  <tr><td>Couleur encre</td><td>Pixels avec R&lt;64, G&lt;64, B&lt;64 = encre → rendu blanc puis colorisé</td></tr>
+  <tr><td>Colorisation</td><td>QPainter <code>SourceIn</code> avec la couleur de palette active</td></tr>
+</table>
+<p>Si aucune police custom n'est définie, l'aperçu utilise la police système Courier comme avant.</p>
+
+<h2>DLG-2 — Mode plein écran (160×152)</h2>
+<p>La case à cocher <b>Plein écran</b> agrandit le widget d'aperçu de 160×40 à 160×152 (facteur 3×).
+La zone sombre au-dessus représente le gameplay visible pendant le dialogue.</p>
+<ul>
+  <li>La boîte de dialogue reste en bas (offset <code>by = fh - bh</code>).</li>
+  <li>La zone gameplay est affichée avec un fond foncé uniforme (simulation).</li>
+  <li>Le mode est mémorisé par scène (clé <code>dlg_preview_fullscreen</code>).</li>
+</ul>
+
+<h2>DLG-3 — Compteur de tiles par ligne</h2>
+<p>Le champ <b>Texte</b> affiche en temps réel le nombre de tiles utilisés sur chaque ligne,
+avec un avertissement si une ligne dépasse la largeur de la boîte.</p>
+<table>
+  <tr><th>Format</th><th>Exemple</th></tr>
+  <tr><td>Normal</td><td><code>L1:12/18  L2:8/18</code></td></tr>
+  <tr><td>Dépassement</td><td><code>L1:20/18 ⚠  L2:8/18</code></td></tr>
+</table>
+<p>La largeur max est <b>18 colonnes</b> sans portrait, <b>15 colonnes</b> avec portrait actif.
+Le calcul tient compte du word-wrap — il ne coupe pas les mots.</p>
+
+<h2>Police custom — format PNG</h2>
+<p>Préparez votre police dans un éditeur d'images (Aseprite, GIMP, etc.) :</p>
+<ul>
+  <li>Format <code>128×48</code> : 16 glyphes par ligne, 6 lignes (ASCII 32–127 dans l'ordre).</li>
+  <li>Chaque glyphe = 8×8 pixels. Pixels sombres (R,G,B &lt; 64) = encre.</li>
+  <li>Pixels clairs = transparent (background).</li>
+  <li>Sauvegardez le chemin dans <code>custom_font_png</code> via l'onglet Police/Projet.</li>
+</ul>
+"""
+
+
+def _en_dialogue_preview() -> str:
+    return """
+<h1>Dialogue Preview — Bitmap Font &amp; Fullscreen (DLG-1/2/3)</h1>
+
+<p>Three improvements were added to the <b>Dialogues</b> tab to make the preview match the actual
+NGPC hardware output: custom bitmap font (DLG-1), fullscreen mode (DLG-2), per-line tile counter (DLG-3).</p>
+
+<h2>DLG-1 — Custom bitmap font</h2>
+<p>If the scene uses a <b>custom font</b> (<code>custom_font_png</code> in the project data),
+the preview loads each glyph (ASCII 32–127) from the PNG and renders them as 8×8 tiles,
+exactly as the hardware would.</p>
+<table>
+  <tr><th>Parameter</th><th>Expected value</th></tr>
+  <tr><td><code>custom_font_png</code></td><td>Path to the font PNG (128×48 or 256×24)</td></tr>
+  <tr><td><code>font_format</code></td><td><code>"8x8"</code> (default) — 16 glyphs/row × 6 rows</td></tr>
+  <tr><td>Ink color</td><td>Pixels with R&lt;64, G&lt;64, B&lt;64 = ink → rendered white then tinted</td></tr>
+  <tr><td>Colorization</td><td>QPainter <code>SourceIn</code> with the active palette color</td></tr>
+</table>
+<p>If no custom font is defined, the preview falls back to the system Courier font as before.</p>
+
+<h2>DLG-2 — Fullscreen mode (160×152)</h2>
+<p>The <b>Fullscreen</b> checkbox expands the preview widget from 160×40 to 160×152 (3× scale).
+The dark area above represents the visible gameplay during dialogue.</p>
+<ul>
+  <li>The dialogue box stays at the bottom (offset <code>by = fh - bh</code>).</li>
+  <li>The gameplay area is shown as a uniform dark background (simulation).</li>
+  <li>The mode is saved per scene (key <code>dlg_preview_fullscreen</code>).</li>
+</ul>
+
+<h2>DLG-3 — Per-line tile counter</h2>
+<p>The <b>Text</b> field shows in real time how many tiles are used on each line,
+with a warning if a line exceeds the box width.</p>
+<table>
+  <tr><th>Format</th><th>Example</th></tr>
+  <tr><td>Normal</td><td><code>L1:12/18  L2:8/18</code></td></tr>
+  <tr><td>Overflow</td><td><code>L1:20/18 ⚠  L2:8/18</code></td></tr>
+</table>
+<p>Max width is <b>18 columns</b> without portrait, <b>15 columns</b> with portrait active.
+The count respects word-wrap — words are never split mid-character.</p>
+
+<h2>Custom font — PNG format</h2>
+<p>Prepare your font in an image editor (Aseprite, GIMP, etc.):</p>
+<ul>
+  <li>Format <code>128×48</code>: 16 glyphs per row, 6 rows (ASCII 32–127 in order).</li>
+  <li>Each glyph = 8×8 pixels. Dark pixels (R,G,B &lt; 64) = ink.</li>
+  <li>Light pixels = transparent (background).</li>
+  <li>Save the path to <code>custom_font_png</code> via the Font/Project tab.</li>
+</ul>
+"""
+
+
 # ---------------------------------------------------------------------------
 # Topic dispatch
 # ---------------------------------------------------------------------------
@@ -8419,6 +8843,7 @@ _FR_TOPICS = [
     _fr_level_editor,
     _fr_triggers,
     _fr_dialogues,
+    _fr_scene_map,
     _fr_project_templates,
     _fr_physics_ai_runtime_v2,
     _fr_topdown_vs_platform,
@@ -8446,6 +8871,7 @@ _EN_TOPICS = [
     _en_level_editor,
     _en_triggers,
     _en_dialogues,
+    _en_scene_map,
     _en_project_templates,
     _en_physics_ai_runtime_v2,
     _en_topdown_vs_platform,

@@ -54,7 +54,10 @@ void ngpng_apply_camera_constraints(const NgpSceneDef *sc, s16 *cam_px, s16 *cam
     s16 map_px_h = (s16)(sc->map_h * 8u);
     if (sc->loop_x) *cam_px = ngpng_wrap_axis(*cam_px, map_px_w);
     if (sc->loop_y) *cam_py = ngpng_wrap_axis(*cam_py, map_px_h);
-    if (sc->cam_clamp) {
+    /* DungeonGen: cam_max_x/y are 0 (room size unknown at scene compile time).
+     * The DungeonGen camera code clamps dynamically via scroll_max_x/y in the
+     * generated update loop — skip the static clamp here to avoid resetting to 0. */
+    if (sc->cam_clamp && !(sc->scene_flags & SCENE_FLAG_RUNTIME_DUNGEONGEN)) {
         s16 min_x = (s16)sc->cam_min_x;
         s16 min_y = (s16)sc->cam_min_y;
         s16 max_x = (s16)sc->cam_max_x;

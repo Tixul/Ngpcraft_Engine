@@ -50,6 +50,7 @@ from core.scene_collision import fit_collision_grid, scene_with_export_collision
 from core.sprite_export_pipeline import export_sprite_pipeline
 from core.sprite_loader import load_sprite
 from core.export_validation import collect_export_pipeline_issues
+from core.template_integration import _sync_validated_sprite_runtime
 
 
 # ---------------------------------------------------------------------------
@@ -865,6 +866,12 @@ def export_project(
     export_dir_rel = str(data.get("export_dir") or "").strip()
     export_dir_abs = (base_dir / export_dir_rel) if export_dir_rel else None
 
+    try:
+        _sync_validated_sprite_runtime(base_dir)
+        log(f"Runtime  : synced {base_dir / 'src/ngpng/ngpng_player_runtime.c'}")
+    except Exception as e:
+        log(f"WARN  cannot sync validated runtime files: {e}")
+
     # Auto-discover tools when not explicitly provided
     if sprite_script is None:
         sprite_script  = _find_tool_near("ngpc_sprite_export.py", base_dir)
@@ -932,6 +939,29 @@ def export_project(
 
     log("=" * 50)
     total.print_summary()
+
+    # Custom font export (no_sysfont=true + custom_font_png set)
+    _no_sysfont = bool(data.get("no_sysfont"))
+    if export_dir_abs and _no_sysfont:
+        _custom_font_png = str(data.get("custom_font_png") or "").strip()
+        if _custom_font_png:
+            _font_script = _find_tool_near("ngpc_font_export.py", base_dir)
+            if _font_script:
+                _font_out = str(export_dir_abs / "ngpc_custom_font")
+                import subprocess as _sp
+                _fr = _sp.run(
+                    [sys.executable, str(_font_script), _custom_font_png, "-o", _font_out, "-n", "ngpc_custom_font"],
+                    capture_output=True, text=True,
+                )
+                if _fr.returncode == 0:
+                    log(f"CustomFont: {_font_out}.c + .h")
+                else:
+                    log(f"WARN  custom font export failed: {_fr.stderr.strip()}")
+            else:
+                log("WARN  ngpc_font_export.py not found — custom font not exported")
+        else:
+            log("WARN  no_sysfont=true but custom_font_png is empty")
+
     if export_dir_abs:
         try:
             sh, sc, skipped = write_scenes_autogen(project_data=data, export_dir=export_dir_abs)
@@ -943,7 +973,7 @@ def export_project(
             log(f"WARN  cannot write scenes_autogen.c/h: {e}")
         try:
             _has_save = project_has_save_triggers(data)
-            mk_path = write_assets_autogen_mk(base_dir, export_dir_abs, has_save=_has_save)
+            mk_path = write_assets_autogen_mk(base_dir, export_dir_abs, has_save=_has_save, no_sysfont=_no_sysfont)
             log(f"Makefile : {mk_path}")
         except Exception as e:
             log(f"WARN  cannot write assets_autogen.mk: {e}")
@@ -972,7 +1002,11 @@ def export_project(
         except Exception as e:
             log(f"WARN  cannot write item_table.h: {e}")
         try:
-            from core.procgen_config_gen import write_procgen_config_h, write_cavegen_config_h
+            from core.procgen_config_gen import (
+                write_procgen_config_h,
+                write_cavegen_config_h,
+                write_dungeongen_config_h,
+            )
             for sc in (data.get("scenes") or []):
                 if sc.get("rt_dfs_params"):
                     dfs_h = write_procgen_config_h(scene=sc, export_dir=export_dir_abs)
@@ -980,8 +1014,106 @@ def export_project(
                 if sc.get("rt_cave_params"):
                     cave_h = write_cavegen_config_h(scene=sc, export_dir=export_dir_abs, project_data=data)
                     log(f"ProcgenCave: {cave_h}")
+                if sc.get("rt_dungeongen_params"):
+                    dgen_h = write_dungeongen_config_h(
+                        scene=sc,
+                        export_dir=export_dir_abs,
+                        project_data=data,
+                    )
+                    log(f"ProcgenDungeonGen: {dgen_h}")
         except Exception as e:
             log(f"WARN  cannot write procgen_config.h: {e}")
+    # Optional: DungeonGen procgen assets (tiles + sprites)
+    try:
+        pa = (data.get("procgen_assets") or {}) if isinstance(data, dict) else {}
+        dgen_pa = pa.get("dungeongen", {}) or {}
+        if dgen_pa and export_dir_abs:
+            gen_dir = export_dir_abs
+            png_rel = str(dgen_pa.get("tileset_png", "") or "").strip()
+            tile_roles = dgen_pa.get("tile_roles", {}) or {}
+            if png_rel and tile_roles:
+                from core.dungeongen_tiles_export import export_tiles_procgen
+                from core.dungeongen_cells import (
+                    normalize_dungeongen_runtime_cells,
+                    parse_dungeongen_cell_size,
+                )
+                cell_cfg = str(dgen_pa.get("cell_size", "16x16") or "16x16")
+                cw, ch = parse_dungeongen_cell_size(cell_cfg)
+                # cell_size is a project-level setting — source and runtime are identical.
+                # Scene-level cell_w/h_tiles are read-only mirrors of this value.
+                rt_cw, rt_ch = cw, ch
+                # Warn on stale per-scene values that diverge from the project setting.
+                for _sc in (data.get("scenes") or []):
+                    _rtdg = (_sc.get("rt_dungeongen_params") or {}) if isinstance(_sc, dict) else {}
+                    if not _rtdg.get("enabled"):
+                        continue
+                    _sc_cw = int(_rtdg.get("cell_w_tiles", cw) or cw)
+                    _sc_ch = int(_rtdg.get("cell_h_tiles", ch) or ch)
+                    if _sc_cw != cw or _sc_ch != ch:
+                        _sc_name = _sc.get("name", "?") if isinstance(_sc, dict) else "?"
+                        log(
+                            f"WARN  DungeonGen: scène '{_sc_name}' a cell_w_tiles={_sc_cw}/"
+                            f"cell_h_tiles={_sc_ch} mais le projet est configuré en {cell_cfg} "
+                            f"({cw}×{ch}). La valeur projet est utilisée — re-sauvegarder la scène."
+                        )
+                if base_dir and png_rel:
+                    png_path = Path(png_rel) if Path(png_rel).is_absolute() else base_dir / png_rel
+                    if png_path.exists():
+                        role_dict: dict[str, list[int]] = {}
+                        for k, v in tile_roles.items():
+                            if isinstance(v, list):
+                                role_dict[k] = [int(x) for x in v]
+                            elif isinstance(v, int):
+                                role_dict[k] = [v]
+                        rt_cw, rt_ch, _cell_reason = normalize_dungeongen_runtime_cells(
+                            source_cell_w_tiles=cw,
+                            source_cell_h_tiles=ch,
+                            requested_cell_w_tiles=rt_cw,
+                            requested_cell_h_tiles=rt_ch,
+                            tile_roles=role_dict,
+                        )
+                        _tileset_mode = str(dgen_pa.get("tileset_mode", "full") or "full")
+                        tc, th = export_tiles_procgen(
+                            png_path=png_path,
+                            cell_w_tiles=cw,
+                            cell_h_tiles=ch,
+                            tile_roles=role_dict,
+                            out_dir=gen_dir,
+                            rt_cell_w_tiles=rt_cw,
+                            rt_cell_h_tiles=rt_ch,
+                            compact_mode=(_tileset_mode == "compact"),
+                        )
+                        log(f"DungeonTiles: {tc}, {th}")
+            enemy_pool = dgen_pa.get("enemy_pool", []) or []
+            item_pool  = dgen_pa.get("item_pool",  []) or []
+            if not enemy_pool and not item_pool:
+                for _sc in (data.get("scenes") or []):
+                    _rtdg = (_sc.get("rt_dungeongen_params") or {}) if isinstance(_sc, dict) else {}
+                    if not _rtdg.get("enabled"):
+                        continue
+                    _enemy_pool = _rtdg.get("enemy_pool", []) or []
+                    _item_pool  = _rtdg.get("item_pool",  []) or []
+                    if _enemy_pool or _item_pool:
+                        enemy_pool = _enemy_pool
+                        item_pool  = _item_pool
+                        _sc_name = _sc.get("name", "?") if isinstance(_sc, dict) else "?"
+                        log(
+                            f"WARN  DungeonSprites: procgen_assets pool vide — "
+                            f"utilisation du pool runtime de la scène '{_sc_name}'."
+                        )
+                        break
+            from core.dungeongen_sprites_export import export_sprites_lab
+            et = (data.get("entity_templates", []) or []) + (data.get("entity_types", []) or [])
+            _sc2, _sh2 = export_sprites_lab(
+                enemy_pool=enemy_pool,
+                item_pool=item_pool,
+                entity_types=[e for e in et if isinstance(e, dict)],
+                base_dir=base_dir,
+                out_dir=gen_dir,
+            )
+            log(f"DungeonSprites: {_sc2}, {_sh2}")
+    except Exception as e:
+        log(f"WARN  cannot write dungeongen procgen assets: {e}")
     # Optional: write Sound Creator exports Makefile include (AUD-4)
     try:
         audio = data.get("audio", {}) if isinstance(data, dict) else {}
@@ -1020,4 +1152,24 @@ def export_project(
                     log("Audio MK : skipped (template-managed audio in sound/new/)")
     except Exception as e:
         log(f"WARN  cannot write audio_autogen.mk: {e}")
+    try:
+        regen_script = Path(__file__).resolve().parent.parent / "regen_autorun.py"
+        if regen_script.exists():
+            regen = subprocess.run(
+                _python_cmd(regen_script) + [str(project_path)],
+                cwd=str(regen_script.parent),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if regen.returncode == 0:
+                for _line in (regen.stdout or "").splitlines():
+                    _line = _line.strip()
+                    if _line:
+                        log(f"Autorun : {_line}")
+            else:
+                _msg = (regen.stderr or regen.stdout or "").strip()
+                log(f"WARN  cannot regenerate autorun_main: {_msg or f'code {regen.returncode}'}")
+    except Exception as e:
+        log(f"WARN  cannot regenerate autorun_main: {e}")
     return 0 if total.success else 1

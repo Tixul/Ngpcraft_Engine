@@ -122,17 +122,34 @@ STRINGS_EN: dict[str, str] = {
     "tab.level": "Level",
     "tab.globals": "Globals",
     "tab.font":    "Font",
+    "font.format_label":   "PNG format:",
+    "font.format_128x48":  "128 × 48  (16 col × 6 rows)",
+    "font.format_256x24":  "256 × 24  (32 col × 3 rows)",
     "font.spec_title": "Expected PNG format",
-    "font.spec_body": (
-        "• 128 × 48 pixels (16 columns × 6 rows)\n"
-        "• 96 tiles of 8×8 px — ASCII characters 32 → 127  (space → ~)\n"
-        "• Reading order: left→right, top→bottom\n"
-        "• Tile (col 0, row 0) = ASCII 32 space\n"
-        "• Tile (col 1, row 0) = ASCII 33  !\n"
-        "• Tile (col 0, row 1) = ASCII 48  0\n"
-        "• Max 3 visible colours + transparent\n"
-        "• Pure black (0,0,0) or alpha < 128 = transparent (colour index 0)\n"
-        "• VRAM slots 32–127 will be used — enabling 'Disable sysfont' is required."
+    "font.spec_body_128x48": (
+        "• 128 × 48 pixels — 16 columns × 6 rows of 8×8 px tiles\n"
+        "• 96 ASCII characters 32→127, order: left→right then top→bottom\n"
+        "• Max 3 visible colours + transparent  |  Pure black (0,0,0) or alpha<128 = transparent\n"
+        "• VRAM slots 32–127 will be used — 'Disable sysfont' is required\n"
+        "\n"
+        "Expected order in the PNG:\n"
+        "  Row 0:   ! \" # $ % & ' ( ) * + , - . /\n"
+        "  Row 1:  0 1 2 3 4 5 6 7 8 9 : ; < = > ?\n"
+        "  Row 2:  @ A B C D E F G H I J K L M N O\n"
+        "  Row 3:  P Q R S T U V W X Y Z [ \\ ] ^ _\n"
+        "  Row 4:  ` a b c d e f g h i j k l m n o\n"
+        "  Row 5:  p q r s t u v w x y z { | } ~"
+    ),
+    "font.spec_body_256x24": (
+        "• 256 × 24 pixels — 32 columns × 3 rows of 8×8 px tiles\n"
+        "• 96 ASCII characters 32→127, order: left→right then top→bottom\n"
+        "• Max 3 visible colours + transparent  |  Pure black (0,0,0) or alpha<128 = transparent\n"
+        "• VRAM slots 32–127 will be used — 'Disable sysfont' is required\n"
+        "\n"
+        "Expected order in the PNG:\n"
+        "  Row 0:   ! \" # $ % & ' ( ) * + , - . / 0 1 2 3 4 5 6 7 8 9 : ; < = > ?\n"
+        "  Row 1:  @ A B C D E F G H I J K L M N O P Q R S T U V W X Y Z [ \\ ] ^ _\n"
+        "  Row 2:  ` a b c d e f g h i j k l m n o p q r s t u v w x y z { | } ~"
     ),
     "font.preview_label":  "Preview (click to load)",
     "font.bg_light":       "Light bg",
@@ -443,12 +460,12 @@ STRINGS_EN: dict[str, str] = {
     "proj.no_sysfont":           "Disable BIOS system font (frees tiles 32–127)",
     "proj.no_sysfont_tt":        "By default, the BIOS loads its built-in font into tile slots 32–127 (96 tiles × 8 words).\n\nChecking this option skips that call and frees those 96 slots for your own tiles or a custom font.\n\n⚠ The ngpc_text_* functions rely on the system font. If you use them, do not check this option.\nTile slots 0–31 remain reserved by the system regardless of this setting.",
     "proj.custom_font_section":  "Custom Font",
-    "proj.custom_font":          "Custom font (PNG 128×48):",
-    "proj.custom_font_tt":       "128×48 px PNG tilesheet containing 96 ASCII characters (32–127) in ascending order.\nThe font is loaded at startup instead of the BIOS system font.\nAll ngpc_text_* functions continue to work without any changes.",
+    "proj.custom_font":          "Custom font:",
+    "proj.custom_font_tt":       "PNG tilesheet containing 96 ASCII characters (32–127).\nAccepted formats: 128×48 px (16×6 tiles) or 256×24 px (32×3 tiles).\nThe font is loaded at startup instead of the BIOS system font.\nAll ngpc_text_* functions continue to work without any changes.",
     "proj.custom_font_none":     "(none — BIOS system font)",
     "proj.custom_font_browse":   "Browse…",
     "proj.custom_font_clear_tt": "Remove the custom font (revert to BIOS system font)",
-    "proj.custom_font_drop":     "Click to load a 128×48 PNG font…",
+    "proj.custom_font_drop":     "Click to load a font PNG (128×48 or 256×24)…",
     "proj.scenes_title": "Scenes",
     "proj.new_scene": "New…",
     "proj.rename_scene": "Rename…",
