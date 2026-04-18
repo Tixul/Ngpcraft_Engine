@@ -1256,7 +1256,28 @@ static void ngpng_enemy_apply_topdown_behavior(
 
 static void ngpng_enemy_resolve_topdown_block(const NgpSceneDef *sc, NgpngEnemy *e, u8 seed)
 {
-    if (!sc || !e || !sc->tilecol) return;
+    if (!sc || !e) return;
+#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)
+    if (!sc->tilecol) {
+        /* Dungeongen: no static tilecol — use dynamic dungeon collision. */
+        extern u8 ngpc_dungeongen_world_rect_hits_solid(s16 x0, s16 y0, s16 x1, s16 y1);
+        s16 _bx0 = (s16)(e->world_x + (s16)e->body_x);
+        s16 _by0 = (s16)(e->world_y + (s16)e->body_y);
+        s16 _bx1 = (s16)(_bx0 + (s16)e->body_w - 1);
+        s16 _by1 = (s16)(_by0 + (s16)e->body_h - 1);
+        if (ngpc_dungeongen_world_rect_hits_solid(_bx0, _by0, _bx1, _by1)) {
+            e->world_x = (s16)(e->world_x - (s16)e->vx);
+            e->world_y = (s16)(e->world_y - (s16)e->vy);
+            if (e->behavior == (u8)NGPNG_BEHAVIOR_PATROL)
+                ngpng_enemy_pick_patrol_topdown_dir(e, (u8)(seed + 7u));
+            else if (e->behavior == (u8)NGPNG_BEHAVIOR_RANDOM)
+                ngpng_enemy_pick_topdown_dir(e, (u8)(seed + 13u));
+            else { e->vx = 0; e->vy = 0; }
+        }
+        return;
+    }
+#endif
+    if (!sc->tilecol) return;
 
     if (e->vx > 0) {
         s16 probe_x = (s16)(e->world_x + e->body_x + ((e->body_w > 0u) ? (e->body_w - 1u) : 0u));
