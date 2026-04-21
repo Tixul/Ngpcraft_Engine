@@ -2112,7 +2112,10 @@ STRINGS_EN: dict[str, str] = {
     "level.path_points": "Points:",
     "level.path_point_add": "+ Point",
     "level.path_point_del": "- Point",
-    "level.path_hint": "Tip: enable Edit paths, then click on the grid to place points. Points use pixel coordinates. Arrows = 1 px, Shift+Arrows = 8 px. Then assign that path to an entity or open it from the Entity tab.",
+    "level.path_point_x": "X:",
+    "level.path_point_y": "Y:",
+    "level.path_point_coord_tt": "Selected point coordinate in pixels. Direct input allowed; clamped to map size.",
+    "level.path_hint": "Tip: enable Edit paths, then click on the grid to place points. Points use pixel coordinates. Arrows = 1 px, Shift+Arrows = 8 px. Direct input via the X / Y fields. Then assign that path to an entity or open it from the Entity tab.",
     "level.path_loop_tag": " [loop]",
     "level.path_list_item": "{name}  ({n} pts · {assigned} ent.){loop}",
 

@@ -1625,7 +1625,10 @@ STRINGS_FR: dict[str, str] = {
     "level.path_points": "Points :",
     "level.path_point_add": "+ Point",
     "level.path_point_del": "- Point",
-    "level.path_hint": "Astuce : activez Éditer chemins puis cliquez sur la grille pour poser les points. Les points sont en coordonnées pixel. Flèches = 1 px, Shift+Flèches = 8 px. Ensuite, assignez ce chemin à une entité ou ouvrez-le depuis l'onglet Entité.",
+    "level.path_point_x": "X :",
+    "level.path_point_y": "Y :",
+    "level.path_point_coord_tt": "Coordonnée du point sélectionné en pixels. Saisie directe possible ; bornée à la taille de la map.",
+    "level.path_hint": "Astuce : activez Éditer chemins puis cliquez sur la grille pour poser les points. Les points sont en coordonnées pixel. Flèches = 1 px, Shift+Flèches = 8 px. Saisie directe des coordonnées via les champs X / Y. Ensuite, assignez ce chemin à une entité ou ouvrez-le depuis l'onglet Entité.",
     "level.path_loop_tag": " [boucle]",
     "level.path_list_item": "{name}  ({n} pts · {assigned} ent.){loop}",
 

@@ -5615,6 +5615,25 @@ class LevelTab(QWidget):
         pt_ctrl.addStretch()
         ppv.addLayout(pt_ctrl)
 
+        coord_row = QHBoxLayout()
+        coord_row.addWidget(QLabel(tr("level.path_point_x")))
+        self._spn_path_pt_x = QSpinBox()
+        self._spn_path_pt_x.setRange(0, 32767)
+        self._spn_path_pt_x.setSuffix(" px")
+        self._spn_path_pt_x.setToolTip(tr("level.path_point_coord_tt"))
+        self._spn_path_pt_x.valueChanged.connect(self._on_path_point_coord_changed)
+        coord_row.addWidget(self._spn_path_pt_x)
+        coord_row.addSpacing(8)
+        coord_row.addWidget(QLabel(tr("level.path_point_y")))
+        self._spn_path_pt_y = QSpinBox()
+        self._spn_path_pt_y.setRange(0, 32767)
+        self._spn_path_pt_y.setSuffix(" px")
+        self._spn_path_pt_y.setToolTip(tr("level.path_point_coord_tt"))
+        self._spn_path_pt_y.valueChanged.connect(self._on_path_point_coord_changed)
+        coord_row.addWidget(self._spn_path_pt_y)
+        coord_row.addStretch()
+        ppv.addLayout(coord_row)
+
         hint = QLabel(tr("level.path_hint"))
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #aaa; font-size: 10px;")
@@ -18084,6 +18103,7 @@ class LevelTab(QWidget):
         for w in (
             self._edit_path_name, self._chk_path_loop, self._spn_path_speed,
             self._path_point_list, self._btn_path_pt_add, self._btn_path_pt_del,
+            self._spn_path_pt_x, self._spn_path_pt_y,
         ):
             try:
                 w.setEnabled(bool(enabled))
@@ -18121,6 +18141,7 @@ class LevelTab(QWidget):
     def _refresh_path_points(self, *, no_list_rebuild: bool = False) -> None:
         if not (0 <= self._path_selected < len(self._paths)):
             self._path_point_list.clear()
+            self._sync_path_point_coord_spinboxes()
             return
         path = self._paths[self._path_selected]
         pts = path.get("points", []) or []
@@ -18130,6 +18151,7 @@ class LevelTab(QWidget):
             idx = int(self._path_point_selected)
             if 0 <= idx < self._path_point_list.count() and 0 <= idx < len(pts):
                 self._path_point_list.item(idx).setText(_path_point_label(idx, pts[idx]))
+            self._sync_path_point_coord_spinboxes()
             return
 
         self._path_point_list.blockSignals(True)
@@ -18141,6 +18163,7 @@ class LevelTab(QWidget):
                 self._path_point_list.setCurrentRow(self._path_point_selected)
         finally:
             self._path_point_list.blockSignals(False)
+        self._sync_path_point_coord_spinboxes()
 
     def _refresh_path_props(self) -> None:
         if 0 <= self._path_selected < len(self._paths):
@@ -18197,7 +18220,52 @@ class LevelTab(QWidget):
 
     def _on_path_point_selected(self, idx: int) -> None:
         self._path_point_selected = int(idx)
+        self._sync_path_point_coord_spinboxes()
         self._canvas.update()
+
+    def _sync_path_point_coord_spinboxes(self) -> None:
+        max_x, max_y = self._path_px_limits()
+        for spn, lim in ((self._spn_path_pt_x, max_x), (self._spn_path_pt_y, max_y)):
+            spn.blockSignals(True)
+            try:
+                spn.setRange(0, max(0, lim))
+            finally:
+                spn.blockSignals(False)
+        pt = None
+        if 0 <= self._path_selected < len(self._paths):
+            pts = self._paths[self._path_selected].get("points", []) or []
+            idx = int(self._path_point_selected)
+            if 0 <= idx < len(pts):
+                pt = pts[idx]
+        has_pt = pt is not None
+        px, py = _path_point_to_px(pt) if has_pt else (0, 0)
+        for spn, v in ((self._spn_path_pt_x, px), (self._spn_path_pt_y, py)):
+            spn.blockSignals(True)
+            try:
+                spn.setValue(int(v))
+                spn.setEnabled(has_pt and self._path_point_list.isEnabled())
+            finally:
+                spn.blockSignals(False)
+
+    def _on_path_point_coord_changed(self, *_args) -> None:
+        if not (0 <= self._path_selected < len(self._paths)):
+            return
+        pts = self._paths[self._path_selected].get("points", []) or []
+        idx = int(self._path_point_selected)
+        if not (0 <= idx < len(pts)):
+            return
+        new_pt = _path_point_make(
+            int(self._spn_path_pt_x.value()),
+            int(self._spn_path_pt_y.value()),
+        )
+        cur_px, cur_py = _path_point_to_px(pts[idx])
+        if (int(new_pt["px"]), int(new_pt["py"])) == (int(cur_px), int(cur_py)):
+            return
+        self._push_undo()
+        pts[idx] = new_pt
+        self._refresh_path_points(no_list_rebuild=True)
+        self._canvas.update()
+        self._update_diagnostics()
 
     def _on_path_prop_changed(self, *_args) -> None:
         idx = int(self._path_selected)
