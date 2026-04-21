@@ -130,7 +130,7 @@ def write_scenes_autogen(*, project_data: dict, export_dir: Path) -> tuple[Path 
     hl.append("#endif\n\n")
     hl.append("#ifndef NGPNG_POINT_T\n")
     hl.append("#define NGPNG_POINT_T\n")
-    hl.append("typedef struct { u8 x; u8 y; } NgpngPoint;\n")
+    hl.append("typedef struct { s16 x; s16 y; } NgpngPoint;\n")
     hl.append("#endif\n\n")
 
     hl.append("/* Trigger enums (shared) */\n")

@@ -215,6 +215,16 @@ def _safe_ident(s: str) -> str:
     return s.lower()
 
 
+def _path_point_to_px(pt: object) -> tuple[int, int]:
+    if isinstance(pt, dict):
+        if "px" in pt or "py" in pt:
+            return int(pt.get("px", pt.get("x", 0)) or 0), int(pt.get("py", pt.get("y", 0)) or 0)
+        return int(pt.get("x", 0) or 0) * 8, int(pt.get("y", 0) or 0) * 8
+    if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+        return int(pt[0]) * 8, int(pt[1]) * 8
+    return 0, 0
+
+
 def _type_to_c_const(name: str) -> str:
     clean = re.sub(r"[^a-zA-Z0-9]+", "_", (name or "")).strip("_").upper()
     return f"ENT_{clean}" if clean else "ENT_UNKNOWN"
@@ -2292,7 +2302,7 @@ def make_scene_level_h(
             lines.append(f"static const u8 g_{sym_use}_trig_or_group_count[] = {{{', '.join(str(v) for v in or_group_counts)}}};")
             lines.append("")
 
-    # ---- Paths (routes; points in tile coords) ----
+    # ---- Paths (routes; points in pixel coords) ----
     pths = scene.get("paths", []) or []
     pths = [p for p in pths if isinstance(p, dict)]
     if pths:
@@ -2300,7 +2310,7 @@ def make_scene_level_h(
         lines += [
             "#ifndef NGPNG_POINT_T",
             "#define NGPNG_POINT_T",
-            "typedef struct { u8 x; u8 y; } NgpngPoint;",
+            "typedef struct { s16 x; s16 y; } NgpngPoint;",
             "#endif",
             "",
             f"#define {sym_use.upper()}_PATH_COUNT {len(pths)}",
@@ -2333,10 +2343,7 @@ def make_scene_level_h(
             pts: list[tuple[int, int]] = []
             if isinstance(pts_in, list):
                 for pt in pts_in:
-                    if isinstance(pt, dict):
-                        pts.append((int(pt.get("x", 0)) & 0xFF, int(pt.get("y", 0)) & 0xFF))
-                    elif isinstance(pt, (list, tuple)) and len(pt) >= 2:
-                        pts.append((int(pt[0]) & 0xFF, int(pt[1]) & 0xFF))
+                    pts.append(_path_point_to_px(pt))
             points_flat.extend(pts)
             lengths.append(len(pts))
             flags.append(1 if bool(p.get("loop", False)) else 0)
@@ -2352,7 +2359,7 @@ def make_scene_level_h(
         lines.append("")
         lines.append(f"static const NgpngPoint g_{sym_use}_path_points[] = {{")
         for x, y in points_flat:
-            lines.append(f"    {{{int(x) & 0xFF}, {int(y) & 0xFF}}},")
+            lines.append(f"    {{{int(x)}, {int(y)}}},")
         lines.append("};")
         lines.append("")
 

@@ -922,6 +922,31 @@ def _path_color(path_id: str, alpha: int = 220) -> QColor:
     return QColor.fromHsv(h, 210, 235, alpha)
 
 
+def _path_point_to_px(pt: object) -> tuple[int, int]:
+    """Return a path point as scene pixel coordinates.
+
+    Backward compatibility:
+    - new format: {"px": int, "py": int}
+    - legacy format: {"x": tile_x, "y": tile_y}
+    """
+    if isinstance(pt, dict):
+        if "px" in pt or "py" in pt:
+            return int(pt.get("px", pt.get("x", 0)) or 0), int(pt.get("py", pt.get("y", 0)) or 0)
+        return int(pt.get("x", 0) or 0) * _TILE_PX, int(pt.get("y", 0) or 0) * _TILE_PX
+    if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+        return int(pt[0]) * _TILE_PX, int(pt[1]) * _TILE_PX
+    return 0, 0
+
+
+def _path_point_make(px: int, py: int) -> dict[str, int]:
+    return {"px": int(px), "py": int(py)}
+
+
+def _path_point_label(index: int, pt: object) -> str:
+    px, py = _path_point_to_px(pt)
+    return f"{index}: ({px},{py}) px"
+
+
 def _tile_id_variants(value: object, default: int) -> list[int]:
     out: list[int] = []
     if isinstance(value, int):
@@ -1052,6 +1077,15 @@ class _LevelCanvas(QWidget):
             max(0, min(self._tab._grid_h - 1, pos.y() // tp)),
         )
 
+    def _mouse_to_scene_px(self, pos: QPoint) -> tuple[int, int]:
+        zoom = max(1, int(self._tab._zoom))
+        max_x = max(0, int(self._tab._grid_w * _TILE_PX) - 1)
+        max_y = max(0, int(self._tab._grid_h * _TILE_PX) - 1)
+        return (
+            max(0, min(max_x, int(pos.x()) // zoom)),
+            max(0, min(max_y, int(pos.y()) // zoom)),
+        )
+
     def _entity_at_tile(self, tx: int, ty: int) -> int:
         for i in range(len(self._tab._entities) - 1, -1, -1):
             ent = self._tab._entities[i]
@@ -1141,14 +1175,13 @@ class _LevelCanvas(QWidget):
         """Return point index hit at pixel coords (px/py), else -1."""
         if not pts:
             return -1
-        rad = max(6, tp // 3)
+        rad = max(6, tp // 4)
         best = -1
         best_d2 = rad * rad
         for i, pt in enumerate(pts):
-            tx = int(pt.get("x", 0))
-            ty = int(pt.get("y", 0))
-            x = tx * tp + tp // 2
-            y = ty * tp + tp // 2
+            pt_px, pt_py = _path_point_to_px(pt)
+            x = pt_px * self._tab._zoom
+            y = pt_py * self._tab._zoom
             dx = x - px
             dy = y - py
             d2 = dx * dx + dy * dy
@@ -1487,10 +1520,9 @@ class _LevelCanvas(QWidget):
 
                 prev = None
                 for pt in pts:
-                    tx = int(pt.get("x", 0))
-                    ty = int(pt.get("y", 0))
-                    x = tx * tp + tp // 2
-                    y = ty * tp + tp // 2
+                    pt_px, pt_py = _path_point_to_px(pt)
+                    x = pt_px * self._tab._zoom
+                    y = pt_py * self._tab._zoom
                     if prev is not None:
                         p.drawLine(prev[0], prev[1], x, y)
                     prev = (x, y)
@@ -1498,17 +1530,18 @@ class _LevelCanvas(QWidget):
                 if bool(path.get("loop", False)) and len(pts) >= 2:
                     a = pts[0]
                     b = pts[-1]
-                    ax = int(a.get("x", 0)) * tp + tp // 2
-                    ay = int(a.get("y", 0)) * tp + tp // 2
-                    bx = int(b.get("x", 0)) * tp + tp // 2
-                    by = int(b.get("y", 0)) * tp + tp // 2
+                    ax_px, ay_px = _path_point_to_px(a)
+                    bx_px, by_px = _path_point_to_px(b)
+                    ax = ax_px * self._tab._zoom
+                    ay = ay_px * self._tab._zoom
+                    bx = bx_px * self._tab._zoom
+                    by = by_px * self._tab._zoom
                     p.drawLine(bx, by, ax, ay)
 
                 for pti, pt in enumerate(pts):
-                    tx = int(pt.get("x", 0))
-                    ty = int(pt.get("y", 0))
-                    x = tx * tp + tp // 2
-                    y = ty * tp + tp // 2
+                    pt_px, pt_py = _path_point_to_px(pt)
+                    x = pt_px * self._tab._zoom
+                    y = pt_py * self._tab._zoom
                     is_sel = (pi == selp) and (pti == selpt)
                     r = max(3, tp // 6) + (2 if is_sel else 0)
                     p.setBrush(QColor(255, 255, 255, 220) if is_sel else QColor(0, 0, 0, 0))
@@ -1691,9 +1724,9 @@ class _LevelCanvas(QWidget):
                         self._drag_path_pushed = False
                         self.update()
                         return
-                    tx, ty = self._mouse_to_tile(event.pos())
+                    px_world, py_world = self._mouse_to_scene_px(event.pos())
                     self._tab._push_undo()
-                    pts.append({"x": int(tx), "y": int(ty)})
+                    pts.append(_path_point_make(px_world, py_world))
                     path["points"] = pts
                     self._tab._path_point_selected = len(pts) - 1
                     self._tab._refresh_path_points()
@@ -1992,9 +2025,11 @@ class _LevelCanvas(QWidget):
                             self._drag_path_pushed = True
                             self._tab._push_undo()
                     if self._drag_path_pushed:
-                        tx, ty = self._mouse_to_tile(event.pos())
-                        pts[self._drag_point_idx]["x"] = int(tx)
-                        pts[self._drag_point_idx]["y"] = int(ty)
+                        px_world, py_world = self._mouse_to_scene_px(event.pos())
+                        pts[self._drag_point_idx]["px"] = int(px_world)
+                        pts[self._drag_point_idx]["py"] = int(py_world)
+                        pts[self._drag_point_idx].pop("x", None)
+                        pts[self._drag_point_idx].pop("y", None)
                         path["points"] = pts
                         self._tab._path_point_selected = int(self._drag_point_idx)
                         self._tab._refresh_path_points(no_list_rebuild=True)
@@ -2286,12 +2321,20 @@ class _LevelCanvas(QWidget):
                         pts = self._tab._paths[pidx].get("points", []) or []
                         if 0 <= pti < len(pts):
                             pt = pts[pti]
-                            nx = max(0, min(self._tab._grid_w - 1, int(pt.get("x", 0)) + dx))
-                            ny = max(0, min(self._tab._grid_h - 1, int(pt.get("y", 0)) + dy))
-                            if nx != int(pt.get("x", 0)) or ny != int(pt.get("y", 0)):
+                            cur_px, cur_py = _path_point_to_px(pt)
+                            step = _TILE_PX if event.modifiers() == Qt.KeyboardModifier.ShiftModifier else 1
+                            pdx = 0 if dx == 0 else (step if dx > 0 else -step)
+                            pdy = 0 if dy == 0 else (step if dy > 0 else -step)
+                            max_x = max(0, int(self._tab._grid_w * _TILE_PX) - 1)
+                            max_y = max(0, int(self._tab._grid_h * _TILE_PX) - 1)
+                            nx = max(0, min(max_x, cur_px + pdx))
+                            ny = max(0, min(max_y, cur_py + pdy))
+                            if nx != cur_px or ny != cur_py:
                                 self._tab._push_undo()
-                                pt["x"] = nx
-                                pt["y"] = ny
+                                pt["px"] = nx
+                                pt["py"] = ny
+                                pt.pop("x", None)
+                                pt.pop("y", None)
                                 self._tab._refresh_path_points(no_list_rebuild=True)
                                 self.update()
                             return
@@ -3001,7 +3044,7 @@ class LevelTab(QWidget):
         self._triggers: list[dict] = []
         self._trigger_selected: int = -1
 
-        # Paths (routes; points in tile coords)
+        # Paths (routes; points in pixel coords)
         self._paths: list[dict] = []
         self._path_selected: int = -1
         self._path_edit: bool = False
@@ -3771,6 +3814,14 @@ class LevelTab(QWidget):
         self._combo_ent_path.currentIndexChanged.connect(self._on_ent_path_changed)
         path_row.addWidget(self._combo_ent_path, 1)
         iv.addLayout(path_row)
+        path_tools_row = QHBoxLayout()
+        path_tools_row.addSpacing(88)
+        self._btn_ent_path_edit = QPushButton(tr("level.prop_path_edit_btn"))
+        self._btn_ent_path_edit.setToolTip(tr("level.prop_path_edit_btn_tt"))
+        self._btn_ent_path_edit.clicked.connect(self._edit_selected_entity_path)
+        path_tools_row.addWidget(self._btn_ent_path_edit)
+        path_tools_row.addStretch()
+        iv.addLayout(path_tools_row)
         self._chk_ent_clamp_map = QCheckBox(tr("level.prop_clamp_map"))
         self._chk_ent_clamp_map.setToolTip(tr("level.prop_clamp_map_tt"))
         self._chk_ent_clamp_map.toggled.connect(self._on_ent_clamp_map_toggled)
@@ -7115,14 +7166,13 @@ class LevelTab(QWidget):
             pts: list[dict] = []
             if isinstance(pts_in, list):
                 for pt in pts_in:
-                    if isinstance(pt, dict):
-                        pts.append({"x": int(pt.get("x", 0)), "y": int(pt.get("y", 0))})
-                    elif isinstance(pt, (list, tuple)) and len(pt) >= 2:
-                        pts.append({"x": int(pt[0]), "y": int(pt[1])})
+                    px, py = _path_point_to_px(pt)
+                    pts.append(_path_point_make(px, py))
             self._paths.append({
                 "id": str(p.get("id") or "") or _new_id(),
                 "name": str(p.get("name", "")),
                 "loop": bool(p.get("loop", False)),
+                "speed": max(1, min(8, int(p.get("speed", 1) or 1))),
                 "points": pts,
             })
 
@@ -7960,13 +8010,17 @@ class LevelTab(QWidget):
         # so each moving platform gets its own independent path.
         x = int(ent.get("x", 0) or 0)
         y = int(ent.get("y", 0) or 0)
+        px = x * _TILE_PX
+        py = y * _TILE_PX
+        max_px = max(0, int(self._grid_w * _TILE_PX) - 1)
         path = {
             "id": _new_id(),
             "name": self._next_path_name(),
             "loop": True,
+            "speed": 1,
             "points": [
-                {"x": x, "y": y},
-                {"x": max(0, min(int(self._grid_w) - 1, x + 4)), "y": y},
+                _path_point_make(px, py),
+                _path_point_make(min(max_px, px + (4 * _TILE_PX)), py),
             ],
         }
         self._paths.append(path)
@@ -10557,16 +10611,21 @@ class LevelTab(QWidget):
     def _dup_offset_points(self, pts: list[dict]) -> list[dict]:
         if not pts:
             return []
-        for ox, oy in ((1, 0), (0, 1), (1, 1), (-1, 0), (0, -1), (-1, -1)):
+        max_x, max_y = self._path_px_limits()
+        for ox, oy in (
+            (_TILE_PX, 0), (0, _TILE_PX), (_TILE_PX, _TILE_PX),
+            (-_TILE_PX, 0), (0, -_TILE_PX), (-_TILE_PX, -_TILE_PX),
+        ):
             shifted: list[dict] = []
             ok = True
             for pt in pts:
-                x = int(pt.get("x", 0)) + ox
-                y = int(pt.get("y", 0)) + oy
-                if not (0 <= x < int(self._grid_w) and 0 <= y < int(self._grid_h)):
+                x, y = _path_point_to_px(pt)
+                x += ox
+                y += oy
+                if not (0 <= x <= max_x and 0 <= y <= max_y):
                     ok = False
                     break
-                shifted.append({"x": x, "y": y})
+                shifted.append(_path_point_make(x, y))
             if ok:
                 return shifted
         return copy.deepcopy(pts)
@@ -10582,8 +10641,15 @@ class LevelTab(QWidget):
                 pti = int(getattr(self, "_path_point_selected", -1))
                 if 0 <= pti < len(pts):
                     src_pt = pts[pti]
-                    nx, ny = self._dup_offset_xy(int(src_pt.get("x", 0)), int(src_pt.get("y", 0)))
-                    pts.insert(pti + 1, {"x": nx, "y": ny})
+                    src_px, src_py = _path_point_to_px(src_pt)
+                    max_x, max_y = self._path_px_limits()
+                    nx = min(max_x, src_px + _TILE_PX)
+                    ny = src_py
+                    if nx == src_px and src_px > 0:
+                        nx = max(0, src_px - _TILE_PX)
+                    if ny == src_py and src_py > 0 and nx == src_px:
+                        ny = max(0, src_py - _TILE_PX)
+                    pts.insert(pti + 1, _path_point_make(nx, ny))
                     path["points"] = pts
                     self._path_point_selected = pti + 1
                     self._refresh_path_list()
@@ -10854,6 +10920,8 @@ class LevelTab(QWidget):
                 path_idx = combo_idx - 1
                 if 0 <= path_idx < len(self._paths):
                     self._entities[idx]["path_id"] = str(self._paths[path_idx].get("id", ""))
+                    self._path_selected = path_idx
+                    self._path_point_selected = -1
             self._canvas.update()
             self._refresh_entity_runtime_ui()
         self._refresh_ent_path_status()
@@ -11091,6 +11159,34 @@ class LevelTab(QWidget):
                 out.append((i, ent))
         return out
 
+    def _path_px_limits(self) -> tuple[int, int]:
+        return (
+            max(0, int(self._grid_w * _TILE_PX) - 1),
+            max(0, int(self._grid_h * _TILE_PX) - 1),
+        )
+
+    def _path_index_for_id(self, path_id: str) -> int:
+        pid = str(path_id or "").strip()
+        if not pid:
+            return -1
+        for i, path in enumerate(self._paths):
+            if str(path.get("id", "") or "") == pid:
+                return i
+        return -1
+
+    def _duplicate_path_for_entity(self, ent_idx: int, path_idx: int) -> int:
+        src = self._paths[path_idx]
+        dup = copy.deepcopy(src)
+        dup["id"] = _new_id()
+        dup["name"] = self._copy_name(
+            str(src.get("name", "") or "path"),
+            {str(p.get("name", "") or "") for p in self._paths if isinstance(p, dict)},
+            "path",
+        )
+        self._paths.insert(path_idx + 1, dup)
+        self._entities[ent_idx]["path_id"] = str(dup.get("id", ""))
+        return path_idx + 1
+
     def _refresh_ent_path_status(self) -> None:
         if not hasattr(self, "_lbl_ent_path_status"):
             return
@@ -11111,6 +11207,39 @@ class LevelTab(QWidget):
                 path_name = str(p.get("name", "") or p.get("id", "?"))
                 break
         self._lbl_ent_path_status.setText(tr("level.prop_path_help_assigned", path=path_name))
+
+    def _edit_selected_entity_path(self) -> None:
+        idx = self._selected
+        if not (0 <= idx < len(self._entities)):
+            return
+        ent = self._entities[idx]
+        pid = str(ent.get("path_id", "") or "").strip()
+        path_idx = self._path_index_for_id(pid)
+        changed = False
+        if path_idx < 0:
+            self._push_undo()
+            changed = True
+            self._ensure_simple_path_for_entity(ent)
+            pid = str(ent.get("path_id", "") or "").strip()
+            path_idx = self._path_index_for_id(pid)
+        elif len(self._entities_for_path_id(pid)) > 1:
+            self._push_undo()
+            changed = True
+            path_idx = self._duplicate_path_for_entity(idx, path_idx)
+        if not (0 <= path_idx < len(self._paths)):
+            return
+        self._path_selected = path_idx
+        pts = self._paths[path_idx].get("points", []) or []
+        self._path_point_selected = 0 if pts else -1
+        self._refresh_path_list()
+        self._refresh_path_props()
+        self._refresh_props()
+        if hasattr(self, "_right_tabs") and hasattr(self, "_tab_paths"):
+            self._right_tabs.setCurrentWidget(self._tab_paths)
+        self._set_scene_tool("path")
+        self._canvas.update()
+        if changed:
+            self._update_diagnostics()
 
     def _refresh_path_assignment_ui(self) -> None:
         if not hasattr(self, "_lbl_path_links"):
@@ -11610,11 +11739,11 @@ class LevelTab(QWidget):
                 self._combo_ent_path.setCurrentIndex(0)
             elif raw == "platform:moving":
                 path_id = str(self._entities[idx].get("path_id", "") or "")
-                if not path_id and self._paths:
-                    path_id = str(self._paths[0].get("id", "") or "")
-                    if path_id:
-                        self._entities[idx]["path_id"] = path_id
-                        self._combo_ent_path.setCurrentIndex(1)
+                if not path_id:
+                    self._ensure_simple_path_for_entity(self._entities[idx])
+                    path_id = str(self._entities[idx].get("path_id", "") or "")
+                path_idx = self._path_index_for_id(path_id)
+                self._combo_ent_path.setCurrentIndex(path_idx + 1 if path_idx >= 0 else 0)
         self._updating_props = False
         self._refresh_entity_runtime_ui()
         self._refresh_ent_path_status()
@@ -11632,6 +11761,7 @@ class LevelTab(QWidget):
         self._combo_ent_dir.setEnabled(enabled)
         self._combo_ent_behavior.setEnabled(enabled)
         self._combo_ent_path.setEnabled(enabled)
+        self._btn_ent_path_edit.setEnabled(enabled)
         self._combo_ent_preset.setEnabled(enabled)
         self._chk_ent_clamp_map.setEnabled(enabled)
         self._chk_ent_clamp_camera.setEnabled(enabled)
@@ -15162,6 +15292,8 @@ class LevelTab(QWidget):
 
         # Paths sanity
         path_ids = {str(p.get("id", "") or "") for p in self._paths if isinstance(p, dict)}
+        max_path_x = int(self._grid_w * _TILE_PX)
+        max_path_y = int(self._grid_h * _TILE_PX)
         for path in self._paths:
             name = str(path.get("name", "") or "path")
             pts = path.get("points", []) or []
@@ -15170,11 +15302,8 @@ class LevelTab(QWidget):
                 blockers.append(tr("level.diag_path_short", name=name))
                 continue
             if any(
-                int(pt.get("x", 0)) < 0
-                or int(pt.get("y", 0)) < 0
-                or int(pt.get("x", 0)) >= int(self._grid_w)
-                or int(pt.get("y", 0)) >= int(self._grid_h)
-                for pt in pts if isinstance(pt, dict)
+                (lambda pxy: pxy[0] < 0 or pxy[1] < 0 or pxy[0] >= max_path_x or pxy[1] >= max_path_y)(_path_point_to_px(pt))
+                for pt in pts
             ):
                 refs_ok = False
                 blockers.append(tr("level.diag_path_oob", name=name))
@@ -18000,17 +18129,14 @@ class LevelTab(QWidget):
         if no_list_rebuild:
             idx = int(self._path_point_selected)
             if 0 <= idx < self._path_point_list.count() and 0 <= idx < len(pts):
-                pt = pts[idx]
-                self._path_point_list.item(idx).setText(
-                    f"{idx}: ({int(pt.get('x', 0))},{int(pt.get('y', 0))})"
-                )
+                self._path_point_list.item(idx).setText(_path_point_label(idx, pts[idx]))
             return
 
         self._path_point_list.blockSignals(True)
         try:
             self._path_point_list.clear()
             for i, pt in enumerate(pts):
-                self._path_point_list.addItem(f"{i}: ({int(pt.get('x', 0))},{int(pt.get('y', 0))})")
+                self._path_point_list.addItem(_path_point_label(i, pt))
             if 0 <= self._path_point_selected < self._path_point_list.count():
                 self._path_point_list.setCurrentRow(self._path_point_selected)
         finally:
@@ -18095,7 +18221,7 @@ class LevelTab(QWidget):
         p = self._paths[self._path_selected]
         pts = p.get("points", []) or []
         tx, ty = self._cam_tile
-        pts.append({"x": int(tx), "y": int(ty)})
+        pts.append(_path_point_make(int(tx) * _TILE_PX, int(ty) * _TILE_PX))
         p["points"] = pts
         self._path_point_selected = len(pts) - 1
         self._refresh_path_list()
@@ -19650,7 +19776,7 @@ def _make_scene_h(
             lines.append(f"static const u8 g_{sym}_trig_or_group_count[] = {{{_u8_row_or(or_group_counts)}}};")
             lines.append("")
 
-    # ---- Paths (routes; points in tile coords) ----
+    # ---- Paths (routes; points in pixel coords) ----
     pths = paths
     if pths is None:
         pths = scene.get("paths", []) or []
@@ -19663,7 +19789,7 @@ def _make_scene_h(
         lines += [
             "#ifndef NGPNG_POINT_T",
             "#define NGPNG_POINT_T",
-            "typedef struct { u8 x; u8 y; } NgpngPoint;",
+            "typedef struct { s16 x; s16 y; } NgpngPoint;",
             "#endif",
             "",
             f"#define {sym.upper()}_PATH_COUNT {len(pths)}",
@@ -19688,6 +19814,7 @@ def _make_scene_h(
         offsets: list[int] = []
         lengths: list[int] = []
         flags: list[int] = []
+        speeds: list[int] = []
 
         for p in pths:
             offsets.append(len(points_flat))
@@ -19695,13 +19822,11 @@ def _make_scene_h(
             pts: list[tuple[int, int]] = []
             if isinstance(pts_in, list):
                 for pt in pts_in:
-                    if isinstance(pt, dict):
-                        pts.append((int(pt.get("x", 0)) & 0xFF, int(pt.get("y", 0)) & 0xFF))
-                    elif isinstance(pt, (list, tuple)) and len(pt) >= 2:
-                        pts.append((int(pt[0]) & 0xFF, int(pt[1]) & 0xFF))
+                    pts.append(_path_point_to_px(pt))
             points_flat.extend(pts)
             lengths.append(len(pts))
             flags.append(1 if bool(p.get("loop", False)) else 0)
+            speeds.append(max(1, min(8, int(p.get("speed", 1) or 1))))
 
         if not points_flat:
             points_flat = [(0, 0)]
@@ -19709,10 +19834,11 @@ def _make_scene_h(
         lines.append(f"static const u16 g_{sym}_path_offsets[] = {{ " + ", ".join(str(int(o)) for o in offsets) + " };")
         lines.append(f"static const u8  g_{sym}_path_lengths[] = {{ " + ", ".join(str(int(n) & 0xFF) for n in lengths) + " };")
         lines.append(f"static const u8  g_{sym}_path_flags[]   = {{ " + ", ".join(str(int(f) & 0xFF) for f in flags) + " };")
+        lines.append(f"static const u8  g_{sym}_path_speeds[]  = {{ " + ", ".join(str(int(s) & 0xFF) for s in speeds) + " };")
         lines.append("")
         lines.append(f"static const NgpngPoint g_{sym}_path_points[] = {{")
         for x, y in points_flat:
-            lines.append(f"    {{{int(x) & 0xFF}, {int(y) & 0xFF}}},")
+            lines.append(f"    {{{int(x)}, {int(y)}}},")
         lines.append("};")
         lines.append("")
 

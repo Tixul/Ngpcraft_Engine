@@ -1509,8 +1509,8 @@ void ngpng_enemies_update(const NgpSceneDef *sc,
             if (pi < sc->path_count && plen > 0u) {
                 u16 off = sc->path_offsets[pi];
                 const NgpngPoint *pt = &sc->path_points[off + enemies[i].path_step];
-                s16 dst_x = (s16)((s16)pt->x * 8);
-                s16 dst_y = (s16)((s16)pt->y * 8);
+                s16 dst_x = (s16)pt->x;
+                s16 dst_y = (s16)pt->y;
                 {
                     s8 espd = sc->path_speeds ? (s8)sc->path_speeds[pi] : 2;
                     enemies[i].vx = ngpng_step_toward(enemies[i].world_x, dst_x, espd);
@@ -2139,8 +2139,8 @@ void ngpng_props_apply_path_step(const NgpSceneDef *sc, NgpngPropActor *prop)
     off = sc->path_offsets[pi];
     if (prop->path_step >= plen) prop->path_step = 0u;
     pt    = &sc->path_points[off + prop->path_step];
-    dst_x = (s16)((s16)pt->x * 8);
-    dst_y = (s16)((s16)pt->y * 8);
+    dst_x = (s16)pt->x;
+    dst_y = (s16)pt->y;
     {
         s8 spd = (sc->path_speeds) ? (s8)sc->path_speeds[pi] : 1;
         prop->world_x = (s16)(prop->world_x + ngpng_step_toward(prop->world_x, dst_x, spd));

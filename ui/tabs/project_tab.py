@@ -1789,6 +1789,8 @@ class ProjectTab(ProjectPathMixin, QWidget):
             blockers.append(tr("proj.scene_status_bad_regions"))
 
         bad_paths = False
+        path_max_x = map_w * 8
+        path_max_y = map_h * 8
         for path in paths:
             if not isinstance(path, dict):
                 continue
@@ -1797,11 +1799,17 @@ class ProjectTab(ProjectPathMixin, QWidget):
                 bad_paths = True
                 break
             if any(
-                int(pt.get("x", 0)) < 0
-                or int(pt.get("y", 0)) < 0
-                or int(pt.get("x", 0)) >= map_w
-                or int(pt.get("y", 0)) >= map_h
-                for pt in pts if isinstance(pt, dict)
+                (lambda px, py: px < 0 or py < 0 or px >= path_max_x or py >= path_max_y)(
+                    int(pt.get("px", pt.get("x", 0)) or 0) if isinstance(pt, dict) and ("px" in pt or "py" in pt)
+                    else int(pt.get("x", 0) or 0) * 8 if isinstance(pt, dict)
+                    else int(pt[0]) * 8 if isinstance(pt, (list, tuple)) and len(pt) >= 2
+                    else 0,
+                    int(pt.get("py", pt.get("y", 0)) or 0) if isinstance(pt, dict) and ("px" in pt or "py" in pt)
+                    else int(pt.get("y", 0) or 0) * 8 if isinstance(pt, dict)
+                    else int(pt[1]) * 8 if isinstance(pt, (list, tuple)) and len(pt) >= 2
+                    else 0,
+                )
+                for pt in pts if isinstance(pt, (dict, list, tuple))
             ):
                 bad_paths = True
                 break

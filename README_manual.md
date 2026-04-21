@@ -669,7 +669,7 @@ Preset workflows (genre-aware): cursor show/hide, menu confirm, hover SFX, playe
 **Genre-aware ordering:** when a scene profile is set, the condition/action/preset/region-kind combos reorder to surface the most relevant choices first. Conditions irrelevant to the active genre are still accessible but appear after the genre-specific ones.
 
 **Paths:**
-Waypoint routes (tile coordinates) exported to C — used for patrol AI and moving platforms.
+Waypoint routes (pixel coordinates) exported to C — used for patrol AI and moving platforms.
 Assign a path to an entity via the **Path** combo in instance props. The export writes the path index into `g_{sym}_ent_paths[]` (255 = none).
 
 **Layout:**

@@ -4023,7 +4023,7 @@ Les régions sont exportées en C (<code>NgpngRegion</code> : x, y, w, h, kind).
 <p>→ <b>Référence complète (toutes les conditions, actions, exports, patterns) : topic <i>Triggers &amp; Régions</i></b></p>
 
 <h2>Chemins (Paths)</h2>
-<p>L'onglet <b>Chemins</b> définit des routes (liste de points en coordonnées tile) pour des PNJ, des patrouilles,
+<p>L'onglet <b>Chemins</b> définit des routes (liste de points en coordonnées pixel) pour des PNJ, des patrouilles,
 des rails de shmup, etc. Activez <b>Éditer chemins</b> puis cliquez sur la grille pour ajouter des points.
 <b>Glisser</b> un point le déplace ; <b>clic droit</b> ou <b>Suppr</b> le supprime.
 Les chemins sont exportés en C (offsets/lengths/flags + points).</p>
@@ -4197,7 +4197,7 @@ pour relier plus facilement le runtime au <b>Profil</b> choisi dans l'éditeur.<
 <ul>
   <li><b>Régions</b> : rectangles en tiles. <code>no_spawn</code> empêche Procgen d’y placer des entités. <code>danger_zone</code> = hazard runtime.</li>
   <li><b>Triggers</b> : 87 conditions × 73 actions + groupes OR (dont 18 par type d'entité). Voir topics <b>Triggers &amp; Régions</b> et <b>Globals</b>.</li>
-  <li><b>Paths</b> : routes en points tile (patrouilles, rails). <b>Loop</b> boucle le trajet.</li>
+  <li><b>Paths</b> : routes en points pixel (patrouilles, rails). <b>Loop</b> boucle le trajet.</li>
 </ul>
 
 <h2>Procgen : points importants</h2>
@@ -5058,7 +5058,7 @@ Regions are exported to C (<code>NgpngRegion</code>: x, y, w, h, kind).</p>
 <p>→ <b>Full reference (all conditions, actions, exports, patterns): see the <i>Triggers &amp; Regions</i> topic</b></p>
 
 <h2>Paths</h2>
-<p>The <b>Paths</b> tab defines routes (a list of points in tile coordinates) for NPC patrols, shmup rails, etc.
+<p>The <b>Paths</b> tab defines routes (a list of points in pixel coordinates) for NPC patrols, shmup rails, etc.
 Enable <b>Edit paths</b> then click on the grid to add points. <b>Drag</b> a point to move it;
 <b>right click</b> or <b>Delete</b> removes a point. Paths are exported as C arrays (offsets/lengths/flags + points).</p>
 <ul>
@@ -5229,7 +5229,7 @@ defines so a runtime can branch more easily from the <b>Profile</b> chosen in th
 <ul>
   <li><b>Regions</b>: rectangles in tile coords. <code>no_spawn</code> blocks Procgen. <code>danger_zone</code> = runtime hazard.</li>
   <li><b>Triggers</b>: 87 conditions × 73 actions + OR groups (incl. 18 entity-type conditions). See <b>Triggers &amp; Regions</b> and <b>Globals</b> topics.</li>
-  <li><b>Paths</b>: routes made of tile points (patrols, rails). <b>Loop</b> closes the route.</li>
+  <li><b>Paths</b>: routes made of pixel points (patrols, rails). <b>Loop</b> closes the route.</li>
 </ul>
 
 <h2>Procgen: key points</h2>
