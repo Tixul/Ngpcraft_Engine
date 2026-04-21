@@ -96,6 +96,7 @@ def write_scenes_autogen(*, project_data: dict, export_dir: Path) -> tuple[Path 
     hl.append("#define NGPNG_ENT_FLAG_CLAMP_MAP        1u\n")
     hl.append("#define NGPNG_ENT_FLAG_ALLOW_LEDGE_FALL 2u\n")
     hl.append("#define NGPNG_ENT_FLAG_RESPAWN          4u\n")
+    hl.append("#define NGPNG_ENT_FLAG_CLAMP_CAMERA     8u\n")
     hl.append("#endif\n")
     hl.append("/* NgpcWaveEntry mirrors optional/ngpc_wave layout (first 4 bytes = NgpngEnt). */\n")
     hl.append("#ifndef NGPC_WAVE_ENTRY_T\n")

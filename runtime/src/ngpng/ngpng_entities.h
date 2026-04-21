@@ -27,6 +27,7 @@
 #define NGPNG_ENT_FLAG_CLAMP_MAP        1u
 #define NGPNG_ENT_FLAG_ALLOW_LEDGE_FALL 2u
 #define NGPNG_ENT_FLAG_RESPAWN          4u  /* world entity respawns after leaving activation radius */
+#define NGPNG_ENT_FLAG_CLAMP_CAMERA     8u  /* confine instance to the current camera viewport (shmup) */
 #endif
 
 /* ---- Behavior codes ---- */
@@ -260,6 +261,10 @@ void ngpng_player_apply_form(const NgpSceneDef *sc, u8 form_idx,
     u8 *player_hp, u8 *player_hp_max, u8 reset_hp);
 u8  ngpng_rects_overlap(s16 ax, s16 ay, u8 aw, u8 ah, s16 bx, s16 by, u8 bw, u8 bh);
 void ngpng_clamp_world_rect(const NgpSceneDef *sc, s16 *wx, s16 *wy, u8 w, u8 h);
+
+/* Clamps world-space (wx, wy) so the w×h rect stays inside the 160×152 camera viewport
+ * anchored at (cam_px, cam_py). Used by entities flagged NGPNG_ENT_FLAG_CLAMP_CAMERA. */
+void ngpng_clamp_camera_rect(s16 *wx, s16 *wy, s16 cam_px, s16 cam_py, u8 w, u8 h);
 s8  ngpng_step_toward(s16 cur, s16 dst, s8 step);
 void ngpng_find_player_spawn(const NgpSceneDef *sc, s16 cam_px, s16 cam_py, s16 *sx, s16 *sy);
 void ngpng_place_player_on_respawn(const NgpSceneDef *sc, u8 checkpoint_region,

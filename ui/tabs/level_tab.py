@@ -511,6 +511,7 @@ _TCOL_CORNER_SW   = 22  # wall corner open to South + West  (inner SW angle)
 _ENT_FLAG_CLAMP_MAP = 1
 _ENT_FLAG_ALLOW_LEDGE_FALL = 2
 _ENT_FLAG_RESPAWN = 4
+_ENT_FLAG_CLAMP_CAMERA = 8
 
 # Canvas overlay colors per collision type
 _TCOL_OVERLAY: dict[int, "QColor"] = {}   # filled after QColor is importable
@@ -3732,6 +3733,10 @@ class LevelTab(QWidget):
         self._chk_ent_clamp_map.setToolTip(tr("level.prop_clamp_map_tt"))
         self._chk_ent_clamp_map.toggled.connect(self._on_ent_clamp_map_toggled)
         iv.addWidget(self._chk_ent_clamp_map)
+        self._chk_ent_clamp_camera = QCheckBox(tr("level.prop_clamp_camera"))
+        self._chk_ent_clamp_camera.setToolTip(tr("level.prop_clamp_camera_tt"))
+        self._chk_ent_clamp_camera.toggled.connect(self._on_ent_clamp_camera_toggled)
+        iv.addWidget(self._chk_ent_clamp_camera)
         self._chk_ent_allow_ledge_fall = QCheckBox(tr("level.prop_allow_ledge_fall"))
         self._chk_ent_allow_ledge_fall.setToolTip(tr("level.prop_allow_ledge_fall_tt"))
         self._chk_ent_allow_ledge_fall.toggled.connect(self._on_ent_allow_ledge_fall_toggled)
@@ -10582,6 +10587,25 @@ class LevelTab(QWidget):
         self._canvas.update()
         self._update_diagnostics()
 
+    def _on_ent_clamp_camera_toggled(self, checked: bool) -> None:
+        if self._updating_props:
+            return
+        idx = self._selected
+        if not (0 <= idx < len(self._entities)):
+            return
+        flags = int(self._entities[idx].get("flags", 0) or 0)
+        if checked:
+            flags |= _ENT_FLAG_CLAMP_CAMERA
+        else:
+            flags &= ~_ENT_FLAG_CLAMP_CAMERA
+        if flags:
+            self._entities[idx]["flags"] = flags
+        else:
+            self._entities[idx].pop("flags", None)
+        self._refresh_entity_runtime_ui()
+        self._canvas.update()
+        self._update_diagnostics()
+
     def _on_ent_allow_ledge_fall_toggled(self, checked: bool) -> None:
         if self._updating_props:
             return
@@ -10982,6 +11006,7 @@ class LevelTab(QWidget):
                     self._combo_ent_path.setCurrentIndex(i + 1)
                     break
             self._chk_ent_clamp_map.setChecked(bool(int(ent.get("flags", 0) or 0) & _ENT_FLAG_CLAMP_MAP))
+            self._chk_ent_clamp_camera.setChecked(bool(int(ent.get("flags", 0) or 0) & _ENT_FLAG_CLAMP_CAMERA))
             self._chk_ent_allow_ledge_fall.setChecked(
                 bool(int(ent.get("flags", 0) or 0) & _ENT_FLAG_ALLOW_LEDGE_FALL)
             )
@@ -11369,6 +11394,7 @@ class LevelTab(QWidget):
         self._combo_ent_path.setEnabled(enabled)
         self._combo_ent_preset.setEnabled(enabled)
         self._chk_ent_clamp_map.setEnabled(enabled)
+        self._chk_ent_clamp_camera.setEnabled(enabled)
         self._chk_ent_allow_ledge_fall.setEnabled(enabled)
         if hasattr(self, "_grp_ai_params"):
             self._grp_ai_params.setEnabled(enabled)

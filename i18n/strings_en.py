@@ -1838,6 +1838,8 @@ STRINGS_EN: dict[str, str] = {
     "level.prop_path_help_assigned": "Assigned path: <b>{path}</b>.",
     "level.prop_clamp_map":      "Clamp to map",
     "level.prop_clamp_map_tt":   "Prevents this instance from leaving the map bounds in the exported autorun. Useful for the player, some enemies, or platforms.",
+    "level.prop_clamp_camera":   "Clamp to camera",
+    "level.prop_clamp_camera_tt":"Confines this instance to the 160×152 px camera viewport. Typical shmup pattern where the player must stay on-screen while the map scrolls. Stacks with \"Clamp to map\".",
     "level.prop_allow_ledge_fall": "Can fall off ledges",
     "level.prop_allow_ledge_fall_tt": "Allows this instance to fall off ledges instead of turning back. Read by runtime actors that use platformer gravity + support handling.",
     "level.prop_respawn":         "Respawn on re-entry",

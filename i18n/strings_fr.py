@@ -1436,6 +1436,8 @@ STRINGS_FR: dict[str, str] = {
     "level.prop_path_tt":        "Attribue ce chemin à l'entité sélectionnée. Dessiner un chemin seul ne suffit pas : il faut ensuite le choisir ici. Exporté dans g_{sym}_ent_paths[] (255=aucun). Le démarrage exact dépend du runtime.",
     "level.prop_clamp_map":      "Bloquer dans la map",
     "level.prop_clamp_map_tt":   "Empêche cette instance de sortir des limites de la map dans l'autorun exporté. Utile pour le joueur, certains ennemis ou plateformes.",
+    "level.prop_clamp_camera":   "Bloquer dans la caméra",
+    "level.prop_clamp_camera_tt":"Confine cette instance à la vue caméra 160×152 px (viewport courant). Typique d'un shmup où le joueur ne doit pas sortir de l'écran pendant que la map défile. Cumulable avec « Bloquer dans la map ».",
     "level.prop_allow_ledge_fall": "Peut tomber des bords",
     "level.prop_allow_ledge_fall_tt": "Autorise cette instance à tomber volontairement d'un bord au lieu de faire demi-tour. Lu par les acteurs runtime qui utilisent gravité + support platformer.",
     "level.prop_respawn":         "Respawn à la réentrée",

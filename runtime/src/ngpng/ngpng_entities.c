@@ -458,6 +458,25 @@ void ngpng_clamp_world_rect(const NgpSceneDef *sc, s16 *wx, s16 *wy, u8 w, u8 h)
     if (*wy > max_y) *wy = max_y;
 }
 
+void ngpng_clamp_camera_rect(s16 *wx, s16 *wy, s16 cam_px, s16 cam_py, u8 w, u8 h)
+{
+    s16 min_x;
+    s16 min_y;
+    s16 max_x;
+    s16 max_y;
+    if (!wx || !wy) return;
+    min_x = cam_px;
+    min_y = cam_py;
+    max_x = (s16)(cam_px + (s16)(160 - (s16)w));
+    max_y = (s16)(cam_py + (s16)(152 - (s16)h));
+    if (max_x < min_x) max_x = min_x;
+    if (max_y < min_y) max_y = min_y;
+    if (*wx < min_x) *wx = min_x;
+    if (*wy < min_y) *wy = min_y;
+    if (*wx > max_x) *wx = max_x;
+    if (*wy > max_y) *wy = max_y;
+}
+
 s8 ngpng_step_toward(s16 cur, s16 dst, s8 step)
 {
     s16 diff = (s16)(dst - cur);
@@ -1456,6 +1475,9 @@ void ngpng_enemies_update(const NgpSceneDef *sc,
                     if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_MAP)
                         ngpng_clamp_world_rect(sc, &enemies[i].world_x, &enemies[i].world_y,
                             enemies[i].body_w, enemies[i].body_h);
+                    if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_CAMERA)
+                        ngpng_clamp_camera_rect(&enemies[i].world_x, &enemies[i].world_y,
+                            cam_px, cam_py, enemies[i].body_w, enemies[i].body_h);
                 }
                 if (processed >= *enemy_active_count) break;
                 continue;
@@ -1479,6 +1501,9 @@ void ngpng_enemies_update(const NgpSceneDef *sc,
                 if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_MAP)
                     ngpng_clamp_world_rect(sc, &enemies[i].world_x, &enemies[i].world_y,
                         enemies[i].body_w, enemies[i].body_h);
+                if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_CAMERA)
+                    ngpng_clamp_camera_rect(&enemies[i].world_x, &enemies[i].world_y,
+                        cam_px, cam_py, enemies[i].body_w, enemies[i].body_h);
                 if (enemies[i].vx == 0 && enemies[i].vy == 0) {
                     enemies[i].path_step = (u8)(enemies[i].path_step + 1u);
                     if (enemies[i].path_step >= plen) {
@@ -1533,6 +1558,9 @@ void ngpng_enemies_update(const NgpSceneDef *sc,
         if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_MAP)
             ngpng_clamp_world_rect(sc, &enemies[i].world_x, &enemies[i].world_y,
                 enemies[i].body_w, enemies[i].body_h);
+        if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_CAMERA)
+            ngpng_clamp_camera_rect(&enemies[i].world_x, &enemies[i].world_y,
+                cam_px, cam_py, enemies[i].body_w, enemies[i].body_h);
         if (enemies[i].gravity > 0u) {
             /* OPT-K: skip floor probe on odd frames when already on_ground.
              * Undo the gravity step so the enemy stays planted. */
@@ -2212,6 +2240,9 @@ void ngpng_props_update(const NgpSceneDef *sc, NgpngPropActor *props, u8 prop_co
             props[i].moving = 0u;
         if (props[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_MAP)
             ngpng_clamp_world_rect(sc, &props[i].world_x, &props[i].world_y, props[i].body_w, props[i].body_h);
+        if (props[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_CAMERA)
+            ngpng_clamp_camera_rect(&props[i].world_x, &props[i].world_y, cam_px, cam_py,
+                props[i].body_w, props[i].body_h);
     }
 }
 

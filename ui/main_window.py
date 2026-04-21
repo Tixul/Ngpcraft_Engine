@@ -396,13 +396,17 @@ class MainWindow(QMainWindow):
             btn = getattr(self, f"_group_btn_{gkey}", None)
             if btn is not None:
                 btn.setChecked(gkey == name)
-        # Navigate to last remembered tab in group, or first visible tab
-        remembered = self._active_tab_per_group.get(name)
-        if remembered is not None:
-            r_idx = self._tabs.indexOf(remembered)
-            if r_idx >= 0 and self._tabs.isTabVisible(r_idx):
-                self._tabs.setCurrentWidget(remembered)
-                return
+        # Navigate to last remembered tab in group, or first visible tab.
+        # Exception: the "project" group always reopens on _project_tab so that
+        # entering the category lands on the project overview, not a sub-tab
+        # (police/globals/map) the user happened to leave active.
+        if name != "project":
+            remembered = self._active_tab_per_group.get(name)
+            if remembered is not None:
+                r_idx = self._tabs.indexOf(remembered)
+                if r_idx >= 0 and self._tabs.isTabVisible(r_idx):
+                    self._tabs.setCurrentWidget(remembered)
+                    return
         for attr in group_attrs:
             tab = getattr(self, attr, None)
             if tab is None:

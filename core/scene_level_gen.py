@@ -1168,7 +1168,7 @@ def make_scene_level_h(
             _write_u8_table(
                 f"g_{sym_use}_ent_flags",
                 ent_flags,
-                "Instance flags per entity (bit0=clamp, bit2=respawn on zone re-entry)",
+                "Instance flags per entity (bit0=clamp map, bit2=respawn, bit3=clamp camera)",
             )
     else:
         lines.append(f"#define {sym_use.upper()}_ENTITY_COUNT 0")
