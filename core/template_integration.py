@@ -1012,6 +1012,17 @@ def patch_makefile_for_autogen(*, template_root: Path, export_dir_rel: str, enab
         block.append("# B-2b: ngpc_wave sequencer (flat ROM table driven by NgpcWaveSeq).")
         block.append("CDEFS += -Ioptional")
         block.append("OBJS += $(OBJ_DIR)/optional/ngpc_wave/ngpc_wave.rel")
+    # B-2c: ngpc_rwave director — compiled when any scene uses random-wave spawns.
+    _has_wave_rand_mk = bool(_feat.get("has_wave_rand", False))
+    if _has_wave_rand_mk and has_enemy:
+        _max_rw = int(_feat.get("max_rwave_per_scene", 1) or 1)
+        block.append("# B-2c: ngpc_rwave random-wave director (xorshift16, RTC-seedable).")
+        block.append("CDEFS += -Ioptional")
+        block.append(f"CDEFS += -DNGP_RWAVE_MAX_PER_SCENE={_max_rw}")
+        block.append("OBJS += $(OBJ_DIR)/optional/ngpc_rwave/ngpc_rwave.rel")
+        # ngpc_rwave depends on ngpc_rtc for seeding — deduplicate then re-add.
+        block.append("OBJS := $(filter-out $(OBJ_DIR)/src/core/ngpc_rtc.rel,$(OBJS))")
+        block.append("OBJS += $(OBJ_DIR)/src/core/ngpc_rtc.rel")
     if has_dialogues:
         block.append("# DLG-1: ngpc_dialog runtime + custom font for trigger-driven scene dialogues.")
         block.append("CDEFS += -Ioptional")
@@ -1623,8 +1634,26 @@ def _detect_features(project_data: dict) -> dict:
             _has_hud_flags = True
 
     # mapstream: any scene with map_w > 32 or map_h > 32
+    # Plane selection must stay in sync with scene_loader_gen.py: pick the plane
+    # whose tilemap carries the large background — SCR1 has priority, else SCR2.
+    def _detect_mapstream_plane(sc: dict) -> int:
+        planes: set[str] = set()
+        for _tm in (sc.get("tilemaps") or []):
+            if not isinstance(_tm, dict):
+                continue
+            _p = str(_tm.get("plane", "")).lower()
+            if _p in ("scr1", "scr2"):
+                planes.add(_p)
+        if "scr1" in planes:
+            return 1
+        if "scr2" in planes:
+            return 2
+        # No explicit plane on tilemaps: fall back on the scene's front plane.
+        _front = str(sc.get("level_bg_front") or sc.get("bg_front") or "scr1").lower()
+        return 2 if _front == "scr2" else 1
+
     has_mapstream = False
-    mapstream_scenes: list[dict] = []  # [{"sym": str, "map_w": int, "map_h": int}, ...]
+    mapstream_scenes: list[dict] = []  # [{"sym": str, "map_w": int, "map_h": int, "plane": 1|2}, ...]
     has_dialogues = False
     dialog_scenes: list[dict] = []  # [{"sym": str}]
     for _sc in scenes_list:
@@ -1637,7 +1666,12 @@ def _detect_features(project_data: dict) -> dict:
             has_mapstream = True
             _lbl = str(_sc.get("label") or _sc.get("id") or "scene")
             _sym = safe_ident(_lbl)
-            mapstream_scenes.append({"sym": _sym, "map_w": _mw, "map_h": _mh})
+            mapstream_scenes.append({
+                "sym": _sym,
+                "map_w": _mw,
+                "map_h": _mh,
+                "plane": _detect_mapstream_plane(_sc),
+            })
         if len(_sc.get("dialogues") or []) > 0:
             has_dialogues = True
             _lbl = str(_sc.get("label") or _sc.get("id") or "scene")
@@ -1700,11 +1734,45 @@ def _detect_features(project_data: dict) -> dict:
         len(sc.get("pal_cycles") or []) > 0
         for sc in scenes_list if isinstance(sc, dict)
     )
-    # Wave module: any scene with at least one wave entry.
-    has_waves = any(
-        len(sc.get("waves") or []) > 0
-        for sc in scenes_list if isinstance(sc, dict)
-    )
+    # Wave module: any scene with at least one *scripted* wave entry.
+    # A rand-only wave is consumed by ngpc_rwave, so there's no point compiling
+    # ngpc_wave for it (saves ~200 B ROM + a NgpcWaveSeq instance).
+    def _scene_has_scripted_wave(sc: dict) -> bool:
+        if not isinstance(sc, dict):
+            return False
+        for w in (sc.get("waves") or []):
+            if not isinstance(w, dict):
+                continue
+            for ent in (w.get("entities") or []):
+                if isinstance(ent, dict) and not bool(ent.get("rand", False)):
+                    return True
+        return False
+
+    has_waves = any(_scene_has_scripted_wave(sc) for sc in scenes_list)
+    # Random wave director: any scene with a rand=True wave entity.
+    # The scripted ngpc_wave and the random ngpc_rwave coexist peacefully:
+    # rand entries are lifted out of the scripted table and produce one
+    # NgpcRWave director instance each at runtime.
+    def _scene_rwave_count(sc: dict) -> int:
+        if not isinstance(sc, dict):
+            return 0
+        n = 0
+        for w in (sc.get("waves") or []):
+            if not isinstance(w, dict):
+                continue
+            for ent in (w.get("entities") or []):
+                if isinstance(ent, dict) and bool(ent.get("rand", False)):
+                    n += 1
+        return n
+
+    rwave_counts = [_scene_rwave_count(sc) for sc in scenes_list]
+    has_wave_rand = any(n > 0 for n in rwave_counts)
+    # NGP_RWAVE_MAX_PER_SCENE: runtime array size. Never below 1 so the array
+    # compiles even with empty scenes; tightened to the actual max so we don't
+    # waste ~28 bytes per unused slot.
+    max_rwave_per_scene = max(rwave_counts) if rwave_counts else 0
+    if max_rwave_per_scene < 1:
+        max_rwave_per_scene = 1
     # DungeonGen: any scene with rt_dungeongen_params.enabled=True
     has_dungeongen = any(
         isinstance(sc.get("rt_dungeongen_params"), dict)
@@ -1775,6 +1843,8 @@ def _detect_features(project_data: dict) -> dict:
         "dialog_scenes":    dialog_scenes,
         "has_palfx":        has_palfx,
         "has_waves":        has_waves,
+        "has_wave_rand":    has_wave_rand,
+        "max_rwave_per_scene": int(max_rwave_per_scene),
         "has_save":         has_save,
         "has_dungeongen":   has_dungeongen,
     }
@@ -1945,6 +2015,8 @@ def write_autorun_main_c(
     dialog_scenes    = feat.get("dialog_scenes") or []
     has_palfx        = feat.get("has_palfx", False)
     has_waves        = feat.get("has_waves", False)
+    has_wave_rand    = feat.get("has_wave_rand", False)
+    max_rwave_per_scene = int(feat.get("max_rwave_per_scene", 1) or 1)
     has_dungeongen   = feat.get("has_dungeongen", False)
     scenes_list      = (project_data or {}).get("scenes") or []
 
@@ -2300,12 +2372,15 @@ def write_autorun_main_c(
                 return f"(s8)((s16)((s16)ngpng_td_sin8[{ang_expr}] * (s16)({spd_expr})) >> 4)"
             def _vy_from_angle(ang_expr: str, spd_expr: str) -> str:
                 return f"(s8)((s16)((s16)ngpng_td_cos8[{ang_expr}] * (s16)({spd_expr})) >> 4)"
-            # Shared tail: apply frame+flip from angle table
+            # Shared tail: apply frame + (optional) flip from angle table.
+            # Auto-flip is opt-in via the sprite's flip_x_dir prop ("Flip dir" checkbox).
+            # Default 0 → facing stays as initialized (0), matching non-topdown controllers.
             tail = [
                 f"    (actor).frame      = ngpng_td_angle_frame[s_td_angle]; \\\n",
-                f"    (actor).face_hflip = ngpng_td_angle_fliph[s_td_angle]; \\\n",
-                f"}} while(0)\n\n",
             ]
+            if flip_x_dir:
+                tail.append(f"    (actor).face_hflip = ngpng_td_angle_fliph[s_td_angle]; \\\n")
+            tail.append(f"}} while(0)\n\n")
 
             if has_topdown_relative and has_topdown_vehicle:
                 # relative + vehicle: L/R rotate, A=accel, B=brake, friction passive
@@ -2551,6 +2626,11 @@ def write_autorun_main_c(
         c.append('#include "fx/ngpc_palfx.h"\n')
     if has_waves and has_enemy:
         c.append('#include "../optional/ngpc_wave/ngpc_wave.h"\n')
+    if has_wave_rand and has_enemy:
+        # Sync so existing projects pick up the module without a fresh scaffold.
+        _sync_optional_module(template_root, "optional/ngpc_rwave")
+        c.append('#include "../optional/ngpc_rwave/ngpc_rwave.h"\n')
+        c.append('#include "ngpc_rtc.h"  /* ngpc_rwave_seed_rtc() */\n')
     if bool((project_data or {}).get("no_sysfont")):
         c.append("#ifdef NO_SYSFONT\n")
         c.append('#include "ngpc_custom_font.h"\n')
@@ -3120,6 +3200,12 @@ def write_autorun_main_c(
     c.append("#endif\n\n")
     c.append("#ifndef NGPNG_ENT_FLAG_CLAMP_MAP\n")
     c.append("#define NGPNG_ENT_FLAG_CLAMP_MAP 1u\n")
+    c.append("#endif\n")
+    c.append("#ifndef NGPNG_ENT_FLAG_CLAMP_CAMERA\n")
+    c.append("#define NGPNG_ENT_FLAG_CLAMP_CAMERA 8u\n")
+    c.append("#endif\n")
+    c.append("#ifndef NGPNG_ENT_FLAG_CULL_OFFSCREEN\n")
+    c.append("#define NGPNG_ENT_FLAG_CULL_OFFSCREEN 16u\n")
     c.append("#endif\n\n")
     c.append("#ifndef NGPNG_BEHAVIOR_PATROL\n")
     c.append("#define NGPNG_BEHAVIOR_PATROL 0\n")
@@ -3638,8 +3724,15 @@ def write_autorun_main_c(
         c.append('}\n')
         c.append('\n')
     # B-2: ngpng_fx_spawn now in ngpng_entities.c
-    if has_shooting:
-        c.append('static void ngpng_player_shots_update_and_collide(const NgpSceneDef *sc, NgpngPlayerShot *shots, u8 *active_count, NgpngEnemy *enemies, u8 *enemy_active_count, u16 *score, u8 explosion_type, NgpngFx *fx, u8 *fx_active_count, u8 *fx_alloc_idx, s16 cam_px, s16 cam_py)\n')
+    # Gate on has_enemy: the function references NgpngEnemy/NgpngFx which are only
+    # typedef'd when HAS_ENEMY/HAS_FX are set. Matches the call site guard (has_shooting && has_enemy).
+    if has_shooting and has_enemy:
+        c.append('static void ngpng_player_shots_update_and_collide(\n')
+        c.append('    const NgpSceneDef *sc, NgpngPlayerShot *shots, u8 *active_count,\n')
+        c.append('    NgpngEnemy *enemies, u8 *enemy_active_count,\n')
+        c.append('    u16 *score, u8 explosion_type,\n')
+        c.append('    NgpngFx *fx, u8 *fx_active_count, u8 *fx_alloc_idx,\n')
+        c.append('    s16 cam_px, s16 cam_py)\n')
         c.append('{\n')
         c.append('    u8 i;\n')
         c.append('    u8 processed = 0u;\n')
@@ -4158,7 +4251,8 @@ def write_autorun_main_c(
             _mh = int(_ms["map_h"])
             c.append(f"#if defined(SCENE_{_SYM}_LEVEL_H) && {_SYM}_HAS_MAPSTREAM\n")
             c.append(f"    case NGP_SCENE_{_SYM}_IDX:\n")
-            c.append(f"        ngpc_mapstream_init(&s_ms, GFX_SCR1, g_{_sym}_bg_map, {_mw}u, {_mh}u, cam_px, cam_py);\n")
+            _plane_macro = "GFX_SCR2" if int(_ms.get("plane", 1) or 1) == 2 else "GFX_SCR1"
+            c.append(f"        ngpc_mapstream_init(&s_ms, {_plane_macro}, g_{_sym}_bg_map, {_mw}u, {_mh}u, cam_px, cam_py);\n")
             c.append(f"        break;\n")
             c.append(f"#endif\n")
         c.append("    default:\n")
@@ -4385,6 +4479,50 @@ def write_autorun_main_c(
             c.append("    return 0u;\n")
             c.append("}\n\n")
         c.append("#endif\n")
+
+    # Random-wave runtime state — one NgpcRWave per rand entry in the active
+    # scene. Sized at build time to the max across all scenes; the live count
+    # is re-synced on every scene enter.
+    if has_wave_rand and has_enemy:
+        c.append("#ifndef NGP_RWAVE_MAX_PER_SCENE\n")
+        c.append(f"#define NGP_RWAVE_MAX_PER_SCENE {int(max_rwave_per_scene)}u\n")
+        c.append("#endif\n")
+        c.append("static NgpcRWave      s_rwaves[NGP_RWAVE_MAX_PER_SCENE];\n")
+        c.append("/* s_rwave_tiers must outlive the ngpc_rwave_init() call because the\n")
+        c.append(" * director stores a pointer into it. Copied from ROM cfg on scene enter. */\n")
+        c.append("static NgpcRWaveTier  s_rwave_tiers[NGP_RWAVE_MAX_PER_SCENE];\n")
+        c.append("/* Per-director countdown before first spawn (inherits wave's delay). */\n")
+        c.append("static u16            s_rwave_start_delay[NGP_RWAVE_MAX_PER_SCENE];\n")
+        c.append("static u8 s_rwaves_n = 0u;\n")
+        c.append("/* Live pointer to current scene's ROM cfg array (for per-spawn type lookup). */\n")
+        c.append("static const NgpcRWaveCfg *s_rwave_cur_cfgs = 0;\n")
+        c.append("\n")
+        c.append("static void ngpng_rwave_enter_scene(const NgpSceneDef *sc)\n{\n")
+        c.append("    u8 i, n;\n")
+        c.append("    s_rwaves_n = 0u;\n")
+        c.append("    s_rwave_cur_cfgs = 0;\n")
+        c.append("    if (!sc || !sc->rwave_cfgs || sc->rwave_cfgs_n == 0u) return;\n")
+        c.append("    n = sc->rwave_cfgs_n;\n")
+        c.append("    if (n > NGP_RWAVE_MAX_PER_SCENE) n = NGP_RWAVE_MAX_PER_SCENE;\n")
+        c.append("    s_rwaves_n = n;\n")
+        c.append("    s_rwave_cur_cfgs = sc->rwave_cfgs;\n")
+        c.append("    for (i = 0u; i < n; i++) {\n")
+        c.append("        const NgpcRWaveCfg *cfg = &sc->rwave_cfgs[i];\n")
+        c.append("        s_rwave_tiers[i].min_count        = cfg->min_count;\n")
+        c.append("        s_rwave_tiers[i].max_count        = cfg->max_count;\n")
+        c.append("        s_rwave_tiers[i].wave_interval_fr = cfg->interval_fr;\n")
+        c.append("        /* type_count=1 because enemy_type is driven by cfg, not by the RNG. */\n")
+        c.append("        ngpc_rwave_init(&s_rwaves[i], &s_rwave_tiers[i], 1u, 1u, (u8)160u, (u8)152u);\n")
+        c.append("        ngpc_rwave_seed_rtc(&s_rwaves[i]);\n")
+        c.append("        /* Per-director stir: on emulators the RTC often reads the same second\n")
+        c.append("         * for all waves of a scene; without this, every director would pick\n")
+        c.append("         * identical counts/sides on the first wave. */\n")
+        c.append("        ngpc_rwave_seed_stir(&s_rwaves[i], (u16)((u16)i + 1u));\n")
+        c.append("        s_rwaves[i].sides_mask = cfg->sides_mask;\n")
+        c.append("        s_rwaves[i].max_waves  = cfg->max_waves;\n")
+        c.append("        s_rwave_start_delay[i] = cfg->start_delay;\n")
+        c.append("    }\n")
+        c.append("}\n\n")
 
     c.append("void main(void)\n{\n")
     c.append("    u16 tx = 0, ty = 0;\n")
@@ -4732,6 +4870,8 @@ def write_autorun_main_c(
             c.append("    ngpc_wave_start(&wave_seq, g_ngp_scenes[cur_scene].wave_table, g_ngp_scenes[cur_scene].wave_table_n);\n")
         else:
             c.append("    next_wave = 0u;\n")
+        if has_wave_rand:
+            c.append("    ngpng_rwave_enter_scene(&g_ngp_scenes[cur_scene]);\n")
     if has_shooting:
         c.append("    ngpng_player_shots_clear(shots, &player_shots_active, &player_shots_alloc);\n")
     if has_bullets:
@@ -4757,6 +4897,7 @@ def write_autorun_main_c(
         c.append(f"        {VAR}_CTRL_INIT(s_{n}, spawn_x, spawn_y);\n")
         c.append(f"        s_{n}.flags = player_ent_flags;\n")
         c.append(f"        ngpng_player_clamp_world(&g_ngp_scenes[cur_scene], &s_{n}, cam_px, cam_py, player_body_x, player_body_y, player_body_w, player_body_h, player_render_off_x, player_render_off_y, player_frame_w, player_frame_h);\n")
+        c.append(f"        ngpng_player_clamp_camera(&s_{n}, player_body_x, player_body_y, player_body_w, player_body_h);\n")
         if has_dungeongen:
             c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
             c.append("        /* DungeonGen: override cam to (0,0); enter room 0 through its entry doorway.\n")
@@ -5040,8 +5181,13 @@ def write_autorun_main_c(
             c.append("                    s_player_input_locked = 0u;\n")
     c.append("                    sc->exit();\n")
     if _pause_quit_safe:
+        # Defensive: if pause_quit_scene references a scene that doesn't exist
+        # (typical when the project is renamed or the default "intro" isn't
+        # created), fall back to the current scene instead of breaking the build.
+        c.append(f"#if defined(NGP_SCENE_{_pq_sym}_IDX)\n")
         c.append(f"                    cur_scene = (u8)NGP_SCENE_{_pq_sym}_IDX;\n")
         c.append("                    sc = &g_ngp_scenes[cur_scene];\n")
+        c.append("#endif\n")
     c.append("                    sc->enter();\n")
     if has_palfx:
         c.append("                    ngpng_palfx_enter(cur_scene);\n")
@@ -5055,6 +5201,8 @@ def write_autorun_main_c(
             c.append("                    ngpc_wave_start(&wave_seq, sc->wave_table, sc->wave_table_n);\n")
         else:
             c.append("                    next_wave = 0u;\n")
+        if has_wave_rand:
+            c.append("                    ngpng_rwave_enter_scene(sc);\n")
     if has_shooting:
         c.append("                    ngpng_player_shots_clear(shots, &player_shots_active, &player_shots_alloc);\n")
     if has_bullets:
@@ -5071,6 +5219,7 @@ def write_autorun_main_c(
         c.append(f"                        {VAR}_CTRL_INIT(s_{n}, spawn_x, spawn_y);\n")
         c.append(f"                        s_{n}.flags = player_ent_flags;\n")
         c.append(f"                        ngpng_player_clamp_world(sc, &s_{n}, cam_px, cam_py, player_body_x, player_body_y, player_body_w, player_body_h, player_render_off_x, player_render_off_y, player_frame_w, player_frame_h);\n")
+        c.append(f"                        ngpng_player_clamp_camera(&s_{n}, player_body_x, player_body_y, player_body_w, player_body_h);\n")
         for p in players[1:]:
             _n2 = p["name"]
             c.append(f"                        s_{_n2} = s_{n};\n")
@@ -5147,6 +5296,8 @@ def write_autorun_main_c(
             c.append("            ngpc_wave_start(&wave_seq, sc->wave_table, sc->wave_table_n);\n")
         else:
             c.append("            next_wave = 0u;\n")
+        if has_wave_rand:
+            c.append("            ngpng_rwave_enter_scene(sc);\n")
     if has_shooting:
         c.append("            ngpng_player_shots_clear(shots, &player_shots_active, &player_shots_alloc);\n")
     if has_bullets:
@@ -5170,6 +5321,7 @@ def write_autorun_main_c(
         c.append(f"                {VAR}_CTRL_INIT(s_{n}, spawn_x, spawn_y);\n")
         c.append(f"                s_{n}.flags = player_ent_flags;\n")
         c.append(f"                ngpng_player_clamp_world(sc, &s_{n}, cam_px, cam_py, player_body_x, player_body_y, player_body_w, player_body_h, player_render_off_x, player_render_off_y, player_frame_w, player_frame_h);\n")
+        c.append(f"                ngpng_player_clamp_camera(&s_{n}, player_body_x, player_body_y, player_body_w, player_body_h);\n")
         if has_dungeongen:
             c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
             c.append("                /* DungeonGen: sc->enter() only reloaded assets; enter room 0 through its entry doorway. */\n")
@@ -5556,6 +5708,7 @@ def write_autorun_main_c(
                 c.append(f"                ngpng_player_bump_blocks(sc, props, prop_count, prev_player_world_x, prev_player_world_y, cam_px, cam_py, &s_{n}.x, &s_{n}.y, &s_{n}.vy, player_body_x, player_body_y, player_body_w, player_body_h, &score, &player_hp, player_hp_max, &collectible_count);\n")
                 c.append("            }\n")
         c.append(f"            ngpng_player_clamp_world(sc, &s_{n}, cam_px, cam_py, player_body_x, player_body_y, player_body_w, player_body_h, player_render_off_x, player_render_off_y, player_frame_w, player_frame_h);\n")
+        c.append(f"            ngpng_player_clamp_camera(&s_{n}, player_body_x, player_body_y, player_body_w, player_body_h);\n")
         if not has_topdown_physics:
             c.append(f"            if (s_{n}.vy < 0 && prev_player_vy >= 0) player_jump_started = 1u;\n")
         c.append("            /* OPT-F: skip tile effects on odd frames — damage/spring/conveyor tolerate 1-frame latency. */\n")
@@ -5702,6 +5855,8 @@ def write_autorun_main_c(
                 c.append("                    ngpc_wave_start(&wave_seq, sc->wave_table, sc->wave_table_n);\n")
             else:
                 c.append("                    next_wave = 0u;\n")
+            if has_wave_rand:
+                c.append("                    ngpng_rwave_enter_scene(sc);\n")
         if has_shooting:
             c.append("                    ngpng_player_shots_clear(shots, &player_shots_active, &player_shots_alloc);\n")
         if has_bullets:
@@ -5731,6 +5886,7 @@ def write_autorun_main_c(
         c.append(f"                {VAR}_CTRL_INIT(s_{n}, spawn_x, spawn_y);\n")
         c.append(f"                s_{n}.flags = player_ent_flags;\n")
         c.append(f"                ngpng_player_clamp_world(sc, &s_{n}, cam_px, cam_py, player_body_x, player_body_y, player_body_w, player_body_h, player_render_off_x, player_render_off_y, player_frame_w, player_frame_h);\n")
+        c.append(f"                ngpng_player_clamp_camera(&s_{n}, player_body_x, player_body_y, player_body_w, player_body_h);\n")
         c.append(f"                s_{n}_visible = 0u;\n")
         c.append(f"                s_{n}_last_x = (s16)-32768;\n")
         c.append(f"                s_{n}_last_y = (s16)-32768;\n")
@@ -5776,6 +5932,50 @@ def write_autorun_main_c(
             c.append("        }\n")
         else:
             c.append("        (void)next_wave;  /* no waves in project */\n")
+        if has_wave_rand:
+            # ngpc_rwave directors tick in parallel; each may emit one spawn per frame.
+            # The director emits screen-space pixel coords (possibly off-screen). The
+            # ngpng entity system stores world-space pixels in NgpngEnemy.world_x/y,
+            # populated by ngpng_enemy_spawn from src->x/y*8. That path treats src->x
+            # as TILES, which doesn't match our pixel intent — so we spawn with a
+            # placeholder src and overwrite world_x/world_y + vx/vy on the resulting
+            # slot. The slot index is recoverable from *enemy_alloc_idx post-spawn.
+            c.append("        if (s_rwaves_n > 0u && s_rwave_cur_cfgs) {\n")
+            c.append("            NgpcRWaveSpawn _rws;\n")
+            c.append("            NgpngEnt _rw_ent;\n")
+            c.append("            u8 _ri, _prev_ac, _new_slot;\n")
+            c.append("            for (_ri = 0u; _ri < s_rwaves_n; _ri++) {\n")
+            c.append("                /* Honor the wave's configured start delay (frames since enter). */\n")
+            c.append("                if (s_rwave_start_delay[_ri] > 0u) { s_rwave_start_delay[_ri]--; continue; }\n")
+            c.append("                if (ngpc_rwave_update(&s_rwaves[_ri], &_rws)) {\n")
+            c.append("                    _rw_ent.type = s_rwave_cur_cfgs[_ri].enemy_type;\n")
+            c.append("                    _rw_ent.x    = 0u;  /* overwritten via world_x below */\n")
+            c.append("                    _rw_ent.y    = 0u;\n")
+            c.append("                    _rw_ent.data = 0u;\n")
+            c.append("                    _prev_ac = enemy_active_count;\n")
+            c.append("                    /* Propagate the wave cfg's behavior + flags to the spawn so\n")
+            c.append("                     * PATROL/CHASE/FIXED/RANDOM act on the enemy, and so\n")
+            c.append("                     * CULL_OFFSCREEN (forced on by the exporter) reclaims the\n")
+            c.append("                     * slot once the enemy drifts far past the camera. */\n")
+            c.append("                    ngpng_enemy_spawn(sc, enemies, &enemy_active_count, &enemy_alloc_idx,\n")
+            c.append("                        &_rw_ent, 0xFFu, 0xFFu,\n")
+            c.append("                        s_rwave_cur_cfgs[_ri].spawn_behavior,\n")
+            c.append("                        s_rwave_cur_cfgs[_ri].spawn_flags);\n")
+            c.append("                    if (enemy_active_count > _prev_ac) {\n")
+            c.append("                        _new_slot = (enemy_alloc_idx == 0u)\n")
+            c.append("                            ? (u8)((u8)NGPNG_AUTORUN_MAX_ENEMIES - 1u)\n")
+            c.append("                            : (u8)(enemy_alloc_idx - 1u);\n")
+            c.append("                        /* Director pixels are screen-space: translate to world via camera. */\n")
+            c.append("                        enemies[_new_slot].world_x = (s16)(cam_px + _rws.x);\n")
+            c.append("                        enemies[_new_slot].world_y = (s16)(cam_py + _rws.y);\n")
+            c.append("                        /* Override velocity with the spawn-side direction (×2 matches\n")
+            c.append("                         * the ngpng default |vx|=2 for walking-type enemies). */\n")
+            c.append("                        enemies[_new_slot].vx = (s8)((s16)_rws.vx * 2);\n")
+            c.append("                        enemies[_new_slot].vy = (s8)((s16)_rws.vy * 2);\n")
+            c.append("                    }\n")
+            c.append("                }\n")
+            c.append("            }\n")
+            c.append("        }\n")
     if has_bullets and players:
         c.append(f"        if (!game_over) ngpng_enemy_fire_update(sc, enemies, enemy_active_count, enemy_bullets, &enemy_bullets_active, &enemy_bullets_alloc, sc->type_can_shoot, sc->type_fire_rate, sc->type_fire_cond, sc->type_fire_range, sc->type_bullet_btype, (s16)(cam_px + s_{players[0]['name']}.x), (s16)(cam_py + s_{players[0]['name']}.y), cam_px, cam_py);\n")
         c.append(f"        ngpng_enemy_bullets_update_and_collide(sc, enemy_bullets, &enemy_bullets_active, s_{players[0]['name']}.x, s_{players[0]['name']}.y, &s_{players[0]['name']}.vx, &s_{players[0]['name']}.vy, player_hb_x, player_hb_y, player_hb_w, player_hb_h, &player_hp, &player_invul, cam_px, cam_py);\n")
@@ -6154,6 +6354,17 @@ def write_autorun_main_c(
             else:
                 c.append("                /* TRIG_ACT_SPAWN_WAVE: no wave table in this project. */\n")
             c.append("            }\n")
+        if has_wave_rand and has_enemy:
+            # a0 = director index (0..s_rwaves_n-1) or 0xFF = stop all directors.
+            # Gated on has_enemy too because the s_rwaves[] storage and
+            # ngpc_rwave_pause() symbol are only emitted/linked when has_enemy.
+            c.append("            if (t->action == TRIG_ACT_STOP_WAVE_RAND) {\n")
+            c.append("                if (t->a0 == 0xFFu) {\n")
+            c.append("                    u8 _si; for (_si = 0u; _si < s_rwaves_n; _si++) ngpc_rwave_pause(&s_rwaves[_si]);\n")
+            c.append("                } else if (t->a0 < s_rwaves_n) {\n")
+            c.append("                    ngpc_rwave_pause(&s_rwaves[t->a0]);\n")
+            c.append("                }\n")
+            c.append("            }\n")
         c.append("            if (t->action == TRIG_ACT_PAUSE_SCROLL) {\n")
         c.append("                runtime_scroll_paused = 1u;\n")
         c.append("            }\n")
@@ -6313,6 +6524,7 @@ def write_autorun_main_c(
             c.append(f"                {VAR}_CTRL_INIT(s_{n}, spawn_x, spawn_y);\n")
             c.append(f"                s_{n}.flags = player_ent_flags;\n")
             c.append(f"                ngpng_player_clamp_world(sc, &s_{n}, cam_px, cam_py, player_body_x, player_body_y, player_body_w, player_body_h, player_render_off_x, player_render_off_y, player_frame_w, player_frame_h);\n")
+            c.append(f"                ngpng_player_clamp_camera(&s_{n}, player_body_x, player_body_y, player_body_w, player_body_h);\n")
             c.append(f"                s_{n}_visible = 0u;\n")
             c.append(f"                s_{n}_last_x = (s16)-32768;\n")
             c.append(f"                s_{n}_last_y = (s16)-32768;\n")
@@ -6361,6 +6573,7 @@ def write_autorun_main_c(
             c.append(f"                    {VAR}_CTRL_INIT(s_{n}, spawn_x, spawn_y);\n")
             c.append(f"                    s_{n}.flags = player_ent_flags;\n")
             c.append(f"                    ngpng_player_clamp_world(sc, &s_{n}, cam_px, cam_py, player_body_x, player_body_y, player_body_w, player_body_h, player_render_off_x, player_render_off_y, player_frame_w, player_frame_h);\n")
+            c.append(f"                    ngpng_player_clamp_camera(&s_{n}, player_body_x, player_body_y, player_body_w, player_body_h);\n")
             c.append(f"                    s_{n}_visible = 0u;\n")
             c.append(f"                    s_{n}_last_x = (s16)-32768;\n")
             c.append(f"                    s_{n}_last_y = (s16)-32768;\n")
@@ -6396,6 +6609,7 @@ def write_autorun_main_c(
             c.append(f"                        {VAR}_CTRL_INIT(s_{n}, spawn_x, spawn_y);\n")
             c.append(f"                        s_{n}.flags = player_ent_flags;\n")
             c.append(f"                        ngpng_player_clamp_world(sc, &s_{n}, cam_px, cam_py, player_body_x, player_body_y, player_body_w, player_body_h, player_render_off_x, player_render_off_y, player_frame_w, player_frame_h);\n")
+            c.append(f"                        ngpng_player_clamp_camera(&s_{n}, player_body_x, player_body_y, player_body_w, player_body_h);\n")
             c.append(f"                        s_{n}_visible = 0u;\n")
             c.append(f"                        s_{n}_last_x = (s16)-32768;\n")
             c.append(f"                        s_{n}_last_y = (s16)-32768;\n")
@@ -6510,6 +6724,8 @@ def write_autorun_main_c(
             c.append("            ngpc_wave_start(&wave_seq, sc->wave_table, sc->wave_table_n);\n")
         else:
             c.append("            next_wave = 0u;\n")
+        if has_wave_rand:
+            c.append("            ngpng_rwave_enter_scene(sc);\n")
     if has_shooting:
         c.append("            ngpng_player_shots_clear(shots, &player_shots_active, &player_shots_alloc);\n")
     if has_bullets:
@@ -6533,6 +6749,7 @@ def write_autorun_main_c(
         c.append(f"                {VAR}_CTRL_INIT(s_{n}, spawn_x, spawn_y);\n")
         c.append(f"                s_{n}.flags = player_ent_flags;\n")
         c.append(f"                ngpng_player_clamp_world(sc, &s_{n}, cam_px, cam_py, player_body_x, player_body_y, player_body_w, player_body_h, player_render_off_x, player_render_off_y, player_frame_w, player_frame_h);\n")
+        c.append(f"                ngpng_player_clamp_camera(&s_{n}, player_body_x, player_body_y, player_body_w, player_body_h);\n")
         if has_dungeongen:
             c.append("#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
             c.append("                /* DungeonGen: entering from another scene must also generate room 0. */\n")

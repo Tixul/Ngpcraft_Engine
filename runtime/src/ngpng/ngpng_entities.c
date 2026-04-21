@@ -85,7 +85,7 @@ void ngpng_world_init(const NgpSceneDef *sc)
     if (!sc || !sc->entities) return;
     for (i = 0u; i < sc->entity_count && g_ngpng_world_ent_count < (u8)NGPNG_MAX_WORLD_ENTITIES; ++i) {
         const NgpngEnt *e = &sc->entities[i];
-        u8 role = ngpng_entity_role(sc, e->type);
+        u8 role = ngpng_effective_role_at(sc, i);
         NgpngWorldEnt *we;
         if (role != NGPNG_ROLE_ENEMY) continue;   /* enemies only for now */
         we = &g_ngpng_world_ents[g_ngpng_world_ent_count];
@@ -212,6 +212,17 @@ u8 ngpng_entity_role(const NgpSceneDef *sc, u8 type)
     if (!sc->type_roles) return (type == 0u) ? NGPNG_ROLE_PLAYER : NGPNG_ROLE_ENEMY;
     if (type >= sc->type_role_count) return NGPNG_ROLE_PROP;
     return sc->type_roles[type];
+}
+
+u8 ngpng_effective_role_at(const NgpSceneDef *sc, u8 idx)
+{
+    u8 ov;
+    if (!sc || !sc->entities || idx >= sc->entity_count) return NGPNG_ROLE_PROP;
+    if (sc->entity_role_override) {
+        ov = sc->entity_role_override[idx];
+        if (ov != 0xFFu) return ov;
+    }
+    return ngpng_entity_role(sc, sc->entities[idx].type);
 }
 
 u8 ngpng_type_u8(const u8 *arr, u8 count, u8 type, u8 fallback)
@@ -362,7 +373,7 @@ u8 ngpng_first_flags_by_role(const NgpSceneDef *sc, u8 role)
     u8 i;
     if (!sc || !sc->entities) return 0u;
     for (i = 0u; i < sc->entity_count; ++i) {
-        if (ngpng_entity_role(sc, sc->entities[i].type) != role) continue;
+        if (ngpng_effective_role_at(sc, i) != role) continue;
         if (!sc->entity_flags) return 0u;
         return sc->entity_flags[i];
     }
@@ -458,6 +469,25 @@ void ngpng_clamp_world_rect(const NgpSceneDef *sc, s16 *wx, s16 *wy, u8 w, u8 h)
     if (*wy > max_y) *wy = max_y;
 }
 
+void ngpng_clamp_camera_rect(s16 *wx, s16 *wy, s16 cam_px, s16 cam_py, u8 w, u8 h)
+{
+    s16 min_x;
+    s16 min_y;
+    s16 max_x;
+    s16 max_y;
+    if (!wx || !wy) return;
+    min_x = cam_px;
+    min_y = cam_py;
+    max_x = (s16)(cam_px + (s16)(160 - (s16)w));
+    max_y = (s16)(cam_py + (s16)(152 - (s16)h));
+    if (max_x < min_x) max_x = min_x;
+    if (max_y < min_y) max_y = min_y;
+    if (*wx < min_x) *wx = min_x;
+    if (*wy < min_y) *wy = min_y;
+    if (*wx > max_x) *wx = max_x;
+    if (*wy > max_y) *wy = max_y;
+}
+
 s8 ngpng_step_toward(s16 cur, s16 dst, s8 step)
 {
     s16 diff = (s16)(dst - cur);
@@ -476,7 +506,7 @@ void ngpng_find_player_spawn(const NgpSceneDef *sc, s16 cam_px, s16 cam_py, s16 
         const NgpngEnt *e = &sc->entities[i];
         s8 rox;
         s8 roy;
-        if (ngpng_entity_role(sc, e->type) != NGPNG_ROLE_PLAYER) continue;
+        if (ngpng_effective_role_at(sc, i) != NGPNG_ROLE_PLAYER) continue;
         rox = ngpng_type_s8(sc->render_off_x, sc->type_role_count, e->type, 0);
         roy = ngpng_type_s8(sc->render_off_y, sc->type_role_count, e->type, 0);
         *sx = (s16)((s16)e->x * 8 - rox - cam_px);
@@ -1079,7 +1109,7 @@ void ngpng_enemies_reset_scene(const NgpSceneDef *sc, NgpngEnemy *enemies,
             u8 ent_path     = 0xFFu;
             u8 ent_behavior = 0u;
             u8 ent_flags    = 0u;
-            if (ngpng_entity_role(sc, e->type) != NGPNG_ROLE_ENEMY) continue;
+            if (ngpng_effective_role_at(sc, i) != NGPNG_ROLE_ENEMY) continue;
             if (sc->entity_paths)     ent_path     = sc->entity_paths[i];
             if (sc->entity_behaviors) ent_behavior = sc->entity_behaviors[i];
             if (sc->entity_flags)     ent_flags    = sc->entity_flags[i];
@@ -1445,17 +1475,29 @@ void ngpng_enemies_update(const NgpSceneDef *sc,
         enemies[i].anim = (u8)(enemies[i].anim + 1u);
         /* Off-screen guard: skip expensive tilecol physics for enemies far outside viewport.
          * PLATFORMER: only drift enemies behind the camera (esx < -96).
-         * Enemies ahead (esx > 256) are frozen until the camera reaches them. */
+         * Enemies ahead (esx > 256) are frozen until the camera reaches them.
+         * CULL_OFFSCREEN: when flagged, auto-kill once we're far outside the hard
+         * cull zone (≈1 screen beyond the drift margin) so random-wave spawns can
+         * never accumulate into permanent occupants of the enemy pool. */
         {
             s16 esx = (s16)(enemies[i].world_x - cam_px);
             s16 esy = (s16)(enemies[i].world_y - cam_py);
             if (esx < -96 || esx > 256 || esy < -96 || esy > 248) {
+                if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CULL_OFFSCREEN) {
+                    if (esx < -256 || esx > 416 || esy < -256 || esy > 408) {
+                        ngpng_enemy_kill(enemies, enemy_active_count, i);
+                        continue;
+                    }
+                }
                 if (esx < -96) {
                     enemies[i].world_x = (s16)(enemies[i].world_x + enemies[i].vx);
                     enemies[i].world_y = (s16)(enemies[i].world_y + enemies[i].vy);
                     if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_MAP)
                         ngpng_clamp_world_rect(sc, &enemies[i].world_x, &enemies[i].world_y,
                             enemies[i].body_w, enemies[i].body_h);
+                    if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_CAMERA)
+                        ngpng_clamp_camera_rect(&enemies[i].world_x, &enemies[i].world_y,
+                            cam_px, cam_py, enemies[i].body_w, enemies[i].body_h);
                 }
                 if (processed >= *enemy_active_count) break;
                 continue;
@@ -1479,6 +1521,9 @@ void ngpng_enemies_update(const NgpSceneDef *sc,
                 if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_MAP)
                     ngpng_clamp_world_rect(sc, &enemies[i].world_x, &enemies[i].world_y,
                         enemies[i].body_w, enemies[i].body_h);
+                if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_CAMERA)
+                    ngpng_clamp_camera_rect(&enemies[i].world_x, &enemies[i].world_y,
+                        cam_px, cam_py, enemies[i].body_w, enemies[i].body_h);
                 if (enemies[i].vx == 0 && enemies[i].vy == 0) {
                     enemies[i].path_step = (u8)(enemies[i].path_step + 1u);
                     if (enemies[i].path_step >= plen) {
@@ -1533,6 +1578,9 @@ void ngpng_enemies_update(const NgpSceneDef *sc,
         if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_MAP)
             ngpng_clamp_world_rect(sc, &enemies[i].world_x, &enemies[i].world_y,
                 enemies[i].body_w, enemies[i].body_h);
+        if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_CAMERA)
+            ngpng_clamp_camera_rect(&enemies[i].world_x, &enemies[i].world_y,
+                cam_px, cam_py, enemies[i].body_w, enemies[i].body_h);
         if (enemies[i].gravity > 0u) {
             /* OPT-K: skip floor probe on odd frames when already on_ground.
              * Undo the gravity step so the enemy stays planted. */
@@ -2019,7 +2067,7 @@ void ngpng_props_reset_scene(const NgpSceneDef *sc, NgpngPropActor *props, u8 *p
         const NgpngEnt *src = &sc->entities[i];
         u8 role;
         if (n >= (u8)NGPNG_AUTORUN_MAX_PROPS) break;
-        role = ngpng_entity_role(sc, src->type);
+        role = ngpng_effective_role_at(sc, i);
         if (role == NGPNG_ROLE_PLAYER || role == NGPNG_ROLE_ENEMY || role == NGPNG_ROLE_TRIGGER) continue;
         props[n].active       = 1u;
         props[n].visible      = 1u;
@@ -2212,6 +2260,9 @@ void ngpng_props_update(const NgpSceneDef *sc, NgpngPropActor *props, u8 prop_co
             props[i].moving = 0u;
         if (props[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_MAP)
             ngpng_clamp_world_rect(sc, &props[i].world_x, &props[i].world_y, props[i].body_w, props[i].body_h);
+        if (props[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_CAMERA)
+            ngpng_clamp_camera_rect(&props[i].world_x, &props[i].world_y, cam_px, cam_py,
+                props[i].body_w, props[i].body_h);
     }
 }
 

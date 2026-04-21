@@ -1521,6 +1521,57 @@ if (ngpc_wave_done(&s_seq)) start_next_wave();
 
 ---
 
+### `ngpc_rwave` — Vagues d'ennemis aléatoires (director)
+**Type :** .h + .c · **RAM :** ~28 octets par `NgpcRWave` · **ROM :** 3 octets par `NgpcRWaveTier` · **Dépend de :** ngpc_rtc (dans src/core)
+
+Director procédural à tiers : tire au hasard le type, le nombre, le côté d'entrée (droite/gauche/haut/bas) et la position des ennemis. Opposé complémentaire de `ngpc_wave` (scripté). Utilise un xorshift16 interne, seedable depuis la RTC pour un résultat différent à chaque boot. Ne possède pas les sprites — émet uniquement des événements de spawn que le code jeu consomme.
+
+| Élément | Description |
+|---|---|
+| `NgpcRWaveTier {min_count, max_count, wave_interval_fr}` | Config d'un tier (ROM) |
+| `NgpcRWaveSpawn {x, y, vx, vy, side, enemy_type, index, wave_id, tier}` | Événement de spawn émis |
+| `NGPC_RWAVE_SIDE_RIGHT/LEFT/TOP/BOTTOM` | Constantes de côté d'entrée |
+| `NGPC_RWAVE_SIDES_ALL/HORIZ/VERT` | Masques combinés pour `sides_mask` |
+| `ngpc_rwave_init(rw, tiers, tier_count, type_count, w, h)` | Initialise le director |
+| `ngpc_rwave_seed(rw, seed)` | Seed manuel reproductible |
+| `ngpc_rwave_seed_rtc(rw)` | Seed depuis la RTC hardware (second/minute/hour/day) |
+| `ngpc_rwave_pause/resume(rw)` | Gèle/reprend l'émission de spawns |
+| `ngpc_rwave_update(rw, *out)` | Avance d'un frame, remplit `*out` et retourne 1 si spawn dû |
+
+**Champs tweakables après init :** `offscreen_margin` (def. 8), `axis_jitter_max` (def. 20), `waves_per_tier` (def. 10), `intra_interval_min/max` (def. 6/10), `sides_mask` (def. ALL).
+
+```c
+static const NgpcRWaveTier s_tiers[] = {
+    /* warm-up  */ { 3u, 5u, 180u },
+    /* medium   */ { 4u, 6u, 150u },
+    /* harder   */ { 4u, 7u, 120u },
+    /* intense  */ { 5u, 8u,  90u }
+};
+
+static NgpcRWave s_rw;
+
+void game_init(void) {
+    ngpc_rwave_init(&s_rw, s_tiers, 4u, /*type_count*/3u, 160u, 152u);
+    ngpc_rwave_seed_rtc(&s_rw);            /* entropie horloge */
+    /* Optionnel : n'autoriser que les entrées horizontales */
+    /* s_rw.sides_mask = NGPC_RWAVE_SIDES_HORIZ; */
+}
+
+/* Chaque frame : */
+void game_frame(void) {
+    NgpcRWaveSpawn s;
+    if (ngpc_rwave_update(&s_rw, &s)) {
+        u8 speed = enemy_speed(s.enemy_type);
+        spawn_enemy(s.enemy_type,
+                    s.x, s.y,
+                    (s8)(s.vx * speed),
+                    (s8)(s.vy * speed));
+    }
+}
+```
+
+---
+
 ### `ngpc_inventory` — Inventaire d'items
 **Type :** .h + .c · **RAM :** `INV_SLOTS × 2 + INV_EQUIP_SLOTS` (36 oct. par défaut) · **Dépend de :** rien
 

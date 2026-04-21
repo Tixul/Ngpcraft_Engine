@@ -22,9 +22,12 @@
 #include "ngpng_engine.h"      /* NgpSceneDef, tile helpers (found in same ngpng/ dir) */
 #include "ngpng_player_ctrl.h" /* NgpngPlayerActor (generated per project)             */
 
-/* Entity flag — mirrors ngpng_entities.h; guarded against redefinition. */
+/* Entity flags — mirror ngpng_entities.h; guarded against redefinition. */
 #ifndef NGPNG_ENT_FLAG_CLAMP_MAP
-#define NGPNG_ENT_FLAG_CLAMP_MAP 1u
+#define NGPNG_ENT_FLAG_CLAMP_MAP    1u
+#endif
+#ifndef NGPNG_ENT_FLAG_CLAMP_CAMERA
+#define NGPNG_ENT_FLAG_CLAMP_CAMERA 8u
 #endif
 
 /* Spring direction constants (used by spring_touch_side and apply_tile_effects).
@@ -53,6 +56,11 @@ void ngpng_player_clamp_world(const NgpSceneDef *sc, NgpngPlayerActor *p,
 
 void ngpng_player_clamp_world_xy(const NgpSceneDef *sc, s16 *wx, s16 *wy,
     s8 hb_x, s8 hb_y, u8 hb_w, u8 hb_h, u8 flags);
+
+/* Confines the actor to the 160x152 screen viewport using hitbox extents.
+ * No-op when NGPNG_ENT_FLAG_CLAMP_CAMERA is not set in p->flags. */
+void ngpng_player_clamp_camera(NgpngPlayerActor *p,
+    s8 hb_x, s8 hb_y, u8 hb_w, u8 hb_h);
 
 /* ---- Ladder helpers (real implementation when NGPNG_HAS_LADDER, stubs otherwise) ---- */
 u8 ngpng_player_touches_ladder(const NgpSceneDef *sc,

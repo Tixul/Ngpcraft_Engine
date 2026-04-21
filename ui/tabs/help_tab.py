@@ -3988,6 +3988,21 @@ Avec speed_x=1 : x = delay/8 + 21</pre>
 <p>Si la scène <b>a des chemins</b> et <code>data &gt; 0</code>, l'ennemi suit le chemin <code>path[data-1]</code>.
 ⚠ Pour le shmup wave-based, garder <code>paths=[]</code> pour éviter que les ennemis partent vers la droite.</p>
 
+<h3>Vagues aléatoires (ngpc_rwave) — spawns procéduraux continus</h3>
+<p>En plus des vagues <b>scriptées</b> (chaque entité = un spawn unique au frame <code>delay</code>), une entité de vague peut être marquée <b>aléatoire</b> : elle devient un <em>director</em> qui spawne en continu pendant toute la scène selon des paramètres aléatoires. Utile pour les phases "survie", les zones infinies, ou un flux constant d'ennemis de fond pendant qu'un autre système (scripted, boss) pilote l'événementiel.</p>
+<p><b>Activation par entité</b> : sélectionner une entité dans la liste <em>Entités dans la vague</em>, puis cocher <b>Activer spawn aléatoire (ngpc_rwave)</b>. Le panneau rand expose alors :</p>
+<ul>
+  <li><b>Côté d'entrée</b> : Droite / Gauche / Haut / Bas. L'ennemi apparaît hors-écran de ce bord et glisse dans la zone visible.</li>
+  <li><b>Count min / max</b> : plage du nombre d'ennemis qui spawnent à chaque vague (tirage uniforme dans <code>[min..max]</code>).</li>
+  <li><b>Intervalle</b> : frames entre deux vagues successives de ce director (une fois la vague précédente drainée).</li>
+</ul>
+<p><b>Délai de démarrage</b> : le champ <b>Délai</b> de la vague parente est interprété pour les entrées rand comme "frames à attendre après le début de la scène avant que ce director commence". Utile pour échelonner l'apparition de plusieurs sources : ex. une vague à <code>delay=0</code> démarre immédiatement, une autre à <code>delay=600</code> (10 s) prend le relais 10 secondes plus tard.</p>
+<p><b>Mélanger scripted et rand</b> : une même scène peut avoir les deux. Les entités scripted (non cochées) alimentent le sequencer <code>ngpc_wave</code> classique (délai+position fixes). Les entités rand alimentent <code>ngpc_rwave</code> en parallèle. Pas d'interférence.</p>
+<p><b>Seed aléatoire</b> : le director lit la RTC hardware (seconde/minute/heure/jour) au moment de l'init scène, donc chaque reboot donne un pattern différent tant qu'au moins 1 seconde sépare deux boots.</p>
+<p><b>Contrôle par trigger</b> : l'action <code>stop_wave_rand</code> arrête un director (<code>a0</code> = index 0..N-1) ou tous (<code>a0 = 0xFF</code>). Typique pour une phase boss : dès qu'on entre dans la région boss, un trigger fait <code>stop_wave_rand a0=0xFF</code> → plus de spawns random.</p>
+<p><b>Coût runtime</b> : ~28 octets RAM par director (xorshift16 state + tier + compteurs). Aucun impact CPU quand aucune vague rand n'est configurée.</p>
+<p><b>Limitations actuelles</b> : pas encore de zone de spawn libre (rect) ni de patterns de mouvement (seek/patrol/zigzag) sur les directors rand — l'ennemi suit le mouvement par défaut dicté par son type. Condition trigger <code>wave_rand_done</code> non implémentée (prévu pour une révision future).</p>
+
 <h2>Régions</h2>
 <p>L’onglet <b>Régions</b> définit des rectangles (en tiles) dans la scène. Activez <b>Éditer régions</b>,
 puis <b>glissez</b> sur la grille pour dessiner un rectangle.
@@ -5007,6 +5022,21 @@ In the current autorun, <code>FIRE</code> is a passable hazard, not a solid floo
   <li>In wave mode, clicks place entities into the current wave (instead of the static placement list).</li>
 </ul>
 <p><b>Wave presets:</b> the <b>Preset</b> block also creates reusable starter formations: <b>Line x3</b>, <b>V x5</b>, and <b>Ground pair</b>. The tool first uses the currently selected entity type; otherwise it falls back to the first type marked <b>enemy</b>.</p>
+
+<h3>Random waves (ngpc_rwave) — continuous procedural spawns</h3>
+<p>Beyond <b>scripted</b> waves (each entity = one spawn at frame <code>delay</code>), any wave entity can be flagged <b>random</b>: it becomes a <em>director</em> that keeps spawning throughout the scene using randomized parameters. Useful for "survival" phases, infinite arenas, or a steady background flow of enemies while another system (scripted, boss) drives the event logic.</p>
+<p><b>Per-entity activation</b>: select an entity in the <em>Entities in wave</em> list, then tick <b>Enable random spawn (ngpc_rwave)</b>. The rand panel then exposes:</p>
+<ul>
+  <li><b>Entry side</b>: Right / Left / Top / Bottom. The enemy enters off-screen from that edge and slides into the visible area.</li>
+  <li><b>Count min / max</b>: range of enemies spawned per wave (uniformly sampled in <code>[min..max]</code>).</li>
+  <li><b>Interval</b>: frames between successive waves of this director (once the previous wave is drained).</li>
+</ul>
+<p><b>Start delay</b>: the parent wave's <b>delay</b> field is re-interpreted for rand entries as "frames to wait after scene enter before this director starts emitting". Useful to stagger multiple sources: e.g. a wave at <code>delay=0</code> starts immediately, another at <code>delay=600</code> (10 s) kicks in 10 seconds later.</p>
+<p><b>Mixing scripted and rand</b>: a single scene can have both. Scripted (unchecked) entries feed the classic <code>ngpc_wave</code> sequencer (fixed delay+position). Rand entries feed <code>ngpc_rwave</code> in parallel. No interference.</p>
+<p><b>Random seed</b>: the director reads the hardware RTC (second/minute/hour/day) at scene init, so every reboot yields a different pattern provided at least 1 s elapsed between boots.</p>
+<p><b>Trigger control</b>: the <code>stop_wave_rand</code> action halts a director (<code>a0</code> = index 0..N-1) or all of them (<code>a0 = 0xFF</code>). Typical usage: boss phase — as the player enters the boss region, a trigger fires <code>stop_wave_rand a0=0xFF</code> and the random stream shuts off.</p>
+<p><b>Runtime cost</b>: ~28 bytes RAM per director (xorshift16 state + tier + counters). Zero CPU impact when no rand waves are configured.</p>
+<p><b>Current limitations</b>: no rectangular spawn zone yet, and no per-director movement patterns (seek/patrol/zigzag) — the enemy moves according to its type's default behavior. The <code>wave_rand_done</code> trigger condition is not implemented yet (planned for a future revision).</p>
 
 <h2>Regions</h2>
 <p>The <b>Regions</b> tab defines tile rectangles inside the scene.
@@ -6757,6 +6787,7 @@ Cela permet déjà de faire des locks imbriqués sans système de priorité manu
   <tr><td>72</td><td><code>set_bgm_volume</code></td><td>volume (0-255)</td><td>—</td><td>Ajuste le volume de lecture du BGM courant.</td></tr>
   <tr><td>76</td><td><code>flip_sprite_h</code></td><td>—</td><td>—</td><td>Bascule le retournement horizontal du sprite joueur (face_hflip ^= 1). Utile en top-down.</td></tr>
   <tr><td>77</td><td><code>flip_sprite_v</code></td><td>—</td><td>—</td><td>Bascule le retournement vertical du sprite joueur (face_vflip ^= 1). Utile en top-down.</td></tr>
+  <tr><td>79</td><td><code>stop_wave_rand</code></td><td>director idx</td><td>—</td><td>Arrête un director de vague aléatoire (<code>ngpc_rwave</code>). <code>a0</code> = index du director (0..N−1) pour stopper une source précise, ou <code>0xFF</code> pour tout arrêter. Pratique pour couper les spawns rand à l'entrée d'une phase boss. Voir topic <b>Level</b> → <em>Vagues aléatoires</em>.</td></tr>
 </table>
 
 <h2>Logique OR entre groupes de conditions (TRIG-OR1)</h2>
@@ -7132,6 +7163,7 @@ This already gives usable nested locks without a dedicated manual priority syste
   <tr><td>72</td><td><code>set_bgm_volume</code></td><td>volume (0-255)</td><td>—</td><td>Adjusts the current BGM playback volume.</td></tr>
   <tr><td>76</td><td><code>flip_sprite_h</code></td><td>—</td><td>—</td><td>Toggles horizontal flip on the player sprite (face_hflip ^= 1). Useful in top-down games.</td></tr>
   <tr><td>77</td><td><code>flip_sprite_v</code></td><td>—</td><td>—</td><td>Toggles vertical flip on the player sprite (face_vflip ^= 1). Useful in top-down games.</td></tr>
+  <tr><td>79</td><td><code>stop_wave_rand</code></td><td>director idx</td><td>—</td><td>Stops a random-wave director (<code>ngpc_rwave</code>). <code>a0</code> = director index (0..N−1) to halt one specific source, or <code>0xFF</code> to stop them all. Handy for cutting the rand stream when the player enters a boss phase. See the <b>Level</b> topic → <em>Random waves</em>.</td></tr>
 </table>
 
 <h2>OR condition groups (TRIG-OR1)</h2>

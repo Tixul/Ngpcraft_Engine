@@ -68,6 +68,29 @@ void ngpng_player_clamp_world_xy(const NgpSceneDef *sc, s16 *wx, s16 *wy,
     }
 }
 
+/* Camera-viewport clamp — p->x/p->y are screen-relative (cam-anchored), so the
+ * valid range is [-hb_x, SCREEN - hb_x - hb_w]. Shmup-friendly. */
+void ngpng_player_clamp_camera(NgpngPlayerActor *p,
+    s8 hb_x, s8 hb_y, u8 hb_w, u8 hb_h)
+{
+    s16 min_x;
+    s16 min_y;
+    s16 max_x;
+    s16 max_y;
+    if (!p) return;
+    if ((p->flags & NGPNG_ENT_FLAG_CLAMP_CAMERA) == 0u) return;
+    min_x = (s16)(-hb_x);
+    min_y = (s16)(-hb_y);
+    max_x = (s16)(160 - hb_x - (s16)hb_w);
+    max_y = (s16)(152 - hb_y - (s16)hb_h);
+    if (max_x < min_x) max_x = min_x;
+    if (max_y < min_y) max_y = min_y;
+    if (p->x < min_x) p->x = min_x;
+    if (p->y < min_y) p->y = min_y;
+    if (p->x > max_x) p->x = max_x;
+    if (p->y > max_y) p->y = max_y;
+}
+
 /* =========================================================================
  * Ladder helpers
  * ========================================================================= */

@@ -1168,42 +1168,115 @@ def make_scene_level_h(
             _write_u8_table(
                 f"g_{sym_use}_ent_flags",
                 ent_flags,
-                "Instance flags per entity (bit0=clamp, bit2=respawn on zone re-entry)",
+                "Instance flags per entity (bit0=clamp map, bit2=respawn, bit3=clamp camera)",
+            )
+
+        # Per-entity role override (sentinel 0xFF = use sprite-type role).
+        # Only emitted when at least one entity carries an explicit override.
+        ent_role_override = []
+        for ent in entities:
+            raw = str((ent or {}).get("role") or "").strip().lower()
+            ent_role_override.append(int(role_to_id[raw]) if raw in role_to_id else 0xFF)
+        if any(v != 0xFF for v in ent_role_override):
+            lines.append(f"#define {sym_use.upper()}_ENTITY_ROLE_OVERRIDE_TABLE 1")
+            _write_u8_table(
+                f"g_{sym_use}_ent_role_override",
+                ent_role_override,
+                "Per-instance role override (0xFF = inherit sprite-type role)",
             )
     else:
         lines.append(f"#define {sym_use.upper()}_ENTITY_COUNT 0")
         lines.append("")
 
-    # ---- Enemy waves — flat NgpcWaveEntry table (ngpc_wave module) ----
+    # ---- Enemy waves — split into scripted (NgpcWaveEntry) + random (NgpcRWaveCfg) ----
     if waves:
         lines += [
             sep,
-            "/* Enemy waves (flat NgpcWaveEntry table — sorted by delay ascending)  */",
+            "/* Enemy waves (scripted NgpcWaveEntry + random NgpcRWaveCfg tables). */",
             sep,
         ]
-        # Build flat list: one NgpcWaveEntry per entity, sorted by delay.
+        # Build two lists from the flat wave entity set:
+        # - scripted entries keep delay+x+y (consumed by ngpc_wave)
+        # - rand entries encode spawn_side/count_min/max/interval (consumed by ngpc_rwave)
         flat_entries: list[tuple[str, int, int, int, int]] = []  # (type_c, x, y, data, delay)
+        # (type_c, sides_mask, cmin, cmax, interval_fr, start_delay_fr,
+        #  max_waves, spawn_behavior, spawn_flags)
+        rwave_entries: list[tuple[str, int, int, int, int, int, int, int, int]] = []
+
+        _SIDE_MASK = {
+            0: 0x01,  # RIGHT only
+            1: 0x02,  # LEFT only
+            2: 0x04,  # TOP only
+            3: 0x08,  # BOTTOM only
+        }
         for wave in waves:
             delay = int(wave.get("delay", 0) or 0)
             for ent in (wave.get("entities", []) or []):
                 if not isinstance(ent, dict):
                     continue
                 c = _type_to_c_const_scoped(sym_use, str(ent.get("type") or ""))
-                x, y = int(ent.get("x", 0)), int(ent.get("y", 0))
-                d = int(ent.get("data", 0))
-                flat_entries.append((c, x, y, d, delay))
-        # Stable-sort by delay (already sorted if waves list is sorted ascending).
+                if bool(ent.get("rand", False)):
+                    side  = int(ent.get("spawn_side", 0) or 0) & 0x03
+                    sides = _SIDE_MASK.get(side, 0x01)
+                    cmin  = max(1, min(255, int(ent.get("count_min", 1) or 1)))
+                    cmax  = max(cmin, min(255, int(ent.get("count_max", cmin) or cmin)))
+                    ivl   = max(1, min(255, int(ent.get("interval", 30) or 30)))
+                    # Inherit the wave's delay field as the rand director's start
+                    # delay: the director stays paused until `delay` frames have
+                    # elapsed since scene-enter, matching the scripted wave
+                    # semantics (frame-based trigger).
+                    sdly  = max(0, min(65535, int(delay or 0)))
+                    # max_waves: 0 = infinite retrigger (roguelite default),
+                    # N = stop after N completed wave cycles.
+                    mwav  = max(0, min(65535, int(ent.get("max_waves", 0) or 0)))
+                    # spawn_behavior: NGPNG_BEHAVIOR_PATROL(0) / CHASE(1) / FIXED(2)
+                    # / RANDOM(3) / FLEE(4). 0xFF keeps the legacy `data`-driven
+                    # movement branch so older projects don't change behaviour.
+                    _BEHAVIOR_NAMES = {"patrol": 0, "chase": 1, "fixed": 2, "random": 3, "flee": 4}
+                    _beh_raw = ent.get("spawn_behavior", "legacy")
+                    if isinstance(_beh_raw, str):
+                        sbh = _BEHAVIOR_NAMES.get(_beh_raw.strip().lower(), 0xFF)
+                    else:
+                        try:
+                            sbh = int(_beh_raw) & 0xFF
+                        except Exception:
+                            sbh = 0xFF
+                    # spawn_flags: OR-combined bit mask of NGPNG_ENT_FLAG_*.
+                    # CULL_OFFSCREEN (bit4 = 16) is forced on by default so the
+                    # enemy pool cannot fill up with drifted, unreachable slots —
+                    # the author can OR more (CLAMP_MAP, CLAMP_CAMERA) from the
+                    # project editor.
+                    sfl  = int(ent.get("spawn_flags", 0) or 0) & 0xFF
+                    if not bool(ent.get("spawn_no_cull", False)):
+                        sfl |= 16  # NGPNG_ENT_FLAG_CULL_OFFSCREEN
+                    rwave_entries.append((c, sides, cmin, cmax, ivl, sdly, mwav, sbh, sfl))
+                else:
+                    x, y = int(ent.get("x", 0)), int(ent.get("y", 0))
+                    d = int(ent.get("data", 0))
+                    flat_entries.append((c, x, y, d, delay))
+        # Stable-sort scripted entries by delay (already sorted if waves list is).
         flat_entries.sort(key=lambda e: e[4])
 
         U = sym_use.upper()
-        lines.append(f"#define {U}_WAVE_TABLE_N {len(flat_entries)}")
-        lines.append(f"static const NgpcWaveEntry g_{sym_use}_wave_table[] = {{")
-        for wi, (c, x, y, d, delay) in enumerate(flat_entries):
-            comment = f"delay={delay}"
-            lines.append(f"    {{{c}, {x:3d}, {y:3d}, {d:3d}, {delay:5d}u}},  /* {comment} */")
-        lines.append("    {0, 0, 0, 0, 0xFFFFu}  /* WAVE_SENTINEL */")
-        lines.append("};")
-        lines.append("")
+        if flat_entries:
+            lines.append(f"#define {U}_WAVE_TABLE_N {len(flat_entries)}")
+            lines.append(f"static const NgpcWaveEntry g_{sym_use}_wave_table[] = {{")
+            for wi, (c, x, y, d, delay) in enumerate(flat_entries):
+                comment = f"delay={delay}"
+                lines.append(f"    {{{c}, {x:3d}, {y:3d}, {d:3d}, {delay:5d}u}},  /* {comment} */")
+            lines.append("    {0, 0, 0, 0, 0xFFFFu}  /* WAVE_SENTINEL */")
+            lines.append("};")
+            lines.append("")
+        if rwave_entries:
+            lines.append(f"#define {U}_RWAVE_CFGS_N {len(rwave_entries)}")
+            lines.append(f"static const NgpcRWaveCfg g_{sym_use}_rwave_cfgs[] = {{")
+            for (c, sides, cmin, cmax, ivl, sdly, mwav, sbh, sfl) in rwave_entries:
+                lines.append(
+                    f"    {{ {c}, 0x{sides:02X}u, {cmin:3d}u, {cmax:3d}u, {ivl:3d}u, "
+                    f"{sdly:5d}u, {mwav:5d}u, 0x{sbh:02X}u, 0x{sfl:02X}u }},"
+                )
+            lines.append("};")
+            lines.append("")
 
     # Scene dimensions are needed by multiple export sections, including
     # neighbor auto-warp generation below.

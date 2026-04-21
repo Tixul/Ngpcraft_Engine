@@ -98,3 +98,46 @@ def set_scene_sprite_role(scene: dict | None, type_name: str, role: object) -> s
     if "entity_roles" in scene:
         del scene["entity_roles"]
     return resolved
+
+
+def entity_override_role(entity: dict) -> str:
+    """Return the per-instance role override stored on an entity, or '' if none.
+
+    The override is stored in entity["role"]. Empty string / invalid values fall
+    back to the sprite-type role at callsites that care about the effective role.
+    """
+    if not isinstance(entity, dict):
+        return ""
+    raw = str(entity.get("role") or "").strip().lower()
+    return raw if raw in ROLE_VALUES else ""
+
+
+def entity_effective_role(scene: dict | None, entity: dict, default: str = "prop") -> str:
+    """Resolve the gameplay role that actually applies to a given entity instance.
+
+    Priority: explicit entity-level override > sprite-type role > default.
+    """
+    ov = entity_override_role(entity)
+    if ov:
+        return ov
+    type_name = str((entity or {}).get("type", "") or "").strip()
+    return scene_role(scene, type_name, default=default)
+
+
+def set_entity_role_override(entity: dict, role: object) -> str:
+    """Store or clear a per-instance role override on an entity.
+
+    Pass an empty/None/'none' role to clear the override. Returns the normalized
+    value that was stored, or '' when the override was cleared.
+    """
+    if not isinstance(entity, dict):
+        return ""
+    raw = str(role or "").strip().lower()
+    if raw in ("", "none"):
+        entity.pop("role", None)
+        return ""
+    if raw not in ROLE_VALUES:
+        entity.pop("role", None)
+        return ""
+    entity["role"] = raw
+    return raw

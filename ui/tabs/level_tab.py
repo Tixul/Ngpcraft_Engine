@@ -73,7 +73,14 @@ from ui.no_scroll import NoScrollSpinBox as QSpinBox, NoScrollComboBox as QCombo
 from core.collision_boxes import first_hurtbox
 from core.scene_collision import fit_collision_grid
 
-from core.entity_roles import migrate_scene_sprite_roles, scene_role_map, set_scene_sprite_role
+from core.entity_roles import (
+    entity_effective_role,
+    entity_override_role,
+    migrate_scene_sprite_roles,
+    scene_role_map,
+    set_entity_role_override,
+    set_scene_sprite_role,
+)
 from core.entity_types import get_entity_types, new_entity_type, ET_DEFAULTS
 from core.audio_manifest import load_audio_manifest, load_sfx_names
 from i18n.lang import tr
@@ -511,6 +518,7 @@ _TCOL_CORNER_SW   = 22  # wall corner open to South + West  (inner SW angle)
 _ENT_FLAG_CLAMP_MAP = 1
 _ENT_FLAG_ALLOW_LEDGE_FALL = 2
 _ENT_FLAG_RESPAWN = 4
+_ENT_FLAG_CLAMP_CAMERA = 8
 
 # Canvas overlay colors per collision type
 _TCOL_OVERLAY: dict[int, "QColor"] = {}   # filled after QColor is importable
@@ -1616,8 +1624,10 @@ class _LevelCanvas(QWidget):
             p.setPen(QColor(255, 255, 255, 240))
             p.drawText(x_px + 2, y_px + bh - 2, badge)
         else:
-            # Role badge (top-right corner of sprite) for static entities
-            role = self._tab._entity_roles.get(ent["type"], "")
+            # Role badge (top-right corner of sprite) for static entities.
+            # Use the effective role so a per-entity override is reflected in the canvas
+            # (e.g. type=trigger with override=enemy shows "E", not "T").
+            role = self._tab._entity_effective_role(ent)
             if role and role != "prop":
                 short = _ROLE_SHORT.get(role, "??")
                 rc = QColor(_ROLE_COLOR.get(role, "#888888"))
@@ -3081,12 +3091,29 @@ class LevelTab(QWidget):
 
     @staticmethod
     def _sanitize_entity(e: dict) -> dict:
-        """Ensure an entity dict loaded from JSON has all required keys."""
+        """Ensure an entity dict loaded from JSON has all required keys.
+
+        Random-wave entries (wave entries with rand=True) additionally carry
+        spawn_side, count_min/max and interval fields, consumed by the
+        ngpc_rwave runtime. Non-rand entries stay unchanged.
+        """
         d = dict(e)
         d.setdefault("type", "")
         d.setdefault("x", 0)
         d.setdefault("y", 0)
         d.setdefault("data", 0)
+        if bool(d.get("rand", False)):
+            d["rand"] = True
+            d.setdefault("spawn_side", 0)      # 0=right,1=left,2=top,3=bottom
+            d.setdefault("count_min", 1)
+            d.setdefault("count_max", 3)
+            d.setdefault("interval", 30)       # frames between wave repeats
+            d.setdefault("max_waves", 0)       # 0 = infinite cycles
+            d.setdefault("spawn_behavior", "legacy")  # patrol|chase|fixed|random|flee|legacy
+            d.setdefault("spawn_flags", 1)     # bit0=CLAMP_MAP by default
+            # spawn_no_cull: when true, disable the auto CULL_OFFSCREEN flag the
+            # exporter normally forces on wave spawns (off-screen drift kills).
+            d.setdefault("spawn_no_cull", False)
         return d
 
     def _clamp_tile_xy(self, x: int, y: int) -> tuple[int, int]:
@@ -3706,6 +3733,22 @@ class LevelTab(QWidget):
             parent_layout.addLayout(row)
             return cb
 
+        # Per-entity role override (optional). First item = "(type default)" which
+        # clears the override and falls back to the sprite-type role. Following
+        # items map to ROLE_VALUES from core.entity_roles.
+        role_row = QHBoxLayout()
+        role_lbl = QLabel(tr("level.prop_ent_role"))
+        role_lbl.setFixedWidth(88)
+        role_row.addWidget(role_lbl)
+        self._combo_ent_role = QComboBox()
+        self._combo_ent_role.addItem(tr("level.prop_ent_role_default"), "")
+        for r in _ROLES:
+            self._combo_ent_role.addItem(f"{_ROLE_SHORT[r]} {r}", r)
+        self._combo_ent_role.setToolTip(tr("level.prop_ent_role_tt"))
+        self._combo_ent_role.currentIndexChanged.connect(self._on_ent_role_changed)
+        role_row.addWidget(self._combo_ent_role, 1)
+        iv.addLayout(role_row)
+
         self._combo_ent_dir = _combo_row(
             iv, tr("level.prop_direction"),
             [tr("level.dir_right"), tr("level.dir_left"),
@@ -3732,6 +3775,10 @@ class LevelTab(QWidget):
         self._chk_ent_clamp_map.setToolTip(tr("level.prop_clamp_map_tt"))
         self._chk_ent_clamp_map.toggled.connect(self._on_ent_clamp_map_toggled)
         iv.addWidget(self._chk_ent_clamp_map)
+        self._chk_ent_clamp_camera = QCheckBox(tr("level.prop_clamp_camera"))
+        self._chk_ent_clamp_camera.setToolTip(tr("level.prop_clamp_camera_tt"))
+        self._chk_ent_clamp_camera.toggled.connect(self._on_ent_clamp_camera_toggled)
+        iv.addWidget(self._chk_ent_clamp_camera)
         self._chk_ent_allow_ledge_fall = QCheckBox(tr("level.prop_allow_ledge_fall"))
         self._chk_ent_allow_ledge_fall.setToolTip(tr("level.prop_allow_ledge_fall_tt"))
         self._chk_ent_allow_ledge_fall.toggled.connect(self._on_ent_allow_ledge_fall_toggled)
@@ -4569,6 +4616,126 @@ class LevelTab(QWidget):
         self._btn_wave_ent_del.setEnabled(False)
         wbv.addWidget(self._btn_wave_ent_del)
 
+        # ---- Random-wave per-entity properties (ngpc_rwave director) --------
+        # Shown when an individual wave entity is selected. A rand entry is
+        # lifted out of the scripted NgpcWaveEntry table at export time and
+        # produces a standalone NgpcRWave director instance at runtime.
+        self._wave_ent_rand_box = QGroupBox(tr("level.wave_rand_group"))
+        self._wave_ent_rand_box.setEnabled(False)
+        _werv = QVBoxLayout(self._wave_ent_rand_box)
+        _werv.setContentsMargins(6, 4, 6, 4)
+        _werv.setSpacing(4)
+
+        self._chk_wave_ent_rand = QCheckBox(tr("level.wave_rand_toggle"))
+        self._chk_wave_ent_rand.setToolTip(tr("level.wave_rand_toggle_tt"))
+        self._chk_wave_ent_rand.toggled.connect(self._on_wave_ent_rand_toggled)
+        _werv.addWidget(self._chk_wave_ent_rand)
+
+        self._wave_ent_rand_fields = QWidget()
+        _werf = QVBoxLayout(self._wave_ent_rand_fields)
+        _werf.setContentsMargins(0, 0, 0, 0)
+        _werf.setSpacing(4)
+
+        _side_row = QHBoxLayout()
+        _side_row.addWidget(QLabel(tr("level.wave_rand_side")))
+        self._cb_wave_ent_rand_side = QComboBox()
+        self._cb_wave_ent_rand_side.setToolTip(tr("level.wave_rand_side_tt"))
+        for _key in ("level.wave_rand_side_right", "level.wave_rand_side_left",
+                     "level.wave_rand_side_top",   "level.wave_rand_side_bottom"):
+            self._cb_wave_ent_rand_side.addItem(tr(_key))
+        self._cb_wave_ent_rand_side.currentIndexChanged.connect(
+            self._on_wave_ent_rand_field_changed
+        )
+        _side_row.addWidget(self._cb_wave_ent_rand_side, 1)
+        _werf.addLayout(_side_row)
+
+        _count_row = QHBoxLayout()
+        _count_row.addWidget(QLabel(tr("level.wave_rand_count")))
+        _count_row.addWidget(QLabel(tr("level.wave_rand_min")))
+        self._sb_wave_ent_rand_cmin = QSpinBox()
+        self._sb_wave_ent_rand_cmin.setRange(1, 255)
+        self._sb_wave_ent_rand_cmin.setToolTip(tr("level.wave_rand_count_tt"))
+        self._sb_wave_ent_rand_cmin.valueChanged.connect(
+            self._on_wave_ent_rand_field_changed
+        )
+        _count_row.addWidget(self._sb_wave_ent_rand_cmin)
+        _count_row.addWidget(QLabel(tr("level.wave_rand_max")))
+        self._sb_wave_ent_rand_cmax = QSpinBox()
+        self._sb_wave_ent_rand_cmax.setRange(1, 255)
+        self._sb_wave_ent_rand_cmax.setToolTip(tr("level.wave_rand_count_tt"))
+        self._sb_wave_ent_rand_cmax.valueChanged.connect(
+            self._on_wave_ent_rand_field_changed
+        )
+        _count_row.addWidget(self._sb_wave_ent_rand_cmax)
+        _werf.addLayout(_count_row)
+
+        _ivl_row = QHBoxLayout()
+        _ivl_row.addWidget(QLabel(tr("level.wave_rand_interval")))
+        self._sb_wave_ent_rand_ivl = QSpinBox()
+        self._sb_wave_ent_rand_ivl.setRange(1, 255)
+        self._sb_wave_ent_rand_ivl.setToolTip(tr("level.wave_rand_interval_tt"))
+        self._sb_wave_ent_rand_ivl.valueChanged.connect(
+            self._on_wave_ent_rand_field_changed
+        )
+        _ivl_row.addWidget(self._sb_wave_ent_rand_ivl)
+        _ivl_row.addWidget(QLabel(tr("level.wave_rand_frames")))
+        _werf.addLayout(_ivl_row)
+
+        # max_waves: 0 = infinite cycles; N = stop after N waves completed.
+        _maxw_row = QHBoxLayout()
+        _maxw_row.addWidget(QLabel(tr("level.wave_rand_max_waves")))
+        self._sb_wave_ent_rand_maxw = QSpinBox()
+        self._sb_wave_ent_rand_maxw.setRange(0, 65535)
+        self._sb_wave_ent_rand_maxw.setSpecialValueText(tr("level.wave_rand_max_waves_inf"))
+        self._sb_wave_ent_rand_maxw.setToolTip(tr("level.wave_rand_max_waves_tt"))
+        self._sb_wave_ent_rand_maxw.valueChanged.connect(
+            self._on_wave_ent_rand_field_changed
+        )
+        _maxw_row.addWidget(self._sb_wave_ent_rand_maxw, 1)
+        _werf.addLayout(_maxw_row)
+
+        # spawn_behavior: how enemies act once spawned (PATROL / CHASE / FIXED /
+        # RANDOM / FLEE). "legacy" keeps the old data-driven movement for
+        # backwards-compatibility with projects that relied on it.
+        _beh_row = QHBoxLayout()
+        _beh_row.addWidget(QLabel(tr("level.wave_rand_behavior")))
+        self._cb_wave_ent_rand_beh = QComboBox()
+        for _bkey, _blabel in (
+            ("patrol", tr("level.beh_patrol")),
+            ("chase",  tr("level.beh_chase")),
+            ("fixed",  tr("level.beh_fixed")),
+            ("random", tr("level.beh_random")),
+            ("legacy", tr("level.wave_rand_behavior_legacy")),
+        ):
+            self._cb_wave_ent_rand_beh.addItem(_blabel, _bkey)
+        self._cb_wave_ent_rand_beh.setToolTip(tr("level.wave_rand_behavior_tt"))
+        self._cb_wave_ent_rand_beh.currentIndexChanged.connect(
+            self._on_wave_ent_rand_field_changed
+        )
+        _beh_row.addWidget(self._cb_wave_ent_rand_beh, 1)
+        _werf.addLayout(_beh_row)
+
+        # Flags toggles: clamp to map + disable auto CULL_OFFSCREEN.
+        self._chk_wave_ent_rand_clamp = QCheckBox(tr("level.wave_rand_clamp_map"))
+        self._chk_wave_ent_rand_clamp.setToolTip(tr("level.wave_rand_clamp_map_tt"))
+        self._chk_wave_ent_rand_clamp.toggled.connect(
+            self._on_wave_ent_rand_field_changed
+        )
+        _werf.addWidget(self._chk_wave_ent_rand_clamp)
+
+        self._chk_wave_ent_rand_no_cull = QCheckBox(tr("level.wave_rand_no_cull"))
+        self._chk_wave_ent_rand_no_cull.setToolTip(tr("level.wave_rand_no_cull_tt"))
+        self._chk_wave_ent_rand_no_cull.toggled.connect(
+            self._on_wave_ent_rand_field_changed
+        )
+        _werf.addWidget(self._chk_wave_ent_rand_no_cull)
+
+        self._wave_ent_rand_fields.setVisible(False)
+        _werv.addWidget(self._wave_ent_rand_fields)
+        wbv.addWidget(self._wave_ent_rand_box)
+
+        self._wave_ent_rand_updating = False
+
         waves_split.addWidget(waves_top)
         waves_split.addWidget(waves_bottom)
         waves_split.setStretchFactor(0, 1)
@@ -5088,6 +5255,7 @@ class LevelTab(QWidget):
             ("flip_sprite_h",   "level.trigger_action.flip_sprite_h"),
             ("flip_sprite_v",   "level.trigger_action.flip_sprite_v"),
             ("init_game_vars",  "level.trigger_action.init_game_vars"),
+            ("stop_wave_rand",  "level.trigger_action.stop_wave_rand"),
         ):
             self._combo_trig_action.addItem(tr(lk), k)
         self._combo_trig_action.setToolTip(tr("level.trigger_action_tt"))
@@ -7710,9 +7878,17 @@ class LevelTab(QWidget):
     # ------------------------------------------------------------------
 
     def _current_type(self) -> Optional[str]:
+        # QListWidget.selectedItems() can lag behind currentItem() during signal
+        # cascades (notably from currentItemChanged before selectionChanged has
+        # propagated). Prefer currentItem(), fall back to selectedItems()[0].
+        # Without this, _on_type_selection_changed / _on_role_changed intermittently
+        # see None and silently abort, producing the "role combo stuck" symptom.
+        cur = self._type_list.currentItem()
+        if cur is not None:
+            return cur.data(Qt.ItemDataRole.UserRole) or cur.text() or None
         items = self._type_list.selectedItems()
         if items:
-            return items[0].data(Qt.ItemDataRole.UserRole) or items[0].text()
+            return items[0].data(Qt.ItemDataRole.UserRole) or items[0].text() or None
         return None
 
     def _type_tile_span(self, type_name: str) -> tuple[int, int]:
@@ -7858,14 +8034,28 @@ class LevelTab(QWidget):
         self._canvas.entity_placed.emit()
         self._canvas.update()
 
-    def _on_type_selection_changed(self, _curr, _prev) -> None:
-        name = self._current_type()
+    def _on_type_selection_changed(self, curr, _prev) -> None:
+        # Read the new type name directly from the signal's `curr` argument —
+        # it's guaranteed fresh, unlike _current_type() which can briefly see
+        # a stale selection during Qt's cascaded currentItemChanged →
+        # selectionChanged notifications.
+        name: Optional[str] = None
+        if curr is not None:
+            name = curr.data(Qt.ItemDataRole.UserRole) or curr.text() or None
+        if not name:
+            name = self._current_type()
+        # Always refresh the role combo on type switches, even when we fail to
+        # resolve a name (reset to "prop" so it doesn't linger on the previous
+        # type's role).
+        self._combo_role.blockSignals(True)
         if name:
             role = self._entity_roles.get(name, "prop")
             idx  = list(_ROLES).index(role) if role in _ROLES else len(_ROLES) - 1
-            self._combo_role.blockSignals(True)
             self._combo_role.setCurrentIndex(idx)
-            self._combo_role.blockSignals(False)
+        else:
+            prop_idx = list(_ROLES).index("prop") if "prop" in _ROLES else 0
+            self._combo_role.setCurrentIndex(prop_idx)
+        self._combo_role.blockSignals(False)
         self._refresh_type_starter_ui()
 
     def _on_role_changed(self, idx: int) -> None:
@@ -10563,6 +10753,26 @@ class LevelTab(QWidget):
                 self._entities[idx][attr] = value
             self._update_diagnostics()
 
+    def _on_ent_role_changed(self, combo_idx: int) -> None:
+        if self._updating_props:
+            return
+        idx = self._selected
+        if not (0 <= idx < len(self._entities)):
+            return
+        # itemData is "" for the default entry, or one of _ROLES for an explicit override.
+        data = self._combo_ent_role.itemData(combo_idx)
+        raw = str(data or "").strip().lower()
+        # If the chosen override equals the sprite-type role, clear it (no-op storage).
+        type_name = str(self._entities[idx].get("type", "") or "").strip()
+        type_role = str(self._entity_roles.get(type_name, "prop") or "prop").strip().lower()
+        if raw == type_role:
+            raw = ""
+        set_entity_role_override(self._entities[idx], raw)
+        # Refresh the read-only role label in the header too.
+        self._refresh_props()
+        self._update_diagnostics()
+        self._canvas.update()
+
     def _on_ent_clamp_map_toggled(self, checked: bool) -> None:
         if self._updating_props:
             return
@@ -10574,6 +10784,25 @@ class LevelTab(QWidget):
             flags |= _ENT_FLAG_CLAMP_MAP
         else:
             flags &= ~_ENT_FLAG_CLAMP_MAP
+        if flags:
+            self._entities[idx]["flags"] = flags
+        else:
+            self._entities[idx].pop("flags", None)
+        self._refresh_entity_runtime_ui()
+        self._canvas.update()
+        self._update_diagnostics()
+
+    def _on_ent_clamp_camera_toggled(self, checked: bool) -> None:
+        if self._updating_props:
+            return
+        idx = self._selected
+        if not (0 <= idx < len(self._entities)):
+            return
+        flags = int(self._entities[idx].get("flags", 0) or 0)
+        if checked:
+            flags |= _ENT_FLAG_CLAMP_CAMERA
+        else:
+            flags &= ~_ENT_FLAG_CLAMP_CAMERA
         if flags:
             self._entities[idx]["flags"] = flags
         else:
@@ -10933,6 +11162,18 @@ class LevelTab(QWidget):
                 return spr
         return None
 
+    def _entity_effective_role(self, ent: dict | None) -> str:
+        """Return the effective role for an entity dict: per-instance override if
+        set, else the sprite-type role. Used anywhere UI decisions (canvas badge,
+        behavior/AI gating) must respect the override chosen in the right panel."""
+        if not isinstance(ent, dict):
+            return "prop"
+        ov = str(ent.get("role") or "").strip().lower()
+        from core.entity_roles import ROLE_VALUES as _RV
+        if ov in _RV:
+            return ov
+        return self._entity_role_for_type(str(ent.get("type", "") or ""))
+
     def _entity_role_for_type(self, type_name: str) -> str:
         if self._scene is not None:
             return scene_role_map(self._scene).get(type_name, "prop")
@@ -10961,10 +11202,29 @@ class LevelTab(QWidget):
         idx = self._selected
         if 0 <= idx < len(self._entities):
             ent = self._entities[idx]
-            role = self._entity_role_for_type(ent["type"])
+            type_role = self._entity_role_for_type(ent["type"])
+            override = entity_override_role(ent)
+            eff_role = override or type_role
             self._updating_props = True
+            if override:
+                role_html = (
+                    f"<small>{tr('level.ent_role_line_override', role=eff_role, base=type_role)}</small>"
+                )
+            else:
+                role_html = f"<small>{tr('level.ent_role_line', role=eff_role)}</small>"
             self._lbl_ent_type.setText(
-                f"<b>{ent['type']}</b><br><small>{_type_to_c_const(ent['type'])}</small><br><small>{tr('level.ent_role_line', role=role)}</small>")
+                f"<b>{ent['type']}</b><br><small>{_type_to_c_const(ent['type'])}</small><br>{role_html}")
+            # Sync the override combo. Item 0 = default (no override); others map 1:1 to _ROLES.
+            target_idx = 0
+            if override:
+                try:
+                    target_idx = 1 + list(_ROLES).index(override)
+                except ValueError:
+                    target_idx = 0
+            if self._combo_ent_role.currentIndex() != target_idx:
+                self._combo_ent_role.blockSignals(True)
+                self._combo_ent_role.setCurrentIndex(target_idx)
+                self._combo_ent_role.blockSignals(False)
             self._spin_x.setValue(ent.get("x", 0))
             self._spin_y.setValue(ent.get("y", 0))
             self._spin_data.setValue(ent.get("data", 0))
@@ -10982,6 +11242,7 @@ class LevelTab(QWidget):
                     self._combo_ent_path.setCurrentIndex(i + 1)
                     break
             self._chk_ent_clamp_map.setChecked(bool(int(ent.get("flags", 0) or 0) & _ENT_FLAG_CLAMP_MAP))
+            self._chk_ent_clamp_camera.setChecked(bool(int(ent.get("flags", 0) or 0) & _ENT_FLAG_CLAMP_CAMERA))
             self._chk_ent_allow_ledge_fall.setChecked(
                 bool(int(ent.get("flags", 0) or 0) & _ENT_FLAG_ALLOW_LEDGE_FALL)
             )
@@ -11044,7 +11305,10 @@ class LevelTab(QWidget):
             return
 
         ent = self._entities[idx]
-        role = self._entity_role_for_type(str(ent.get("type", "")))
+        # Use the effective role so enemy-specific widgets (behavior/AI/shooting)
+        # light up when an entity is overridden to role=enemy even if its sprite
+        # type declares a different role.
+        role = self._entity_effective_role(ent)
         spr = self._sprite_meta_for_type(str(ent.get("type", ""))) or {}
         props = spr.get("props") or {}
         data = int(ent.get("data", 0) or 0)
@@ -11307,7 +11571,7 @@ class LevelTab(QWidget):
         idx = self._selected
         if not (0 <= idx < len(self._entities)):
             return
-        role = self._entity_role_for_type(str(self._entities[idx].get("type", "")))
+        role = self._entity_effective_role(self._entities[idx])
         raw = self._combo_ent_preset.itemData(combo_idx)
         if raw in (None, ""):
             return
@@ -11364,11 +11628,13 @@ class LevelTab(QWidget):
         self._spin_y.setEnabled(enabled)
         self._spin_data.setEnabled(enabled)
         self._btn_delete.setEnabled(enabled)
+        self._combo_ent_role.setEnabled(enabled)
         self._combo_ent_dir.setEnabled(enabled)
         self._combo_ent_behavior.setEnabled(enabled)
         self._combo_ent_path.setEnabled(enabled)
         self._combo_ent_preset.setEnabled(enabled)
         self._chk_ent_clamp_map.setEnabled(enabled)
+        self._chk_ent_clamp_camera.setEnabled(enabled)
         self._chk_ent_allow_ledge_fall.setEnabled(enabled)
         if hasattr(self, "_grp_ai_params"):
             self._grp_ai_params.setEnabled(enabled)
@@ -11474,6 +11740,7 @@ class LevelTab(QWidget):
             self._lbl_wave_spawn_x.setText("")
         self._btn_wave_del.setEnabled(row >= 0 and len(self._waves) > 0)
         self._refresh_wave_entities()
+        self._refresh_wave_ent_rand_panel()
         self._canvas.update()
 
     def _wave_spawn_x(self, delay: int) -> int:
@@ -11564,7 +11831,127 @@ class LevelTab(QWidget):
 
     def _on_wave_ent_row_changed(self, row: int) -> None:
         self._wave_entity_sel = row
+        self._refresh_wave_ent_rand_panel()
         self._canvas.update()
+
+    # ---- Random-wave per-entity panel ------------------------------------
+
+    def _current_wave_entity(self) -> dict | None:
+        if not (0 <= self._wave_selected < len(self._waves)):
+            return None
+        ents = self._waves[self._wave_selected].get("entities") or []
+        if not (0 <= self._wave_entity_sel < len(ents)):
+            return None
+        e = ents[self._wave_entity_sel]
+        return e if isinstance(e, dict) else None
+
+    def _refresh_wave_ent_rand_panel(self) -> None:
+        """Repopulate the rand sub-panel from the current wave-entity selection."""
+        if not hasattr(self, "_wave_ent_rand_box"):
+            return
+        ent = self._current_wave_entity()
+        enabled = ent is not None
+        self._wave_ent_rand_box.setEnabled(enabled)
+        self._wave_ent_rand_updating = True
+        try:
+            if ent is None:
+                self._chk_wave_ent_rand.setChecked(False)
+                self._wave_ent_rand_fields.setVisible(False)
+                return
+            is_rand = bool(ent.get("rand", False))
+            self._chk_wave_ent_rand.setChecked(is_rand)
+            self._wave_ent_rand_fields.setVisible(is_rand)
+            if is_rand:
+                self._cb_wave_ent_rand_side.setCurrentIndex(
+                    max(0, min(3, int(ent.get("spawn_side", 0))))
+                )
+                self._sb_wave_ent_rand_cmin.setValue(
+                    max(1, int(ent.get("count_min", 1)))
+                )
+                self._sb_wave_ent_rand_cmax.setValue(
+                    max(1, int(ent.get("count_max", 3)))
+                )
+                self._sb_wave_ent_rand_ivl.setValue(
+                    max(1, int(ent.get("interval", 30)))
+                )
+                self._sb_wave_ent_rand_maxw.setValue(
+                    max(0, min(65535, int(ent.get("max_waves", 0) or 0)))
+                )
+                _beh_key = str(ent.get("spawn_behavior", "legacy") or "legacy").strip().lower()
+                _beh_idx = self._cb_wave_ent_rand_beh.findData(_beh_key)
+                if _beh_idx < 0:
+                    _beh_idx = self._cb_wave_ent_rand_beh.findData("legacy")
+                self._cb_wave_ent_rand_beh.setCurrentIndex(max(0, _beh_idx))
+                self._chk_wave_ent_rand_clamp.setChecked(
+                    bool(int(ent.get("spawn_flags", 0) or 0) & 0x01)
+                )
+                self._chk_wave_ent_rand_no_cull.setChecked(
+                    bool(ent.get("spawn_no_cull", False))
+                )
+        finally:
+            self._wave_ent_rand_updating = False
+
+    def _on_wave_ent_rand_toggled(self, checked: bool) -> None:
+        if self._wave_ent_rand_updating:
+            return
+        ent = self._current_wave_entity()
+        if ent is None:
+            return
+        self._push_undo()
+        if checked:
+            ent["rand"] = True
+            ent.setdefault("spawn_side", 0)
+            ent.setdefault("count_min", 1)
+            ent.setdefault("count_max", 3)
+            ent.setdefault("interval", 30)
+            ent.setdefault("max_waves", 0)
+            ent.setdefault("spawn_behavior", "legacy")
+            ent.setdefault("spawn_flags", 1)   # CLAMP_MAP default
+        else:
+            # Drop rand keys so exports stay clean when the user reverts.
+            for k in (
+                "rand", "spawn_side", "count_min", "count_max", "interval",
+                "max_waves", "spawn_behavior", "spawn_flags", "spawn_no_cull",
+            ):
+                ent.pop(k, None)
+        # Re-read the entity so spinbox defaults populate after a True->False->True
+        # toggle cycle; no need to rebuild the wave list (entity count unchanged).
+        self._refresh_wave_ent_rand_panel()
+
+    def _on_wave_ent_rand_field_changed(self, *_args) -> None:
+        if self._wave_ent_rand_updating:
+            return
+        ent = self._current_wave_entity()
+        if ent is None or not bool(ent.get("rand", False)):
+            return
+        cmin = int(self._sb_wave_ent_rand_cmin.value())
+        cmax = int(self._sb_wave_ent_rand_cmax.value())
+        # Keep cmax >= cmin without fighting the user; clamp silently.
+        if cmax < cmin:
+            cmax = cmin
+            self._wave_ent_rand_updating = True
+            try:
+                self._sb_wave_ent_rand_cmax.setValue(cmax)
+            finally:
+                self._wave_ent_rand_updating = False
+        self._push_undo()
+        ent["spawn_side"] = int(self._cb_wave_ent_rand_side.currentIndex())
+        ent["count_min"]  = cmin
+        ent["count_max"]  = cmax
+        ent["interval"]   = int(self._sb_wave_ent_rand_ivl.value())
+        ent["max_waves"]  = int(self._sb_wave_ent_rand_maxw.value())
+        _beh_key = self._cb_wave_ent_rand_beh.currentData() or "legacy"
+        ent["spawn_behavior"] = str(_beh_key)
+        _flags = int(ent.get("spawn_flags", 0) or 0)
+        if self._chk_wave_ent_rand_clamp.isChecked():
+            _flags |= 0x01  # NGPNG_ENT_FLAG_CLAMP_MAP
+        else:
+            _flags &= ~0x01
+        ent["spawn_flags"] = _flags
+        if self._chk_wave_ent_rand_no_cull.isChecked():
+            ent["spawn_no_cull"] = True
+        else:
+            ent.pop("spawn_no_cull", None)
 
     def _delete_wave_entity(self) -> None:
         if not (0 <= self._wave_selected < len(self._waves)):
@@ -14899,6 +15286,7 @@ class LevelTab(QWidget):
             "set_player_form":  "level.trigger_action.set_player_form",
             "set_checkpoint":   "level.trigger_action.set_checkpoint",
             "respawn_player":   "level.trigger_action.respawn_player",
+            "stop_wave_rand":   "level.trigger_action.stop_wave_rand",
         }.get(str(action), "")
         return tr(key) if key else str(action)
 
@@ -18934,6 +19322,7 @@ def _make_scene_h(
             "flip_sprite_h":   76,
             "flip_sprite_v":   77,
             "init_game_vars":  78,
+            "stop_wave_rand":  79,
         }
 
         # Region ID -> index mapping (best-effort)
