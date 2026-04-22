@@ -6281,14 +6281,17 @@ def write_autorun_main_c(
         _wave_next_expr = ("wave_seq.next" if (has_waves and has_enemy)
                            else "next_wave" if has_enemy
                            else "0u")
-        c.append(f"            fire = ngpng_trigger_cond_met(t->cond, t->region, t->value, in_reg, s_reg_prev, reg_n, tx, ty, timer, {_wave_next_expr}, player_hp, lives, enemy_active_count, collectible_count, ngpc_pad_pressed, player_jump_started, npc_talked, entity_contact, (u8)(dialog_result != DIALOG_RUNNING));\n")
+        # dlg_done arg is only meaningful when the scene actually has dialogues;
+        # otherwise dialog_result / DIALOG_RUNNING are never declared — pass 0u.
+        _dlg_done_expr = "(u8)(dialog_result != DIALOG_RUNNING)" if has_dialogues else "0u"
+        c.append(f"            fire = ngpng_trigger_cond_met(t->cond, t->region, t->value, in_reg, s_reg_prev, reg_n, tx, ty, timer, {_wave_next_expr}, player_hp, lives, enemy_active_count, collectible_count, ngpc_pad_pressed, player_jump_started, npc_talked, entity_contact, {_dlg_done_expr});\n")
         c.append("            if (fire && sc->trig_conds && sc->trig_cond_count && sc->trig_cond_start) {\n")
         c.append("                ccount = sc->trig_cond_count[i];\n")
         c.append("                cstart = sc->trig_cond_start[i];\n")
         c.append("                all_ok = 1u;\n")
         c.append("                for (cj = 0; cj < ccount; ++cj) {\n")
         c.append("                    const NgpngCond *ec = &sc->trig_conds[(u8)(cstart + cj)];\n")
-        c.append(f"                    if (!ngpng_trigger_cond_met(ec->cond, ec->region, ec->value, in_reg, s_reg_prev, reg_n, tx, ty, timer, {_wave_next_expr}, player_hp, lives, enemy_active_count, collectible_count, ngpc_pad_pressed, player_jump_started, npc_talked, entity_contact, (u8)(dialog_result != DIALOG_RUNNING))) {{\n")
+        c.append(f"                    if (!ngpng_trigger_cond_met(ec->cond, ec->region, ec->value, in_reg, s_reg_prev, reg_n, tx, ty, timer, {_wave_next_expr}, player_hp, lives, enemy_active_count, collectible_count, ngpc_pad_pressed, player_jump_started, npc_talked, entity_contact, {_dlg_done_expr})) {{\n")
         c.append("                        all_ok = 0u;\n")
         c.append("                        break;\n")
         c.append("                    }\n")
@@ -6308,7 +6311,7 @@ def write_autorun_main_c(
         c.append("                    all_ok = 1u;\n")
         c.append("                    for (cj = 0u; cj < occount; ++cj) {\n")
         c.append("                        const NgpngCond *ec = &sc->trig_or_conds[(u8)(ocstart + cj)];\n")
-        c.append(f"                        if (!ngpng_trigger_cond_met(ec->cond, ec->region, ec->value, in_reg, s_reg_prev, reg_n, tx, ty, timer, {_wave_next_expr}, player_hp, lives, enemy_active_count, collectible_count, ngpc_pad_pressed, player_jump_started, npc_talked, entity_contact, (u8)(dialog_result != DIALOG_RUNNING))) {{\n")
+        c.append(f"                        if (!ngpng_trigger_cond_met(ec->cond, ec->region, ec->value, in_reg, s_reg_prev, reg_n, tx, ty, timer, {_wave_next_expr}, player_hp, lives, enemy_active_count, collectible_count, ngpc_pad_pressed, player_jump_started, npc_talked, entity_contact, {_dlg_done_expr})) {{\n")
         c.append("                            all_ok = 0u;\n")
         c.append("                            break;\n")
         c.append("                        }\n")
