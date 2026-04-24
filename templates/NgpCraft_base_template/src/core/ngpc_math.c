@@ -49,9 +49,20 @@ static const s8 sin_table[256] = {
     -25, -22, -19, -16, -12,  -9,  -6,  -3
 };
 
-/* ---- PRNG state (32-bit LCG) ---- */
-
-static u32 s_rng_state = 1;
+/* ---- PRNG state (16-bit LCG) ----
+ *
+ * Why u16 and not u32: cc900's u32 multiply and modulo runtime helpers are
+ * buggy on NGPC hardware. A prior u32 LCG with `result % ((u32)max + 1)`
+ * didn't reduce at all — `ngpc_random(max)` returned values in ~0..32767
+ * regardless of `max`, biasing every gameplay roll. Hardware confirmed
+ * 2026-04-23 (menu_kuroi_dokutsu: crit 98% instead of 2/7, damage 35 for
+ * a formula maxing at 4). TLCS-900 has a native 16×16 → 32 MUL opcode,
+ * so u16 * u16 uses hardware and stays inside cc900's safe path.
+ *
+ * Constants: Turbo Pascal 2^16 LCG. Hull-Dobell satisfied (a≡1 mod 4,
+ * c odd) → full period 65536.
+ */
+static u16 s_rng_state = 1u;
 
 /* ---- Public API ---- */
 
@@ -68,24 +79,20 @@ s8 ngpc_cos(u8 angle)
 
 void ngpc_rng_seed(void)
 {
-    /* Seed from VBCounter, which varies based on when user presses start. */
-    s_rng_state = (u32)g_vb_counter * 1103515245UL + 12345UL;
-    if (s_rng_state == 0) s_rng_state = 1;
+    /* Seed from VBCounter, which varies based on when the user first presses
+     * a button. `| 1u` avoids the degenerate zero state. */
+    s_rng_state = (u16)((u16)g_vb_counter | 1u);
 }
 
 u16 ngpc_random(u16 max)
 {
-    u32 result;
+    /* u16 LCG step: state = state * 25173 + 13849 (mod 2^16).
+     * u16 * u16 → u16 uses the native TLCS-900 MUL opcode. No u32 helpers. */
+    s_rng_state = (u16)((u16)(s_rng_state * 25173u) + 13849u);
 
-    /* Linear congruential generator (Numerical Recipes constants). */
-    s_rng_state = s_rng_state * 1103515245UL + 12345UL;
-
-    /* Extract bits 16-30 for better distribution. */
-    result = (s_rng_state >> 16) & 0x7FFF;
-
-    /* Scale to 0..max range. */
-    if (max == 0) return 0;
-    return (u16)(result % ((u32)max + 1));
+    if (max == 0u) return 0u;
+    if (max == 65535u) return s_rng_state;   /* avoid (max+1)==0 */
+    return (u16)(s_rng_state % (u16)(max + 1u));
 }
 
 /* ---- Quick random (table-based) ---- */

@@ -959,6 +959,10 @@ class TilemapTab(ProjectPathMixin, QWidget):
         self._chk_header.setChecked(True)
         self._chk_header.setToolTip(tr("tilemap.header_tt"))
         scr2_row.addWidget(self._chk_header)
+        self._chk_export_col = QCheckBox(tr("tilemap.export_col"))
+        self._chk_export_col.setChecked(True)
+        self._chk_export_col.setToolTip(tr("tilemap.export_col_tt"))
+        scr2_row.addWidget(self._chk_export_col)
         layer_l.addLayout(scr2_row)
 
         # Tile compression row (CT-6)
@@ -2243,9 +2247,9 @@ class TilemapTab(ProjectPathMixin, QWidget):
         self._run_status.setStyleSheet("color: #4ec94e;")
         self._refresh_checklist()
 
-    def _col_export_header(self) -> None:
+    def _col_export_header(self, silent: bool = False) -> Path | None:
         if self._current_path is None:
-            return
+            return None
         base = self._current_path.stem
         name = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in base)
         if name and name[0].isdigit():
@@ -2288,7 +2292,7 @@ class TilemapTab(ProjectPathMixin, QWidget):
             lines.append("};")
         else:
             if not self._col_assign:
-                return
+                return None
             arr_name = "g_%s_col" % name
             lines.append("/* Indexed by tile index (same order as %s_tiles[] in %s_map.c) */" % (name, base))
             lines.append("static const u8 %s[%d] = {" % (arr_name, len(self._col_assign)))
@@ -2306,11 +2310,20 @@ class TilemapTab(ProjectPathMixin, QWidget):
         lines.append("")
         try:
             out.write_text("\n".join(lines), encoding="utf-8")
-            self._run_status.setText(tr("tilemap.col_export_ok", path=out.name))
-            self._run_status.setStyleSheet("color: #4ec94e;")
+            if not silent:
+                self._run_status.setText(tr("tilemap.col_export_ok", path=out.name))
+                self._run_status.setStyleSheet("color: #4ec94e;")
+            return out
         except Exception as e:
-            self._run_status.setText(tr("tilemap.col_export_fail", err=str(e)))
-            self._run_status.setStyleSheet("color: #e07030;")
+            if not silent:
+                self._run_status.setText(tr("tilemap.col_export_fail", err=str(e)))
+                self._run_status.setStyleSheet("color: #e07030;")
+            return None
+
+    def _has_collision_data(self) -> bool:
+        if self._col_mode == "paint":
+            return bool(self._col_paint_grid) and any(any(v for v in row) for row in self._col_paint_grid)
+        return bool(self._col_assign) and any(int(v) for v in self._col_assign)
 
     def _new_file(self) -> None:
         if self._dirty:
@@ -4445,6 +4458,18 @@ class TilemapTab(ProjectPathMixin, QWidget):
                         else:
                             err_c = (cres.stderr or "").strip().splitlines()[:1]
                             msg += "  " + tr("tilemap.compress_fail") + (": " + err_c[0] if err_c else "")
+
+                # Auto-export collision header alongside *_map.c if checkbox is on
+                # and a collision is actually defined. Keeps both artifacts in sync
+                # from a single click.
+                if (
+                    getattr(self, "_chk_export_col", None) is not None
+                    and self._chk_export_col.isChecked()
+                    and self._has_collision_data()
+                ):
+                    col_out = self._col_export_header(silent=True)
+                    if col_out is not None:
+                        msg += "  + " + col_out.name
 
                 self._run_status.setText(msg)
                 self._run_status.setStyleSheet("color: #4ec94e;")

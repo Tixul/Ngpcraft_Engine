@@ -566,9 +566,12 @@ Angles: 0 = 0 deg, 64 = 90 deg, 128 = 180 deg, 192 = 270 deg, 256 wraps to 0.
 Use it for non-critical randomness (particles, screen shake, tile variation).
 For proper RNG (game logic, procedural generation), use `ngpc_random()`.
 
-`ngpc_random` limitation: extracts bits 16-30 from the LCG → result is always in **0..32767** regardless
-of `max`. For `max > 32767`, the return value will never exceed 32767. If you need larger random numbers,
-combine two calls: `ngpc_random(255) | (ngpc_random(127) << 8)`.
+`ngpc_random` implementation: u16 linear congruential generator, full period
+65536. It uses only 16-bit arithmetic to stay on cc900's safe codegen path —
+the previous u32 LCG hit a buggy `u32 % u32` runtime helper that made
+`ngpc_random(max)` ignore `max` entirely (returned 0..32767 regardless,
+biasing every gameplay roll). Hardware confirmed on the current u16 version
+2026-04-23.
 
 ### ngpc_flash -- Save
 

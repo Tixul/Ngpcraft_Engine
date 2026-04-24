@@ -1217,6 +1217,8 @@ STRINGS_EN: dict[str, str] = {
     "tilemap.plane_scr1": "Plane 1 (SCR1)",
     "tilemap.plane_scr2": "Plane 2 (SCR2)",
     "tilemap.header": "Generate .h",
+    "tilemap.export_col": "Collision (.h)",
+    "tilemap.export_col_tt": "Also generate *_col.h (collision table) next to *_map.c. Requires a collision defined in the Collision tab + Save to project.",
     "tilemap.run": "Generate C files (tilemap)…",
     "tilemap.run_tooltip": (
         "Calls ngpc_tilemap.py on this PNG.\n"

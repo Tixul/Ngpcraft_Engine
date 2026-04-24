@@ -23,8 +23,8 @@ s8 ngpc_cos(u8 angle);
  * to get unpredictable values from VBCounter. */
 void ngpc_rng_seed(void);
 
-/* Returns a pseudo-random number from 0 to max (inclusive).
- * max must be < 32767. Uses 32-bit LCG. */
+/* Returns a pseudo-random number from 0 to max (inclusive, 0 <= max <= 65535).
+ * Uses a u16 LCG (full period 65536) to avoid cc900's buggy u32 runtime helpers. */
 u16 ngpc_random(u16 max);
 
 /* 32-bit signed multiply (needed because T900 lacks mul32).

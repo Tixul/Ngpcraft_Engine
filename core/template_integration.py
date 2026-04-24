@@ -6093,18 +6093,23 @@ def write_autorun_main_c(
         for _pp in players:
             _p_slot_offsets.append(_p_off)
             _p_off += _pp.get("slot_count", 4)
+        # Multi-form: all forms render from form 0's entity state (position/frame/flip).
+        # Only form 0 is driven by physics/input; per-form entities s_<formN> are not
+        # updated during gameplay, so reading them would freeze the sprite at scene
+        # entry. Per-form anim tables and visibility tracking stay form-specific.
+        p0 = players[0]["name"]
         for idx, p in enumerate(players):
             n = p["name"]
             _p_sc = p.get("slot_count", 4)
             _p_off_v = _p_slot_offsets[idx]
             slot = f"(u8)({player_spr_base} + {_p_off_v}u)" if _p_off_v else f"(u8){player_spr_base}"
-            c.append(f"                if (player_render_idx == {idx}u) ngpng_player_layer_sync({slot}, {_p_sc}u, (s16)(s_{n}.x + player_render_off_x), (s16)(s_{n}.y + player_render_off_y), s_{n}.frame, {n}_anim, {n}_anim_count, (u8)(g_ngpng_entity_prio | (s_{n}.face_hflip ? SPR_HFLIP : 0u) | (s_{n}.face_vflip ? SPR_VFLIP : 0u)), &s_{n}_visible, &s_{n}_last_x, &s_{n}_last_y, &s_{n}_last_frame, &s_{n}_last_flags);\n")
+            c.append(f"                if (player_render_idx == {idx}u) ngpng_player_layer_sync({slot}, {_p_sc}u, (s16)(s_{p0}.x + player_render_off_x), (s16)(s_{p0}.y + player_render_off_y), s_{p0}.frame, {n}_anim, {n}_anim_count, (u8)(g_ngpng_entity_prio | (s_{p0}.face_hflip ? SPR_HFLIP : 0u) | (s_{p0}.face_vflip ? SPR_VFLIP : 0u)), &s_{n}_visible, &s_{n}_last_x, &s_{n}_last_y, &s_{n}_last_frame, &s_{n}_last_flags);\n")
             c.append(f"                else {{ ngpng_sprite_hide_range({slot}, {_p_sc}u); s_{n}_visible = 0u; }}\n")
             # Layer1 draw immediately after base draw (correct OAM order)
             if p.get("has_layer1"):
                 l1_slot = f"(u8)({player_spr_base} + {p['l1_slot_base']}u)"
                 l1_slots = p["l1_slots"]
-                c.append(f"                if (player_render_idx == {idx}u) ngpng_player_layer_sync({l1_slot}, {l1_slots}u, (s16)(s_{n}.x + player_render_off_x), (s16)(s_{n}.y + player_render_off_y), s_{n}.frame, {n}_layer1_anim, {n}_layer1_anim_count, (u8)(g_ngpng_entity_prio | (s_{n}.face_hflip ? SPR_HFLIP : 0u) | (s_{n}.face_vflip ? SPR_VFLIP : 0u)), &s_{n}_l1_visible, &s_{n}_l1_last_x, &s_{n}_l1_last_y, &s_{n}_l1_last_frame, &s_{n}_l1_last_flags);\n")
+                c.append(f"                if (player_render_idx == {idx}u) ngpng_player_layer_sync({l1_slot}, {l1_slots}u, (s16)(s_{p0}.x + player_render_off_x), (s16)(s_{p0}.y + player_render_off_y), s_{p0}.frame, {n}_layer1_anim, {n}_layer1_anim_count, (u8)(g_ngpng_entity_prio | (s_{p0}.face_hflip ? SPR_HFLIP : 0u) | (s_{p0}.face_vflip ? SPR_VFLIP : 0u)), &s_{n}_l1_visible, &s_{n}_l1_last_x, &s_{n}_l1_last_y, &s_{n}_l1_last_frame, &s_{n}_l1_last_flags);\n")
                 c.append(f"                else {{ ngpng_sprite_hide_range({l1_slot}, {l1_slots}u); s_{n}_l1_visible = 0u; }}\n")
         c.append("            } else {\n")
         for idx, p in enumerate(players):
@@ -6746,7 +6751,7 @@ def write_autorun_main_c(
             c.append("                s16 dgn_entry_cell_w_px;\n")
             c.append("                s16 dgn_entry_cell_h_px;\n")
             c.append("                s16 dgn_entry_door_cx;\n")
-        c.append("                ngpng_scene_runtime_place_spawn(sc, 0xFFu, requested_spawn, &cam_px, &cam_py, &tx, &ty, &spawn_x, &spawn_y);\n")
+        c.append("                ngpng_scene_runtime_place_spawn(sc, (checkpoint_scene == cur_scene) ? checkpoint_region : (u8)0xFFu, requested_spawn, &cam_px, &cam_py, &tx, &ty, &spawn_x, &spawn_y);\n")
         n = players[0]["name"]
         VAR = n.upper()
         c.append(f"                {VAR}_CTRL_INIT(s_{n}, spawn_x, spawn_y);\n")
