@@ -58,12 +58,13 @@ One click: **Export (template-ready)** patches the Makefile and produces a build
 - Regions (camera lock, no-spawn, audio zones, push-block targets, race gates, card slots…)
 - Waypoint paths for patrol AI and moving platforms
 - Camera deadzone overlay, parallax config, forced-scroll presets
+- **Cinematic camera (path)**: scene-level toggle that detaches the camera from the player and walks it along any scene path (configurable speed/loop/freeze-input). Per-scene defaults plus 4 trigger actions (`camera_path_start/stop/pause/resume`) for in-game cutscenes — reusable for intro scrolls, boss reveals, transitions, demo modes across every genre.
 - Neighbouring scenes → auto edge-warp triggers
 - Genre-aware UI: trigger conditions/actions/presets reordered for the active profile
 
 **Trigger system (visual scripting)**
 - 89 conditions: button press, `on_jump/land/hurt/death`, player in region, enemy count, HP, timer, flags, variables, wave state, quest stage, collectibles, distance, `chance`, push-block-on-tile, all-switches-on, `dialogue_done`, `choice_result`, `on_custom_event`, `item_count_ge`, entity-type state (19 conditions)…
-- 79 actions: BGM/SFX, spawn entity/wave, scene transition, show/hide/teleport entity, set flag/variable, give/remove/drop item (`drop_item`, `drop_random_item`), toggle tile, flash screen, camera lock, fade, save game, `start_dialogue`, `show_menu`…
+- 83 actions: BGM/SFX, spawn entity/wave, scene transition, show/hide/teleport entity, set flag/variable, give/remove/drop item (`drop_item`, `drop_random_item`), toggle tile, flash screen, camera lock, cinematic-camera path (`camera_path_start/stop/pause/resume`), fade, save game, `start_dialogue`, `show_menu`…
 - **Move entity to exact tile** — "Place ↗" button: click any tile on the canvas to set the destination for `move_entity_to`, `teleport_player`, or `spawn_at_region`. No manual region required; a synthetic 1×1 destination region is generated at export. A dashed arrow shows the path from entity spawn to destination.
 - Multi-condition AND chains + OR groups (multiple trigger sets, any can fire)
 - Exported as plain C89 arrays — zero runtime overhead for unused features

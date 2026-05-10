@@ -81,4 +81,26 @@ u8   ngpng_tile_is_water(u8 tile);
 #define SCENE_FLAG_HAS_WATER 0x0200u /* TILE_WATER (9) present */
 #endif
 
+/* ---- Cinematic camera-along-path (CAM-1) ----
+ * Drives the camera along one of the scene paths, mirroring the props/enemies
+ * path-follow logic. RAM struct lives in main.c (one per scene runtime).
+ * Lives in the engine header (not entities) because cinematic camera is useful
+ * even on scenes without any player/enemy/prop (e.g. visual novel intro). */
+typedef struct {
+    s16 cur_x;     /* current camera world position (committed each step) */
+    s16 cur_y;
+    u8  step;      /* index into the path point list (0..plen-1) */
+    u8  done;      /* 1 once we reach the end and loop=0 */
+} NgpngCamPath;
+
+/* Snap the camera to the first point of `path_idx`. Safe with invalid args
+ * (clears state). Call once on scene enter when cam_path is enabled. */
+void ngpng_camera_init_path(const NgpSceneDef *sc, u8 path_idx, NgpngCamPath *st);
+
+/* Advance one step (`speed` px/frame on each axis) toward the next path point;
+ * write the resulting camera position into *cam_px / *cam_py. When the last
+ * point is reached: loop=1 wraps to step 0, loop=0 sets st->done. */
+void ngpng_camera_apply_path_step(const NgpSceneDef *sc, u8 path_idx,
+    u8 speed, u8 loop, NgpngCamPath *st, s16 *cam_px, s16 *cam_py);
+
 #endif /* NGPNG_ENGINE_H */

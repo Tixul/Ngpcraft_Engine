@@ -446,3 +446,79 @@ u8 ngpng_tile_is_water(u8 tile)
 {
     return (tile == TILE_WATER) ? 1u : 0u;
 }
+
+/* ---- Cinematic camera-along-path (CAM-1) ----
+ * Helper kept inline to avoid a hard dependency on ngpng_entities.c
+ * (the cinematic camera must work in scenes without entities). */
+static s8 ngpng_cam_step_toward(s16 cur, s16 dst, s8 step)
+{
+    s16 d;
+    s8 sg;
+    if (cur == dst) return 0;
+    d  = (s16)(dst - cur);
+    sg = (s8)((d > 0) ? 1 : -1);
+    if (d > step || d < (s16)(-step)) return (s8)(sg * step);
+    return (s8)d;
+}
+
+void ngpng_camera_init_path(const NgpSceneDef *sc, u8 path_idx, NgpngCamPath *st)
+{
+    u16 off;
+    const NgpngPoint *pt;
+    if (!st) return;
+    st->step  = 0u;
+    st->done  = 0u;
+    st->cur_x = 0;
+    st->cur_y = 0;
+    if (!sc) return;
+    if (path_idx == 0xFFu || path_idx >= sc->path_count) return;
+    if (!sc->path_points || !sc->path_offsets || !sc->path_lengths) return;
+    if (sc->path_lengths[path_idx] == 0u) return;
+    off = sc->path_offsets[path_idx];
+    pt  = &sc->path_points[off];
+    st->cur_x = (s16)pt->x;
+    st->cur_y = (s16)pt->y;
+}
+
+void ngpng_camera_apply_path_step(const NgpSceneDef *sc, u8 path_idx,
+    u8 speed, u8 loop, NgpngCamPath *st, s16 *cam_px, s16 *cam_py)
+{
+    u8 plen;
+    u16 off;
+    const NgpngPoint *pt;
+    s16 dst_x;
+    s16 dst_y;
+    s8  spd;
+    if (!st || !cam_px || !cam_py) return;
+    if (!sc) return;
+    if (path_idx == 0xFFu || path_idx >= sc->path_count) return;
+    if (!sc->path_points || !sc->path_offsets || !sc->path_lengths) return;
+    plen = sc->path_lengths[path_idx];
+    if (plen == 0u) return;
+    if (st->done) {
+        *cam_px = st->cur_x;
+        *cam_py = st->cur_y;
+        return;
+    }
+    off = sc->path_offsets[path_idx];
+    if (st->step >= plen) st->step = 0u;
+    pt    = &sc->path_points[off + st->step];
+    dst_x = (s16)pt->x;
+    dst_y = (s16)pt->y;
+    spd   = (s8)((speed == 0u) ? 1u : speed);
+    st->cur_x = (s16)(st->cur_x + ngpng_cam_step_toward(st->cur_x, dst_x, spd));
+    st->cur_y = (s16)(st->cur_y + ngpng_cam_step_toward(st->cur_y, dst_y, spd));
+    if (st->cur_x == dst_x && st->cur_y == dst_y) {
+        st->step = (u8)(st->step + 1u);
+        if (st->step >= plen) {
+            if (loop) {
+                st->step = 0u;
+            } else {
+                st->step = (u8)(plen - 1u);
+                st->done = 1u;
+            }
+        }
+    }
+    *cam_px = st->cur_x;
+    *cam_py = st->cur_y;
+}

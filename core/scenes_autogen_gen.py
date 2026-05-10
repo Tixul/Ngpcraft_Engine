@@ -327,6 +327,13 @@ def write_scenes_autogen(*, project_data: dict, export_dir: Path) -> tuple[Path 
     hl.append("#define TRIG_ACT_DGN_RESET        80\n")
     hl.append("#define TRIG_ACT_DGN_NEXT_CLUSTER 81\n")
     hl.append("#define TRIG_ACT_DGN_GO_BACK      82\n")
+    hl.append("#endif\n")
+    # CAM-1: cinematic camera path triggers
+    hl.append("#ifndef TRIG_ACT_CAMERA_PATH_START\n")
+    hl.append("#define TRIG_ACT_CAMERA_PATH_START  83 /* a0 = path index, a1 = speed (0=use scene default) */\n")
+    hl.append("#define TRIG_ACT_CAMERA_PATH_STOP   84 /* return to player follow */\n")
+    hl.append("#define TRIG_ACT_CAMERA_PATH_PAUSE  85 /* hold camera at current position */\n")
+    hl.append("#define TRIG_ACT_CAMERA_PATH_RESUME 86 /* resume after pause */\n")
     hl.append("#endif\n\n")
 
     hl.append("typedef void (*NgpSceneFn)(void);\n")
@@ -376,6 +383,12 @@ def write_scenes_autogen(*, project_data: dict, export_dir: Path) -> tuple[Path 
     hl.append("    u8  cam_follow_deadzone_y;\n")
     hl.append("    u8  cam_follow_drop_margin_y;\n")
     hl.append("    u8  cam_lag;             /* 0=snap, 1=÷2, 2=÷4, 3=÷8, 4=÷16 */\n")
+    hl.append("    /* CAM-1: Cinematic camera that auto-scrolls along a scene path. */\n")
+    hl.append("    u8  cam_path_en;             /* 1 = ignore player and walk the path */\n")
+    hl.append("    u8  cam_path_idx;            /* index in sc->path_points (0xFF if none) */\n")
+    hl.append("    u8  cam_path_speed;          /* px/frame (1..8) */\n")
+    hl.append("    u8  cam_path_loop;           /* 1 = restart at first point on end */\n")
+    hl.append("    u8  cam_path_freeze_player;  /* 1 = ignore pad while the path runs */\n")
     hl.append("    u16 cam_tile_x;\n")
     hl.append("    u16 cam_tile_y;\n")
     hl.append("    u8  scroll_x;\n")
@@ -569,6 +582,14 @@ def write_scenes_autogen(*, project_data: dict, export_dir: Path) -> tuple[Path 
         # THC (TLCS-900) is picky about "constant initializers" for global structs:
         # it does not accept "const pointer variables" inside initializers.
         # Use preprocessor macros so the initializer sees direct symbols or 0.
+        # CAM-1 cinematic camera path defaults — keep older scene_*.h compiling.
+        cl.append(f"#ifndef {U}_CAM_PATH_EN\n")
+        cl.append(f"#define {U}_CAM_PATH_EN     0\n")
+        cl.append(f"#define {U}_CAM_PATH_IDX    0xFF\n")
+        cl.append(f"#define {U}_CAM_PATH_SPEED  1\n")
+        cl.append(f"#define {U}_CAM_PATH_LOOP   1\n")
+        cl.append(f"#define {U}_CAM_PATH_FREEZE_PLR 0\n")
+        cl.append("#endif\n")
         cl.append(f"#if defined({U}_REGION_COUNT)\n")
         cl.append(f"#define NGP_SCENE_{U}_REGIONS     (&g_{safe}_regions[0])\n")
         cl.append(f"#define NGP_SCENE_{U}_REGION_KIND g_{safe}_region_kind\n")
@@ -847,6 +868,7 @@ def write_scenes_autogen(*, project_data: dict, export_dir: Path) -> tuple[Path 
         cl.append(f"        (u16){U}_MAP_W, (u16){U}_MAP_H, (u8){U}_CAM_MODE, (u8){U}_CAM_CLAMP,\n")
         cl.append(f"        (s16){U}_CAM_MIN_X, (s16){U}_CAM_MIN_Y, (s16){U}_CAM_MAX_X, (s16){U}_CAM_MAX_Y,\n")
         cl.append(f"        (u8){U}_CAM_FOLLOW_DEADZONE_X, (u8){U}_CAM_FOLLOW_DEADZONE_Y, (u8){U}_CAM_FOLLOW_DROP_MARGIN_Y, (u8){U}_CAM_LAG,\n")
+        cl.append(f"        (u8){U}_CAM_PATH_EN, (u8){U}_CAM_PATH_IDX, (u8){U}_CAM_PATH_SPEED, (u8){U}_CAM_PATH_LOOP, (u8){U}_CAM_PATH_FREEZE_PLR,\n")
         cl.append(f"        (u16){U}_CAM_TILE_X, (u16){U}_CAM_TILE_Y,\n")
         cl.append(f"        (u8){U}_SCROLL_X, (u8){U}_SCROLL_Y, (u8){U}_FORCED_SCROLL,\n")
         cl.append(f"        (s16){U}_SCROLL_SPEED_X, (s16){U}_SCROLL_SPEED_Y,\n")

@@ -1751,6 +1751,11 @@ def make_scene_level_h(
             "dgn_reset":        80,
             "dgn_next_cluster": 81,
             "dgn_go_back":      82,
+            # CAM-1: cinematic camera path
+            "camera_path_start":  83,
+            "camera_path_stop":   84,
+            "camera_path_pause":  85,
+            "camera_path_resume": 86,
         }
 
         lines += [sep, "/* Triggers (conditions -> actions)                                    */", sep]
@@ -1916,6 +1921,12 @@ def make_scene_level_h(
             "#define TRIG_ACT_DGN_RESET        80",
             "#define TRIG_ACT_DGN_NEXT_CLUSTER 81",
             "#define TRIG_ACT_DGN_GO_BACK      82",
+            "#endif",
+            "#ifndef TRIG_ACT_CAMERA_PATH_START",
+            "#define TRIG_ACT_CAMERA_PATH_START  83",
+            "#define TRIG_ACT_CAMERA_PATH_STOP   84",
+            "#define TRIG_ACT_CAMERA_PATH_PAUSE  85",
+            "#define TRIG_ACT_CAMERA_PATH_RESUME 86",
             "#endif",
             "",
             "#ifndef NGPNG_TRIGGER_T",
@@ -2410,6 +2421,29 @@ def make_scene_level_h(
     follow_drop_margin_y = max(0, min(71, int(layout.get("follow_drop_margin_y", 20) or 20)))
     cam_lag = max(0, min(4, int(layout.get("cam_lag", 0) or 0)))
 
+    # CAM-1: cinematic camera following a scene path. Resolved here so we can
+    # convert the JSON path_id (uuid string) into a numeric index matching the
+    # order that `scene["paths"]` is exported above.
+    cam_path_cfg = layout.get("camera_path") or {}
+    if not isinstance(cam_path_cfg, dict):
+        cam_path_cfg = {}
+    cam_path_en = 1 if bool(cam_path_cfg.get("enabled", False)) else 0
+    cam_path_speed = max(1, min(8, int(cam_path_cfg.get("speed", 1) or 1)))
+    cam_path_loop = 1 if bool(cam_path_cfg.get("loop", True)) else 0
+    cam_path_freeze = 1 if bool(cam_path_cfg.get("freeze_player", False)) else 0
+    cam_path_idx = 0xFF
+    if cam_path_en:
+        wanted_id = str(cam_path_cfg.get("path_id", "") or "").strip()
+        scene_paths = scene.get("paths") or []
+        if isinstance(scene_paths, list) and wanted_id:
+            for i, p in enumerate(scene_paths):
+                if isinstance(p, dict) and str(p.get("id", "") or "") == wanted_id:
+                    cam_path_idx = i & 0xFF
+                    break
+        # No matching path → silently disable (UI should prevent this state)
+        if cam_path_idx == 0xFF:
+            cam_path_en = 0
+
     def _clip_pct(v: int) -> int:
         try:
             v = int(v)
@@ -2666,6 +2700,11 @@ def make_scene_level_h(
         f"#define {sym_use.upper()}_CAM_FOLLOW_DEADZONE_Y {int(follow_deadzone_y)}",
         f"#define {sym_use.upper()}_CAM_FOLLOW_DROP_MARGIN_Y {int(follow_drop_margin_y)}",
         f"#define {sym_use.upper()}_CAM_LAG {int(cam_lag)}",
+        f"#define {sym_use.upper()}_CAM_PATH_EN {int(cam_path_en)}",
+        f"#define {sym_use.upper()}_CAM_PATH_IDX {int(cam_path_idx) & 0xFF}",
+        f"#define {sym_use.upper()}_CAM_PATH_SPEED {int(cam_path_speed)}",
+        f"#define {sym_use.upper()}_CAM_PATH_LOOP {int(cam_path_loop)}",
+        f"#define {sym_use.upper()}_CAM_PATH_FREEZE_PLR {int(cam_path_freeze)}",
         f"#define {sym_use.upper()}_RULE_LOCK_Y_EN {lock_en}",
         f"#define {sym_use.upper()}_RULE_LOCK_Y {lock_y}",
         f"#define {sym_use.upper()}_RULE_GROUND_BAND_EN {band_en}",

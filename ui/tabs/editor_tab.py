@@ -292,7 +292,7 @@ class EditorTab(QWidget):
         self._sel_anchor: tuple[int, int] | None = None
         self._sel_rect: tuple[int, int, int, int] | None = None  # x,y,w,h in px coords
         self._sel_temp: tuple[int, int, int, int] | None = None
-        self._replace_mode = False
+        self._replace_target: str | None = None  # None | "color" | "alpha"
         self._last_px: tuple[int, int] | None = None
         self._stroke_active = False
         self._stroke_erase = False
@@ -335,6 +335,7 @@ class EditorTab(QWidget):
         QShortcut(QKeySequence("H"), self, activated=lambda: self._chk_sym_h.toggle())
         QShortcut(QKeySequence("V"), self, activated=lambda: self._chk_sym_v.toggle())
         QShortcut(QKeySequence("R"), self, activated=self._start_replace_mode)
+        QShortcut(QKeySequence("Shift+R"), self, activated=self._start_replace_alpha_mode)
         QShortcut(QKeySequence.StandardKey.SelectAll, self, activated=self._select_all)
         QShortcut(QKeySequence.StandardKey.Copy, self, activated=self._copy_selection)
         QShortcut(QKeySequence.StandardKey.Cut, self, activated=self._cut_selection)
@@ -512,6 +513,11 @@ class EditorTab(QWidget):
         self._btn_replace.setEnabled(False)
         self._btn_replace.setToolTip(tr("ed.tt.replace"))
         ops_row.addWidget(self._btn_replace)
+        self._btn_replace_alpha = QPushButton(tr("ed.replace_alpha"))
+        self._btn_replace_alpha.clicked.connect(self._start_replace_alpha_mode)
+        self._btn_replace_alpha.setEnabled(False)
+        self._btn_replace_alpha.setToolTip(tr("ed.tt.replace_alpha"))
+        ops_row.addWidget(self._btn_replace_alpha)
         ops_row.addStretch()
         root.addLayout(ops_row)
 
@@ -680,7 +686,7 @@ class EditorTab(QWidget):
         self._file_lbl.setStyleSheet("")
         self._btn_save.setEnabled(True)
         self._btn_save_as.setEnabled(True)
-        for b in (self._btn_flip_h, self._btn_flip_v, self._btn_rot_l, self._btn_rot_r, self._btn_replace):
+        for b in (self._btn_flip_h, self._btn_flip_v, self._btn_rot_l, self._btn_rot_r, self._btn_replace, self._btn_replace_alpha):
             b.setEnabled(True)
         self._btn_apply_pal.setEnabled(bool(self._img and self._ext_palette))
         self._btn_manual_map.setEnabled(bool(self._img and self._ext_palette))
@@ -964,8 +970,8 @@ class EditorTab(QWidget):
             btn.setChecked(t == tool)
 
     def _cancel_modes(self) -> None:
-        if self._replace_mode:
-            self._replace_mode = False
+        if self._replace_target is not None:
+            self._replace_target = None
             self._cursor.setText("")
             self._set_tool("pencil")
         if self._sel_anchor is not None or self._sel_temp is not None or self._sel_rect is not None:
@@ -1025,9 +1031,16 @@ class EditorTab(QWidget):
     def _start_replace_mode(self) -> None:
         if self._img is None:
             return
-        self._replace_mode = True
+        self._replace_target = "color"
         self._set_tool("picker")
         self._cursor.setText(tr("ed.replace_hint"))
+
+    def _start_replace_alpha_mode(self) -> None:
+        if self._img is None:
+            return
+        self._replace_target = "alpha"
+        self._set_tool("picker")
+        self._cursor.setText(tr("ed.replace_alpha_hint"))
 
     def _replace_color(self, src: tuple[int, int, int]) -> None:
         chosen = QColorDialog.getColor(QColor(*src), self, tr("ed.replace_title"))
@@ -1064,6 +1077,35 @@ class EditorTab(QWidget):
 
         self._after_edit(throttle=False)
         self._cursor.setText(tr("ed.replace_done", n=changed))
+
+    def _replace_color_with_alpha(self, src: tuple[int, int, int]) -> None:
+        if self._img is None:
+            return
+        self._undo.push(self._img)
+        px = self._img.load()
+        w, h = self._img.size
+        sel = self._sel_rect
+        if sel is not None:
+            x0, y0, sw, sh = sel
+            x1 = min(w, x0 + sw)
+            y1 = min(h, y0 + sh)
+            xr = range(max(0, x0), max(0, x1))
+            yr = range(max(0, y0), max(0, y1))
+        else:
+            xr = range(w)
+            yr = range(h)
+        changed = 0
+        for yy in yr:
+            for xx in xr:
+                r, g, b, a = px[xx, yy]
+                if a < 128:
+                    continue
+                if (r, g, b) == src:
+                    px[xx, yy] = (0, 0, 0, 0)
+                    changed += 1
+
+        self._after_edit(throttle=False)
+        self._cursor.setText(tr("ed.replace_alpha_done", n=changed))
 
     def _flip_h(self) -> None:
         if self._img is None:
@@ -1389,10 +1431,14 @@ class EditorTab(QWidget):
         if a < 128:
             return
 
-        if self._replace_mode:
-            self._replace_mode = False
+        if self._replace_target is not None:
+            mode = self._replace_target
+            self._replace_target = None
             src = snap(r, g, b)
-            self._replace_color(src)
+            if mode == "alpha":
+                self._replace_color_with_alpha(src)
+            else:
+                self._replace_color(src)
             self._set_tool("pencil")
             return
 

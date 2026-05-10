@@ -5307,6 +5307,11 @@ class LevelTab(QWidget):
             ("flip_sprite_v",   "level.trigger_action.flip_sprite_v"),
             ("init_game_vars",  "level.trigger_action.init_game_vars"),
             ("stop_wave_rand",  "level.trigger_action.stop_wave_rand"),
+            # CAM-1: cinematic camera triggers — chain a path with regions/buttons.
+            ("camera_path_start",  "level.trigger_action.camera_path_start"),
+            ("camera_path_stop",   "level.trigger_action.camera_path_stop"),
+            ("camera_path_pause",  "level.trigger_action.camera_path_pause"),
+            ("camera_path_resume", "level.trigger_action.camera_path_resume"),
         ):
             self._combo_trig_action.addItem(tr(lk), k)
         self._combo_trig_action.setToolTip(tr("level.trigger_action_tt"))
@@ -6103,6 +6108,62 @@ class LevelTab(QWidget):
         lag_row.addWidget(self._spin_cam_lag)
         lag_row.addStretch()
         camv.addLayout(lag_row)
+
+        # ── CAM-1: Cinematic camera that follows a scene path ───────────────
+        # Visually grouped inside the same Camera box so users discover it
+        # right where they configure follow/deadzone/lag.
+        self._grp_cam_path = QGroupBox(tr("level.layout_cam_path_group"))
+        self._grp_cam_path.setToolTip(tr("level.layout_cam_path_group_tt"))
+        cpv = QVBoxLayout(self._grp_cam_path)
+        cpv.setSpacing(4)
+        cpv.setContentsMargins(6, 6, 6, 6)
+
+        self._chk_cam_path_en = QCheckBox(tr("level.layout_cam_path_enable"))
+        self._chk_cam_path_en.setToolTip(tr("level.layout_cam_path_enable_tt"))
+        self._chk_cam_path_en.toggled.connect(self._on_layout_changed)
+        cpv.addWidget(self._chk_cam_path_en)
+
+        cp_path_row = QHBoxLayout()
+        cp_path_row.addWidget(QLabel(tr("level.layout_cam_path_id")))
+        self._combo_cam_path_id = QComboBox()
+        self._combo_cam_path_id.setToolTip(tr("level.layout_cam_path_id_tt"))
+        self._combo_cam_path_id.currentIndexChanged.connect(self._on_layout_changed)
+        cp_path_row.addWidget(self._combo_cam_path_id, 1)
+        cpv.addLayout(cp_path_row)
+
+        cp_param_row = QHBoxLayout()
+        cp_param_row.addWidget(QLabel(tr("level.layout_cam_path_speed")))
+        self._spin_cam_path_speed = QSpinBox()
+        self._spin_cam_path_speed.setRange(1, 8)
+        self._spin_cam_path_speed.setSuffix(tr("level.layout_cam_path_speed_unit"))
+        self._spin_cam_path_speed.setToolTip(tr("level.layout_cam_path_speed_tt"))
+        self._spin_cam_path_speed.valueChanged.connect(self._on_layout_changed)
+        cp_param_row.addWidget(self._spin_cam_path_speed)
+        cp_param_row.addSpacing(8)
+        self._chk_cam_path_loop = QCheckBox(tr("level.layout_cam_path_loop"))
+        self._chk_cam_path_loop.setToolTip(tr("level.layout_cam_path_loop_tt"))
+        self._chk_cam_path_loop.toggled.connect(self._on_layout_changed)
+        cp_param_row.addWidget(self._chk_cam_path_loop)
+        cp_param_row.addStretch()
+        cpv.addLayout(cp_param_row)
+
+        self._chk_cam_path_freeze = QCheckBox(tr("level.layout_cam_path_freeze"))
+        self._chk_cam_path_freeze.setToolTip(tr("level.layout_cam_path_freeze_tt"))
+        self._chk_cam_path_freeze.toggled.connect(self._on_layout_changed)
+        cpv.addWidget(self._chk_cam_path_freeze)
+
+        # Status line: shows "no path defined", "path X has only N points", etc.
+        self._lbl_cam_path_status = QLabel("")
+        self._lbl_cam_path_status.setWordWrap(True)
+        self._lbl_cam_path_status.setStyleSheet("color: #d8a23a; font-size: 10px;")
+        cpv.addWidget(self._lbl_cam_path_status)
+
+        cp_hint = QLabel(tr("level.layout_cam_path_hint"))
+        cp_hint.setWordWrap(True)
+        cp_hint.setStyleSheet("color: #9aa3ad; font-size: 10px;")
+        cpv.addWidget(cp_hint)
+
+        camv.addWidget(self._grp_cam_path)
 
         self._btn_cam_from_bezel = QPushButton(tr("level.layout_cam_from_bezel"))
         self._btn_cam_from_bezel.setToolTip(tr("level.layout_cam_from_bezel_tt"))
@@ -7017,6 +7078,13 @@ class LevelTab(QWidget):
             self._spin_cam_deadzone_y.setValue(12)
             self._spin_cam_drop_margin_y.setValue(20)
             self._spin_cam_lag.setValue(0)
+            # CAM-1: reset cinematic camera widgets when no scene is loaded
+            if hasattr(self, "_chk_cam_path_en"):
+                self._chk_cam_path_en.setChecked(False)
+                self._spin_cam_path_speed.setValue(1)
+                self._chk_cam_path_loop.setChecked(True)
+                self._chk_cam_path_freeze.setChecked(False)
+                self._refresh_cam_path_combo()
             self._on_layout_changed()
             # Layers defaults
             try:
@@ -7591,6 +7659,17 @@ class LevelTab(QWidget):
         follow_deadzone_y = _cfg_int(layout, "follow_deadzone_y", 12)
         follow_drop_margin_y = _cfg_int(layout, "follow_drop_margin_y", 20)
         cam_lag = int(layout.get("cam_lag", 0) or 0)
+        # CAM-1: cinematic camera path config (defaults preserve old behavior)
+        cp_raw = layout.get("camera_path") or {}
+        if not isinstance(cp_raw, dict):
+            cp_raw = {}
+        cp_cfg = {
+            "enabled":       bool(cp_raw.get("enabled", False)),
+            "path_id":       str(cp_raw.get("path_id", "") or ""),
+            "speed":         max(1, min(8, int(cp_raw.get("speed", 1) or 1))),
+            "loop":          bool(cp_raw.get("loop", True)),
+            "freeze_player": bool(cp_raw.get("freeze_player", False)),
+        }
         self._layout_cfg = {
             "cam_mode": cam_mode,
             "bounds_auto": bounds_auto,
@@ -7603,6 +7682,7 @@ class LevelTab(QWidget):
             "follow_deadzone_y": max(0, min(71, follow_deadzone_y)),
             "follow_drop_margin_y": max(0, min(71, follow_drop_margin_y)),
             "cam_lag": max(0, min(4, cam_lag)),
+            "camera_path": cp_cfg,
         }
 
         # Layer metadata (parallax)
@@ -7775,6 +7855,23 @@ class LevelTab(QWidget):
             self._spin_cam_deadzone_y.setValue(int(self._layout_cfg.get("follow_deadzone_y", 12)))
             self._spin_cam_drop_margin_y.setValue(int(self._layout_cfg.get("follow_drop_margin_y", 20)))
             self._spin_cam_lag.setValue(int(self._layout_cfg.get("cam_lag", 0)))
+            # CAM-1: restore camera-path widgets (combo populated by _refresh_cam_path_combo)
+            cp_state = self._layout_cfg.get("camera_path") or {}
+            if hasattr(self, "_chk_cam_path_en"):
+                self._chk_cam_path_en.blockSignals(True)
+                self._chk_cam_path_en.setChecked(bool(cp_state.get("enabled", False)))
+                self._chk_cam_path_en.blockSignals(False)
+                self._spin_cam_path_speed.blockSignals(True)
+                self._spin_cam_path_speed.setValue(int(cp_state.get("speed", 1) or 1))
+                self._spin_cam_path_speed.blockSignals(False)
+                self._chk_cam_path_loop.blockSignals(True)
+                self._chk_cam_path_loop.setChecked(bool(cp_state.get("loop", True)))
+                self._chk_cam_path_loop.blockSignals(False)
+                self._chk_cam_path_freeze.blockSignals(True)
+                self._chk_cam_path_freeze.setChecked(bool(cp_state.get("freeze_player", False)))
+                self._chk_cam_path_freeze.blockSignals(False)
+                self._refresh_cam_path_combo()
+                self._update_cam_path_widgets()
             self._spin_scr1_par_x.setValue(int(self._layers_cfg.get("scr1_parallax_x", 100)))
             self._spin_scr1_par_y.setValue(int(self._layers_cfg.get("scr1_parallax_y", 100)))
             self._spin_scr2_par_x.setValue(int(self._layers_cfg.get("scr2_parallax_x", 100)))
@@ -8957,6 +9054,18 @@ class LevelTab(QWidget):
             "loop_x":   bool(self._chk_loop_x.isChecked()),
             "loop_y":   bool(self._chk_loop_y.isChecked()),
         }
+        # CAM-1: read camera-path widgets (combo data may be "" when no paths exist).
+        cp_path_id = ""
+        if hasattr(self, "_combo_cam_path_id"):
+            data = self._combo_cam_path_id.currentData()
+            cp_path_id = str(data or "")
+        cp_cfg = {
+            "enabled": bool(self._chk_cam_path_en.isChecked()) if hasattr(self, "_chk_cam_path_en") else False,
+            "path_id": cp_path_id,
+            "speed":   int(self._spin_cam_path_speed.value()) if hasattr(self, "_spin_cam_path_speed") else 1,
+            "loop":    bool(self._chk_cam_path_loop.isChecked()) if hasattr(self, "_chk_cam_path_loop") else True,
+            "freeze_player": bool(self._chk_cam_path_freeze.isChecked()) if hasattr(self, "_chk_cam_path_freeze") else False,
+        }
         self._layout_cfg = {
             "cam_mode": str(self._combo_cam_mode.currentData() or "single_screen"),
             "bounds_auto": bool(self._chk_cam_bounds_auto.isChecked()),
@@ -8969,10 +9078,12 @@ class LevelTab(QWidget):
             "follow_deadzone_y": int(self._spin_cam_deadzone_y.value()),
             "follow_drop_margin_y": int(self._spin_cam_drop_margin_y.value()),
             "cam_lag": int(self._spin_cam_lag.value()),
+            "camera_path": cp_cfg,
         }
         self._update_cam_bounds_ui()
         self._apply_cam_clamp()
         self._update_layout_widgets()
+        self._update_cam_path_widgets()
         self._canvas.update()
         self._update_diagnostics()
 
@@ -11143,6 +11254,70 @@ class LevelTab(QWidget):
                 tr("level.template_sprite_exists", name=Path(file_rel).name),
             )
 
+    # ── CAM-1 ───────────────────────────────────────────────────────────
+    def _refresh_cam_path_combo(self) -> None:
+        """Rebuild the cinematic-camera path combo from self._paths.
+
+        Preserves the current selection by path id. When no paths exist the
+        combo holds a single placeholder item and the whole panel is dimmed.
+        """
+        if not hasattr(self, "_combo_cam_path_id"):
+            return
+        cp_cfg = (self._layout_cfg.get("camera_path") if hasattr(self, "_layout_cfg") else None) or {}
+        wanted_id = str(cp_cfg.get("path_id", "") or "")
+        self._combo_cam_path_id.blockSignals(True)
+        try:
+            self._combo_cam_path_id.clear()
+            if not self._paths:
+                # Provide an empty entry so userData stays consistent (sentinel).
+                self._combo_cam_path_id.addItem(tr("level.layout_cam_path_none"), "")
+            else:
+                self._combo_cam_path_id.addItem(tr("level.layout_cam_path_pick"), "")
+                for p in self._paths:
+                    nm = str(p.get("name", "") or p.get("id", "?"))
+                    pid = str(p.get("id", "") or "")
+                    self._combo_cam_path_id.addItem(nm, pid)
+            sel = 0
+            if wanted_id:
+                idx = self._combo_cam_path_id.findData(wanted_id)
+                if idx >= 0:
+                    sel = idx
+            self._combo_cam_path_id.setCurrentIndex(sel)
+        finally:
+            self._combo_cam_path_id.blockSignals(False)
+        self._update_cam_path_widgets()
+
+    def _update_cam_path_widgets(self) -> None:
+        """Enable / dim the camera-path inputs and update the status hint."""
+        if not hasattr(self, "_chk_cam_path_en"):
+            return
+        en = bool(self._chk_cam_path_en.isChecked())
+        has_paths = bool(self._paths)
+        # Toggle child controls (the master checkbox stays interactive).
+        self._combo_cam_path_id.setEnabled(en and has_paths)
+        self._spin_cam_path_speed.setEnabled(en and has_paths)
+        self._chk_cam_path_loop.setEnabled(en and has_paths)
+        self._chk_cam_path_freeze.setEnabled(en and has_paths)
+        # Enabled-without-path → loud warning. Otherwise compact info line.
+        msg = ""
+        if en and not has_paths:
+            msg = tr("level.layout_cam_path_warn_no_paths")
+        elif en:
+            data = self._combo_cam_path_id.currentData()
+            pid  = str(data or "")
+            if not pid:
+                msg = tr("level.layout_cam_path_warn_pick")
+            else:
+                pidx = self._path_index_for_id(pid)
+                if pidx < 0:
+                    msg = tr("level.layout_cam_path_warn_missing")
+                else:
+                    pts = (self._paths[pidx].get("points", []) or [])
+                    if len(pts) < 2:
+                        msg = tr("level.layout_cam_path_warn_short")
+        self._lbl_cam_path_status.setText(msg)
+        self._lbl_cam_path_status.setVisible(bool(msg))
+
     def _refresh_ent_path_combo(self) -> None:
         """Rebuild the patrol-path combo from current self._paths (preserves selection)."""
         ent_path_id = ""
@@ -11209,14 +11384,32 @@ class LevelTab(QWidget):
     def _refresh_ent_path_status(self) -> None:
         if not hasattr(self, "_lbl_ent_path_status"):
             return
+        # Default styling — neutral grey for status, restore at every call so a
+        # previous warning doesn't leak across selections.
+        self._lbl_ent_path_status.setStyleSheet("color: #9aa3ad; font-size: 10px;")
         idx = self._selected
         if not (0 <= idx < len(self._entities)):
             self._lbl_ent_path_status.setText(tr("level.prop_path_help_none_sel"))
+            self._apply_player_path_warning(False)
             return
+        # PATH-1: paths assigned to a player entity are silently ignored by the
+        # runtime (player has its own update loop). Dim the combo + show a loud
+        # warning that points users to the cinematic camera (CAM-1) instead.
+        ent = self._entities[idx]
+        role = self._entity_effective_role(ent)
+        if role == "player":
+            assigned = bool(str(ent.get("path_id", "") or "").strip())
+            self._apply_player_path_warning(True)
+            key = "level.prop_path_player_warn_assigned" if assigned else "level.prop_path_player_warn"
+            self._lbl_ent_path_status.setText(tr(key))
+            self._lbl_ent_path_status.setStyleSheet("color: #d8a23a; font-size: 10px;")
+            return
+        # Non-player path: standard help line + restore enabled state.
+        self._apply_player_path_warning(False)
         if not self._paths:
             self._lbl_ent_path_status.setText(tr("level.prop_path_help_no_paths"))
             return
-        pid = str(self._entities[idx].get("path_id", "") or "")
+        pid = str(ent.get("path_id", "") or "")
         if not pid:
             self._lbl_ent_path_status.setText(tr("level.prop_path_help_unassigned"))
             return
@@ -11226,6 +11419,28 @@ class LevelTab(QWidget):
                 path_name = str(p.get("name", "") or p.get("id", "?"))
                 break
         self._lbl_ent_path_status.setText(tr("level.prop_path_help_assigned", path=path_name))
+
+    def _apply_player_path_warning(self, is_player: bool) -> None:
+        """Dim the path combo + edit button when the selected entity is a player.
+
+        Kept as a small helper so behavior stays in one place — the combo gets
+        re-enabled by `_set_path_props_enabled` and similar callers, but we
+        re-dim it here whenever the user switches to a player entity.
+        """
+        if not hasattr(self, "_combo_ent_path"):
+            return
+        if is_player:
+            # Disable input — user can still see what was assigned, but can't change it.
+            self._combo_ent_path.setEnabled(False)
+            self._combo_ent_path.setToolTip(tr("level.prop_path_player_tt"))
+            if hasattr(self, "_btn_ent_path_edit"):
+                self._btn_ent_path_edit.setEnabled(False)
+                self._btn_ent_path_edit.setToolTip(tr("level.prop_path_player_tt"))
+        else:
+            self._combo_ent_path.setToolTip(tr("level.prop_path_tt"))
+            if hasattr(self, "_btn_ent_path_edit"):
+                self._btn_ent_path_edit.setToolTip(tr("level.prop_path_edit_btn_tt"))
+            # Re-enable handled by the regular _refresh_props / selection flow.
 
     def _edit_selected_entity_path(self) -> None:
         idx = self._selected
@@ -17401,6 +17616,30 @@ class LevelTab(QWidget):
             self._lbl_trig_param.setVisible(False)
             self._combo_trig_dest_region.setVisible(False)
             self._spin_trig_param.setVisible(False)
+        elif act == "camera_path_start":
+            # a0 = path index ; a1 = speed (1..8 px/frame, 0=keep current)
+            self._lbl_trig_evt.setText(tr("level.trigger_cam_path_idx"))
+            self._spin_trig_event.setToolTip(tr("level.trigger_cam_path_idx_tt"))
+            self._lbl_trig_param.setText(tr("level.trigger_cam_path_speed"))
+            self._spin_trig_param.setToolTip(tr("level.trigger_cam_path_speed_tt"))
+            self._combo_trig_scene.setVisible(False)
+            self._combo_trig_target.setVisible(False)
+            self._combo_trig_entity.setVisible(False)
+            self._lbl_trig_evt.setVisible(True)
+            self._spin_trig_event.setVisible(True)
+            self._lbl_trig_param.setVisible(True)
+            self._combo_trig_dest_region.setVisible(False)
+            self._spin_trig_param.setVisible(True)
+        elif act in ("camera_path_stop", "camera_path_pause", "camera_path_resume"):
+            # No params — runtime acts on the currently-active path.
+            self._combo_trig_scene.setVisible(False)
+            self._combo_trig_target.setVisible(False)
+            self._combo_trig_entity.setVisible(False)
+            self._lbl_trig_evt.setVisible(False)
+            self._spin_trig_event.setVisible(False)
+            self._lbl_trig_param.setVisible(False)
+            self._combo_trig_dest_region.setVisible(False)
+            self._spin_trig_param.setVisible(False)
         else:
             # Fallback: show both params
             self._combo_trig_scene.setVisible(False)
@@ -18136,6 +18375,7 @@ class LevelTab(QWidget):
             self._path_list.blockSignals(False)
         self._set_path_props_enabled(0 <= self._path_selected < len(self._paths))
         self._refresh_ent_path_combo()
+        self._refresh_cam_path_combo()  # CAM-1: keep cinematic-camera combo in sync
         self._sync_scene_tool_buttons()
 
     def _refresh_path_points(self, *, no_list_rebuild: bool = False) -> None:

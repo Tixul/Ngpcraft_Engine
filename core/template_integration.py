@@ -4612,6 +4612,19 @@ def write_autorun_main_c(
     c.append("    u8 fx_active_count = 0u;\n")
     c.append("    u8 fx_alloc_idx = 0u;\n")
     c.append("    s16 cam_px = 0, cam_py = 0;\n")
+    # CAM-1: cinematic camera path runtime state.
+    #  - cam_path_state holds the current path step + cur_x/cur_y.
+    #  - runtime_cam_path_mode mirrors sc->cam_path_en at scene enter, and is
+    #    overridden by camera_path_start / _stop / _pause / _resume triggers.
+    #    0 = follow player, 1 = path running, 2 = path paused.
+    #  - The other runtime_cam_path_* mirror sc->cam_path_idx/speed/loop/freeze
+    #    so triggers can swap path or speed mid-scene without editing the def.
+    c.append("    NgpngCamPath cam_path_state;\n")
+    c.append("    u8 runtime_cam_path_mode   = 0u;\n")
+    c.append("    u8 runtime_cam_path_idx    = 0xFFu;\n")
+    c.append("    u8 runtime_cam_path_speed  = 1u;\n")
+    c.append("    u8 runtime_cam_path_loop   = 1u;\n")
+    c.append("    u8 runtime_cam_path_freeze = 0u;\n")
     if has_enemy:
         c.append("    NgpngEnemy enemies[NGPNG_AUTORUN_MAX_ENEMIES];\n")
     if has_bullets:
@@ -4859,6 +4872,24 @@ def write_autorun_main_c(
         c.append("    ngpng_palfx_enter(cur_scene);\n")
     c.append("    #endif\n")
     c.append("    ngpng_scene_runtime_enter_view(&g_ngp_scenes[cur_scene], cur_scene, &cam_px, &cam_py, &tx, &ty);\n")
+    # CAM-1: copy scene defaults into runtime state, then snap to first point if active.
+    c.append("    {\n")
+    c.append("        const NgpSceneDef *_cp_sc = &g_ngp_scenes[cur_scene];\n")
+    c.append("        runtime_cam_path_mode   = _cp_sc->cam_path_en ? 1u : 0u;\n")
+    c.append("        runtime_cam_path_idx    = _cp_sc->cam_path_idx;\n")
+    c.append("        runtime_cam_path_speed  = _cp_sc->cam_path_speed;\n")
+    c.append("        runtime_cam_path_loop   = _cp_sc->cam_path_loop;\n")
+    c.append("        runtime_cam_path_freeze = _cp_sc->cam_path_freeze_player;\n")
+    c.append("        ngpng_camera_init_path(_cp_sc, runtime_cam_path_idx, &cam_path_state);\n")
+    c.append("        if (runtime_cam_path_mode == 1u) {\n")
+    c.append("            cam_px = cam_path_state.cur_x;\n")
+    c.append("            cam_py = cam_path_state.cur_y;\n")
+    c.append("            ngpng_apply_camera_constraints(_cp_sc, &cam_px, &cam_py);\n")
+    c.append("            tx = (u16)(cam_px >> 3);\n")
+    c.append("            ty = (u16)(cam_py >> 3);\n")
+    c.append("            ngpng_update_plane_scroll(_cp_sc, cam_px, cam_py);\n")
+    c.append("        }\n")
+    c.append("    }\n")
     if has_shooting:
         c.append("    player_bullet_type = s_ngpng_player_btype[cur_scene];\n")
     if has_mapstream:
@@ -5152,6 +5183,11 @@ def write_autorun_main_c(
             c.append("        if (s_player_input_locked) { ngpc_pad_held = 0u; ngpc_pad_pressed = 0u; }\n")
     elif has_dialogues:
         c.append("        if (dialog_consumed_input) { ngpc_pad_held = 0u; ngpc_pad_pressed = 0u; }\n")
+    # CAM-1: cinematic camera path can freeze the player so the dolly is not interrupted.
+    # Honors triggers : freeze stays active even when the path is paused (mode=2).
+    c.append("        if ((runtime_cam_path_mode == 1u || runtime_cam_path_mode == 2u) && runtime_cam_path_freeze) {\n")
+    c.append("            ngpc_pad_held = 0u; ngpc_pad_pressed = 0u;\n")
+    c.append("        }\n")
     if has_palfx:
         c.append("        ngpc_palfx_update();\n")
     c.append("        /* ---- Pause update ------------------------------------------------- */\n")
@@ -5192,6 +5228,17 @@ def write_autorun_main_c(
     if has_palfx:
         c.append("                    ngpng_palfx_enter(cur_scene);\n")
     c.append("                    ngpng_scene_runtime_enter_view(sc, cur_scene, &cam_px, &cam_py, &tx, &ty);\n")
+    # CAM-1: reset cinematic camera state on pause-quit scene change
+    c.append("                    runtime_cam_path_mode   = sc->cam_path_en ? 1u : 0u;\n")
+    c.append("                    runtime_cam_path_idx    = sc->cam_path_idx;\n")
+    c.append("                    runtime_cam_path_speed  = sc->cam_path_speed;\n")
+    c.append("                    runtime_cam_path_loop   = sc->cam_path_loop;\n")
+    c.append("                    runtime_cam_path_freeze = sc->cam_path_freeze_player;\n")
+    c.append("                    ngpng_camera_init_path(sc, runtime_cam_path_idx, &cam_path_state);\n")
+    c.append("                    if (runtime_cam_path_mode == 1u) { cam_px = cam_path_state.cur_x; cam_py = cam_path_state.cur_y;\n")
+    c.append("                        ngpng_apply_camera_constraints(sc, &cam_px, &cam_py);\n")
+    c.append("                        tx = (u16)(cam_px >> 3); ty = (u16)(cam_py >> 3);\n")
+    c.append("                        ngpng_update_plane_scroll(sc, cam_px, cam_py); }\n")
     if has_mapstream:
         c.append("#ifdef NGPNG_HAS_MAPSTREAM\n")
         c.append("                    ngpng_mapstream_load_scene(cur_scene, cam_px, cam_py);\n")
@@ -5287,6 +5334,17 @@ def write_autorun_main_c(
     if has_palfx:
         c.append("            ngpng_palfx_enter(cur_scene);\n")
     c.append("            ngpng_scene_runtime_enter_view(sc, cur_scene, &cam_px, &cam_py, &tx, &ty);\n")
+    # CAM-1: reset cinematic camera state on game-over restart
+    c.append("            runtime_cam_path_mode   = sc->cam_path_en ? 1u : 0u;\n")
+    c.append("            runtime_cam_path_idx    = sc->cam_path_idx;\n")
+    c.append("            runtime_cam_path_speed  = sc->cam_path_speed;\n")
+    c.append("            runtime_cam_path_loop   = sc->cam_path_loop;\n")
+    c.append("            runtime_cam_path_freeze = sc->cam_path_freeze_player;\n")
+    c.append("            ngpng_camera_init_path(sc, runtime_cam_path_idx, &cam_path_state);\n")
+    c.append("            if (runtime_cam_path_mode == 1u) { cam_px = cam_path_state.cur_x; cam_py = cam_path_state.cur_y;\n")
+    c.append("                ngpng_apply_camera_constraints(sc, &cam_px, &cam_py);\n")
+    c.append("                tx = (u16)(cam_px >> 3); ty = (u16)(cam_py >> 3);\n")
+    c.append("                ngpng_update_plane_scroll(sc, cam_px, cam_py); }\n")
     if has_mapstream:
         c.append("#ifdef NGPNG_HAS_MAPSTREAM\n")
         c.append("            ngpng_mapstream_load_scene(cur_scene, cam_px, cam_py);\n")
@@ -5791,7 +5849,15 @@ def write_autorun_main_c(
             c.append(f"                }} else {{\n")
             c.append(f"#endif\n")
         c.append(f"                /* OPT-E: ngpng_update_camera folds follow+lock+lag+constraints in one call. */\n")
-        c.append(f"                ngpng_update_camera(sc, player_world_cx, player_world_cy, &cam_px, &cam_py);\n")
+        c.append(f"                /* CAM-1: 3-state cinematic camera (set by scene defaults + camera_path_* triggers).\n")
+        c.append(f"                 *   mode=0 -> follow player ; mode=1 -> walk path ; mode=2 -> hold position. */\n")
+        c.append(f"                if (runtime_cam_path_mode == 1u) {{\n")
+        c.append(f"                    ngpng_camera_apply_path_step(sc, runtime_cam_path_idx, runtime_cam_path_speed, runtime_cam_path_loop, &cam_path_state, &cam_px, &cam_py);\n")
+        c.append(f"                }} else if (runtime_cam_path_mode == 2u) {{\n")
+        c.append(f"                    /* paused: cam_px/cam_py keep their last value */\n")
+        c.append(f"                }} else {{\n")
+        c.append(f"                    ngpng_update_camera(sc, player_world_cx, player_world_cy, &cam_px, &cam_py);\n")
+        c.append(f"                }}\n")
         if has_dungeongen:
             c.append(f"#if defined(NGPNG_HAS_DUNGEONGEN) && (NGPNG_HAS_DUNGEONGEN)\n")
             c.append(f"                }}\n")
@@ -5846,6 +5912,17 @@ def write_autorun_main_c(
         if has_palfx:
             c.append("                    ngpng_palfx_enter(cur_scene);\n")
         c.append("                    ngpng_scene_runtime_enter_view(sc, cur_scene, &cam_px, &cam_py, &tx, &ty);\n")
+        # CAM-1: reset cinematic camera state on respawn cross-scene
+        c.append("                    runtime_cam_path_mode   = sc->cam_path_en ? 1u : 0u;\n")
+        c.append("                    runtime_cam_path_idx    = sc->cam_path_idx;\n")
+        c.append("                    runtime_cam_path_speed  = sc->cam_path_speed;\n")
+        c.append("                    runtime_cam_path_loop   = sc->cam_path_loop;\n")
+        c.append("                    runtime_cam_path_freeze = sc->cam_path_freeze_player;\n")
+        c.append("                    ngpng_camera_init_path(sc, runtime_cam_path_idx, &cam_path_state);\n")
+        c.append("                    if (runtime_cam_path_mode == 1u) { cam_px = cam_path_state.cur_x; cam_py = cam_path_state.cur_y;\n")
+        c.append("                        ngpng_apply_camera_constraints(sc, &cam_px, &cam_py);\n")
+        c.append("                        tx = (u16)(cam_px >> 3); ty = (u16)(cam_py >> 3);\n")
+        c.append("                        ngpng_update_plane_scroll(sc, cam_px, cam_py); }\n")
         if has_mapstream:
             c.append("#ifdef NGPNG_HAS_MAPSTREAM\n")
             c.append("                    ngpng_mapstream_load_scene(cur_scene, cam_px, cam_py);\n")
@@ -6452,6 +6529,32 @@ def write_autorun_main_c(
         c.append("                tx = (u16)(cam_px >> 3);\n")
         c.append("                ty = (u16)(cam_py >> 3);\n")
         c.append("            }\n")
+        # CAM-1: cinematic camera path triggers — start / stop / pause / resume.
+        c.append("            if (t->action == TRIG_ACT_CAMERA_PATH_START) {\n")
+        c.append("                /* a0 = path index ; a1 = speed (0 = keep current/scene default) */\n")
+        c.append("                if (sc->path_count > 0u && t->a0 < sc->path_count) {\n")
+        c.append("                    runtime_cam_path_idx  = t->a0;\n")
+        c.append("                    if (t->a1 > 0u && t->a1 <= 8u) runtime_cam_path_speed = t->a1;\n")
+        c.append("                    runtime_cam_path_mode = 1u;\n")
+        c.append("                    ngpng_camera_init_path(sc, runtime_cam_path_idx, &cam_path_state);\n")
+        c.append("                    cam_px = cam_path_state.cur_x;\n")
+        c.append("                    cam_py = cam_path_state.cur_y;\n")
+        c.append("                    ngpng_apply_camera_constraints(sc, &cam_px, &cam_py);\n")
+        c.append("                    ngpng_update_plane_scroll(sc, cam_px, cam_py);\n")
+        c.append("                    tx = (u16)(cam_px >> 3);\n")
+        c.append("                    ty = (u16)(cam_py >> 3);\n")
+        c.append("                }\n")
+        c.append("            }\n")
+        c.append("            if (t->action == TRIG_ACT_CAMERA_PATH_STOP) {\n")
+        c.append("                /* return to player follow ; cam_px/cam_py snap to player on next update */\n")
+        c.append("                runtime_cam_path_mode = 0u;\n")
+        c.append("            }\n")
+        c.append("            if (t->action == TRIG_ACT_CAMERA_PATH_PAUSE) {\n")
+        c.append("                if (runtime_cam_path_mode == 1u) runtime_cam_path_mode = 2u;\n")
+        c.append("            }\n")
+        c.append("            if (t->action == TRIG_ACT_CAMERA_PATH_RESUME) {\n")
+        c.append("                if (runtime_cam_path_mode == 2u) runtime_cam_path_mode = 1u;\n")
+        c.append("            }\n")
         c.append("            if (t->action == TRIG_ACT_CYCLE_PLAYER_FORM) {\n")
         c.append("                if (player_form_count > 0u) {\n")
         c.append("                    player_form = (u8)((player_form + 1u) % player_form_count);\n")
@@ -6723,6 +6826,17 @@ def write_autorun_main_c(
     if has_palfx:
         c.append("            ngpng_palfx_enter(cur_scene);\n")
     c.append("            ngpng_scene_runtime_enter_view(sc, cur_scene, &cam_px, &cam_py, &tx, &ty);\n")
+    # CAM-1: reset cinematic camera state on requested scene change (warp/door)
+    c.append("            runtime_cam_path_mode   = sc->cam_path_en ? 1u : 0u;\n")
+    c.append("            runtime_cam_path_idx    = sc->cam_path_idx;\n")
+    c.append("            runtime_cam_path_speed  = sc->cam_path_speed;\n")
+    c.append("            runtime_cam_path_loop   = sc->cam_path_loop;\n")
+    c.append("            runtime_cam_path_freeze = sc->cam_path_freeze_player;\n")
+    c.append("            ngpng_camera_init_path(sc, runtime_cam_path_idx, &cam_path_state);\n")
+    c.append("            if (runtime_cam_path_mode == 1u) { cam_px = cam_path_state.cur_x; cam_py = cam_path_state.cur_y;\n")
+    c.append("                ngpng_apply_camera_constraints(sc, &cam_px, &cam_py);\n")
+    c.append("                tx = (u16)(cam_px >> 3); ty = (u16)(cam_py >> 3);\n")
+    c.append("                ngpng_update_plane_scroll(sc, cam_px, cam_py); }\n")
     if has_mapstream:
         c.append("#ifdef NGPNG_HAS_MAPSTREAM\n")
         c.append("            ngpng_mapstream_load_scene(cur_scene, cam_px, cam_py);\n")
