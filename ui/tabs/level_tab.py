@@ -70,7 +70,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from ui.no_scroll import NoScrollSpinBox as QSpinBox, NoScrollComboBox as QComboBox  # noqa: F811
-from core.collision_boxes import first_hurtbox
+from core.collision_boxes import active_attack_hitboxes, first_hurtbox
 from core.scene_collision import fit_collision_grid
 
 from core.entity_roles import (
@@ -1683,6 +1683,30 @@ class _LevelCanvas(QWidget):
         p.setPen(QPen(QColor(255, 255, 255, 160), 1))
         p.drawLine(ax - arm + 1, ay, ax + arm - 1, ay)
         p.drawLine(ax, ay - arm + 1, ax, ay + arm - 1)
+
+        # Shooting indicator — bottom-right badge for entities whose sprite type
+        # has shooting enabled. Distinguishes armed enemies at a glance without
+        # having to click each one to check the right panel.
+        spr_meta = self._tab._sprite_meta_for_type(str(ent["type"]))
+        if spr_meta is not None:
+            sh_meta = spr_meta.get("shooting") or {}
+            eff_role = self._tab._entity_effective_role(ent)
+            if eff_role == "enemy":
+                armed = bool(sh_meta.get("can_shoot", False))
+            elif eff_role == "player":
+                armed = str(sh_meta.get("button", "none") or "none") not in ("none", "")
+            else:
+                armed = False
+            if armed:
+                bw = max(8, tp // 2 + 2)
+                bh = max(6, tp // 2 + 2)
+                bx = x_px + draw_w - bw - 1
+                by = y_px + draw_h - bh - 1
+                p.fillRect(bx, by, bw, bh, QColor(220, 50, 50, 220))
+                p.setPen(QPen(QColor(255, 255, 255, 230), 1))
+                p.drawRect(bx, by, bw - 1, bh - 1)
+                # Horizontal white streak = stylised bullet trail
+                p.drawLine(bx + 2, by + bh // 2, bx + bw - 3, by + bh // 2)
 
     # ------------------------------------------------------------------
     # Mouse events
@@ -3704,16 +3728,23 @@ class LevelTab(QWidget):
         cv.addLayout(status_row)
 
         # ---- RIGHT: tabbed panel -----------------------------------------
+        # Widened from the original 215px to give the entity props (shooting,
+        # death FX, hit feedback, death actions…) enough horizontal room so
+        # rows don't get truncated. Scrolling handles vertical overflow.
         right = QWidget()
-        right.setMinimumWidth(215)
+        right.setMinimumWidth(260)
         self._right_tabs = QTabWidget()
         self._right_tabs.setTabPosition(QTabWidget.TabPosition.North)
 
         # --- Tab 0: Entity props ------------------------------------------
+        # Wrapped in a QScrollArea — the panel has grown over the sessions
+        # (shooting, death FX, hit feedback, death actions…) and overflows the
+        # available vertical space at typical window sizes. Scrolling beats
+        # cramming.
         tab_ent = QWidget()
         ev = QVBoxLayout(tab_ent)
-        ev.setContentsMargins(4, 4, 4, 4)
-        ev.setSpacing(4)
+        ev.setContentsMargins(6, 6, 6, 6)
+        ev.setSpacing(8)
 
         self._lbl_ent_type = QLabel(tr("level.no_entity"))
         self._lbl_ent_type.setWordWrap(True)
@@ -3759,8 +3790,8 @@ class LevelTab(QWidget):
         grp_inst = QGroupBox(tr("level.grp_instance_props"))
         grp_inst.setFlat(True)
         iv = QVBoxLayout(grp_inst)
-        iv.setSpacing(3)
-        iv.setContentsMargins(4, 4, 4, 4)
+        iv.setSpacing(5)
+        iv.setContentsMargins(6, 6, 6, 6)
 
         def _combo_row(parent_layout, label: str, items: list, tooltip: str, attr: str) -> QComboBox:
             row = QHBoxLayout()
@@ -3849,8 +3880,8 @@ class LevelTab(QWidget):
         self._grp_ai_params = QGroupBox(tr("level.grp_ai_params"))
         self._grp_ai_params.setFlat(True)
         aiv = QVBoxLayout(self._grp_ai_params)
-        aiv.setSpacing(3)
-        aiv.setContentsMargins(4, 4, 4, 4)
+        aiv.setSpacing(5)
+        aiv.setContentsMargins(6, 6, 6, 6)
 
         def _spin_row_ai(parent_layout, label: str, lo: int, hi: int, default: int, tooltip: str, attr: str):
             row = QHBoxLayout()
@@ -3894,9 +3925,17 @@ class LevelTab(QWidget):
         # ---- Shooting group (shown/hidden based on role: player or enemy) ----
         self._grp_shooting = QGroupBox(tr("level.grp_shooting"))
         self._grp_shooting.setFlat(True)
+        self._grp_shooting.setStyleSheet(
+            "QGroupBox::title { color:#d8a23a; font-weight:bold; }"
+        )
         shv = QVBoxLayout(self._grp_shooting)
-        shv.setSpacing(3)
-        shv.setContentsMargins(4, 4, 4, 4)
+        shv.setSpacing(5)
+        shv.setContentsMargins(6, 6, 6, 6)
+
+        self._lbl_shoot_help = QLabel(tr("level.shoot_help"))
+        self._lbl_shoot_help.setWordWrap(True)
+        self._lbl_shoot_help.setStyleSheet("color:#9aa3ad; font-size:10px;")
+        shv.addWidget(self._lbl_shoot_help)
 
         # -- Player: shoot button combo --
         self._row_shoot_button = QWidget()
@@ -3956,6 +3995,16 @@ class LevelTab(QWidget):
         _bs_row.addWidget(self._combo_bullet_sprite, 1)
         _sp_layout.addLayout(_bs_row)
 
+        # Validation warning under the combo — surfaces silent-failure cases
+        # (no sprite picked, sprite has no attack hitbox, attack hitbox does
+        # zero damage). Without this the enemy fires invisible / harmless
+        # bullets and the user has no clue why nothing happens at runtime.
+        self._lbl_bullet_warning = QLabel("")
+        self._lbl_bullet_warning.setWordWrap(True)
+        self._lbl_bullet_warning.setStyleSheet("font-size:10px;")
+        self._lbl_bullet_warning.setVisible(False)
+        _sp_layout.addWidget(self._lbl_bullet_warning)
+
         self._spin_bullet_speed_x = _shoot_row(
             tr("level.shoot_speed_x"), tr("level.shoot_speed_x_tt"), "speed_x", -8, 8, -2)
         self._spin_bullet_speed_y = _shoot_row(
@@ -3989,6 +4038,22 @@ class LevelTab(QWidget):
             tr("level.shoot_fire_range"), tr("level.shoot_fire_range_tt"), "fire_range", 0, 255, 0)
         _sp_layout.addWidget(self._row_fire_range)
 
+        # SFX on fire — optional. Range -1..254 ; -1 displays "(aucun)" via
+        # setSpecialValueText (Qt shows it at the minimum value). Stored as 0xFF
+        # when -1 so the runtime sentinel matches: 0xFF = silent fire.
+        _sfx_row = QHBoxLayout()
+        _sfx_lbl = QLabel(tr("level.shoot_sfx_fire"))
+        _sfx_lbl.setFixedWidth(100)
+        _sfx_row.addWidget(_sfx_lbl)
+        self._spin_sfx_fire = QSpinBox()
+        self._spin_sfx_fire.setRange(-1, 254)
+        self._spin_sfx_fire.setValue(-1)
+        self._spin_sfx_fire.setSpecialValueText(tr("level.shoot_sfx_none"))
+        self._spin_sfx_fire.setToolTip(tr("level.shoot_sfx_fire_tt"))
+        self._spin_sfx_fire.valueChanged.connect(self._on_sfx_fire_changed)
+        _sfx_row.addWidget(self._spin_sfx_fire, 1)
+        _sp_layout.addLayout(_sfx_row)
+
         # Note label
         self._lbl_shoot_type_note = QLabel(tr("level.shoot_type_note"))
         self._lbl_shoot_type_note.setWordWrap(True)
@@ -3998,6 +4063,98 @@ class LevelTab(QWidget):
         shv.addWidget(self._row_shoot_params)
         self._grp_shooting.setVisible(False)
         ev.addWidget(self._grp_shooting)
+
+        # ---- Hit feedback group (visible when role=enemy) ----
+        # Non-fatal hit feedback: when an enemy takes damage but survives, blink
+        # its sprite for N frames so the player gets visual confirmation. 0 = off.
+        self._grp_hit_feedback = QGroupBox(tr("level.grp_hit_feedback"))
+        self._grp_hit_feedback.setFlat(True)
+        hfv = QVBoxLayout(self._grp_hit_feedback)
+        hfv.setSpacing(5)
+        hfv.setContentsMargins(6, 6, 6, 6)
+        _hf_help = QLabel(tr("level.hit_flash_help"))
+        _hf_help.setWordWrap(True)
+        _hf_help.setStyleSheet("color:#9aa3ad; font-size:10px;")
+        hfv.addWidget(_hf_help)
+        _hf_row = QHBoxLayout()
+        _hf_lbl = QLabel(tr("level.hit_flash_frames"))
+        _hf_lbl.setFixedWidth(100)
+        _hf_row.addWidget(_hf_lbl)
+        self._spin_hit_flash_frames = QSpinBox()
+        self._spin_hit_flash_frames.setRange(0, 30)
+        self._spin_hit_flash_frames.setValue(0)
+        self._spin_hit_flash_frames.setSpecialValueText(tr("level.hit_flash_off"))
+        self._spin_hit_flash_frames.setToolTip(tr("level.hit_flash_frames_tt"))
+        self._spin_hit_flash_frames.valueChanged.connect(self._on_hit_flash_changed)
+        _hf_row.addWidget(self._spin_hit_flash_frames, 1)
+        hfv.addLayout(_hf_row)
+        self._grp_hit_feedback.setVisible(False)
+        ev.addWidget(self._grp_hit_feedback)
+
+        # ---- Death FX group (visible when role=enemy) ----
+        # Lets the user pick a separate sprite that plays as an explosion
+        # animation when this enemy type dies. The picked sprite is spawned
+        # in the FX pool (NgpngFx) at the enemy's death position. It does NOT
+        # need to be in the enemy's spritesheet — any scene sprite works, but
+        # a small dedicated explosion sprite (4-8 frames) is the canonical use.
+        self._grp_death_fx = QGroupBox(tr("level.grp_death_fx"))
+        self._grp_death_fx.setFlat(True)
+        self._grp_death_fx.setStyleSheet(
+            "QGroupBox::title { color:#e07b3a; font-weight:bold; }"
+        )
+        dfv = QVBoxLayout(self._grp_death_fx)
+        dfv.setSpacing(5)
+        dfv.setContentsMargins(6, 6, 6, 6)
+        self._lbl_death_fx_help = QLabel(tr("level.death_fx_help"))
+        self._lbl_death_fx_help.setWordWrap(True)
+        self._lbl_death_fx_help.setStyleSheet("color:#9aa3ad; font-size:10px;")
+        dfv.addWidget(self._lbl_death_fx_help)
+        _dfx_row = QHBoxLayout()
+        _dfx_lbl = QLabel(tr("level.death_fx_sprite"))
+        _dfx_lbl.setFixedWidth(100)
+        _dfx_row.addWidget(_dfx_lbl)
+        self._combo_death_fx_sprite = QComboBox()
+        self._combo_death_fx_sprite.setToolTip(tr("level.death_fx_sprite_tt"))
+        self._combo_death_fx_sprite.currentIndexChanged.connect(self._on_death_fx_sprite_changed)
+        _dfx_row.addWidget(self._combo_death_fx_sprite, 1)
+        dfv.addLayout(_dfx_row)
+        self._lbl_death_fx_status = QLabel("")
+        self._lbl_death_fx_status.setWordWrap(True)
+        self._lbl_death_fx_status.setStyleSheet("font-size:10px; color:#9aa3ad;")
+        dfv.addWidget(self._lbl_death_fx_status)
+
+        # ---- Actions à la mort — surfaces entity_death events inline ----
+        # Avoids the 5-click trip to Globals tab → Entity Types → Events for the
+        # common case of "play SFX / add score / spawn loot on death".
+        _da_sep = QFrame()
+        _da_sep.setFrameShape(QFrame.Shape.HLine)
+        _da_sep.setStyleSheet("color:#3a3f46;")
+        dfv.addWidget(_da_sep)
+        _da_header = QLabel(tr("level.death_actions_header"))
+        _da_header.setStyleSheet("font-size:10px; color:#d8a23a; font-weight:bold;")
+        dfv.addWidget(_da_header)
+        self._lbl_death_actions_hint = QLabel(tr("level.death_actions_no_type"))
+        self._lbl_death_actions_hint.setWordWrap(True)
+        self._lbl_death_actions_hint.setStyleSheet("font-size:10px; color:#9aa3ad;")
+        dfv.addWidget(self._lbl_death_actions_hint)
+        self._list_death_actions = QListWidget()
+        self._list_death_actions.setMaximumHeight(80)
+        self._list_death_actions.setStyleSheet("font-size:10px;")
+        dfv.addWidget(self._list_death_actions)
+        _da_btn_row = QHBoxLayout()
+        self._btn_death_action_add = QPushButton(tr("level.death_action_add"))
+        self._btn_death_action_add.setToolTip(tr("level.death_action_add_tt"))
+        self._btn_death_action_add.clicked.connect(self._on_add_death_action)
+        _da_btn_row.addWidget(self._btn_death_action_add)
+        self._btn_death_action_remove = QPushButton(tr("level.death_action_remove"))
+        self._btn_death_action_remove.setToolTip(tr("level.death_action_remove_tt"))
+        self._btn_death_action_remove.clicked.connect(self._on_remove_death_action)
+        _da_btn_row.addWidget(self._btn_death_action_remove)
+        _da_btn_row.addStretch()
+        dfv.addLayout(_da_btn_row)
+
+        self._grp_death_fx.setVisible(False)
+        ev.addWidget(self._grp_death_fx)
 
         grp_spr = QGroupBox(tr("level.sprite_info_group"))
         sv = QVBoxLayout(grp_spr)
@@ -4016,8 +4173,8 @@ class LevelTab(QWidget):
         self._grp_etype_actions = QGroupBox(tr("level.etype_group"))
         self._grp_etype_actions.setFlat(True)
         etv = QVBoxLayout(self._grp_etype_actions)
-        etv.setSpacing(3)
-        etv.setContentsMargins(4, 4, 4, 4)
+        etv.setSpacing(5)
+        etv.setContentsMargins(6, 6, 6, 6)
 
         self._lbl_etype_current = QLabel("")
         self._lbl_etype_current.setStyleSheet("color: #9aa3ad; font-size: 10px;")
@@ -4047,7 +4204,14 @@ class LevelTab(QWidget):
 
         self._set_props_enabled(False)
         self._tab_entity = tab_ent
-        self._right_tabs.addTab(tab_ent, tr("level.tab_entity"))
+        # Wrap in QScrollArea so the panel can scroll instead of cramming
+        # everything into a fixed-height viewport.
+        _tab_ent_scroll = QScrollArea()
+        _tab_ent_scroll.setWidgetResizable(True)
+        _tab_ent_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        _tab_ent_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        _tab_ent_scroll.setWidget(tab_ent)
+        self._right_tabs.addTab(_tab_ent_scroll, tr("level.tab_entity"))
 
         # --- Tab 0b: Placement rules -------------------------------------
         tab_rules = QWidget()
@@ -11665,6 +11829,10 @@ class LevelTab(QWidget):
                 self._grp_ai_params.setVisible(False)
             if hasattr(self, "_grp_shooting"):
                 self._grp_shooting.setVisible(False)
+            if hasattr(self, "_grp_death_fx"):
+                self._grp_death_fx.setVisible(False)
+            if hasattr(self, "_grp_hit_feedback"):
+                self._grp_hit_feedback.setVisible(False)
             return
 
         ent = self._entities[idx]
@@ -11698,6 +11866,24 @@ class LevelTab(QWidget):
 
         # ---- Shooting group visibility + population ----
         self._refresh_shooting_ui(role, spr)
+
+        # ---- Death FX group visibility + population (enemies + player) ----
+        self._refresh_death_fx_ui(role, spr)
+
+        # ---- Hit feedback group visibility + population (enemies only) ----
+        if hasattr(self, "_grp_hit_feedback"):
+            if role == "enemy":
+                self._grp_hit_feedback.setVisible(True)
+                self._updating_props = True
+                _hf_raw = spr.get("hit_flash_frames")
+                try:
+                    _hf_val = int(_hf_raw) if _hf_raw is not None else 0
+                except (TypeError, ValueError):
+                    _hf_val = 0
+                self._spin_hit_flash_frames.setValue(max(0, min(30, _hf_val)))
+                self._updating_props = False
+            else:
+                self._grp_hit_feedback.setVisible(False)
 
         preset_items: list[tuple[str, object]] = []
         runtime_text = tr("level.ent_runtime_generic")
@@ -11863,6 +12049,16 @@ class LevelTab(QWidget):
         self._spin_bullet_speed_y.setValue(int(shooting.get("speed_y", 0) or 0))
         fire_rate_default = 10 if is_player else 40
         self._spin_bullet_fire_rate.setValue(int(shooting.get("fire_rate", fire_rate_default) or fire_rate_default))
+        # SFX on fire — absent/null in JSON means silent; map to -1 in the spinbox.
+        _sfx_raw = shooting.get("sfx_fire")
+        if _sfx_raw is None or _sfx_raw == "":
+            self._spin_sfx_fire.setValue(-1)
+        else:
+            try:
+                _sfx_val = int(_sfx_raw)
+            except (TypeError, ValueError):
+                _sfx_val = -1
+            self._spin_sfx_fire.setValue(max(-1, min(254, _sfx_val)))
 
         if is_player:
             btn = str(shooting.get("button", "none") or "none")
@@ -11870,6 +12066,7 @@ class LevelTab(QWidget):
             self._combo_shoot_button.setCurrentIndex(max(0, idx_btn))
             active = btn not in ("none", "")
             self._row_shoot_params.setVisible(active)
+            inactive = not active
         else:
             can_shoot = bool(shooting.get("can_shoot", False))
             self._chk_can_shoot.setChecked(can_shoot)
@@ -11879,8 +12076,295 @@ class LevelTab(QWidget):
             self._combo_fire_condition.setCurrentIndex(max(0, idx_cond))
             self._row_fire_range.setVisible(cond == 1)
             self._spin_fire_range.setValue(int(shooting.get("fire_range", 0) or 0))
+            inactive = not can_shoot
 
+        # Help label inside the group is only useful when shooting is not yet
+        # configured — once active, the params below speak for themselves.
+        if hasattr(self, "_lbl_shoot_help"):
+            self._lbl_shoot_help.setVisible(inactive)
+
+        self._refresh_bullet_warning()
         self._updating_props = False
+
+    def _refresh_bullet_warning(self) -> None:
+        """Re-evaluate the bullet-sprite warning label + combo border based on
+        the current shooting config. Called both from _refresh_shooting_ui
+        (initial render) and from any field handler that changes the shooting
+        state (can_shoot toggle, button combo, bullet sprite combo), so the
+        warning stays in sync as the user edits."""
+        if not hasattr(self, "_lbl_bullet_warning") or not hasattr(self, "_combo_bullet_sprite"):
+            return
+        spr = self._shooting_spr()
+        idx = self._selected
+        if spr is None or not (0 <= idx < len(self._entities)):
+            self._lbl_bullet_warning.setVisible(False)
+            self._combo_bullet_sprite.setStyleSheet("")
+            return
+        role = self._entity_effective_role(self._entities[idx])
+        if role not in ("player", "enemy"):
+            self._lbl_bullet_warning.setVisible(False)
+            self._combo_bullet_sprite.setStyleSheet("")
+            return
+        shooting = dict(spr.get("shooting") or {})
+        if role == "player":
+            inactive = str(shooting.get("button", "none") or "none") in ("none", "")
+        else:
+            inactive = not bool(shooting.get("can_shoot", False))
+        bullet_sprite = str(shooting.get("bullet_sprite") or "")
+        warn_text = ""
+        warn_color = ""
+        combo_border = ""
+        if not inactive:
+            if not bullet_sprite:
+                warn_text = tr("level.shoot_warn_no_bullet")
+                warn_color = "#c44"
+                combo_border = "QComboBox { border:1px solid #c44; }"
+            else:
+                bspr = self._sprite_meta_for_type(bullet_sprite)
+                if bspr is not None:
+                    _fw = int(bspr.get("frame_w", 8) or 8)
+                    _fh = int(bspr.get("frame_h", 8) or 8)
+                    atk_boxes = active_attack_hitboxes(bspr, _fw, _fh)
+                    if not atk_boxes:
+                        warn_text = tr("level.shoot_warn_no_atk_hitbox", name=bullet_sprite)
+                        warn_color = "#d8a23a"
+                    else:
+                        max_dmg = max(int(b.get("damage", 0) or 0) for b in atk_boxes)
+                        type_dmg = int((bspr.get("props") or {}).get("damage", 0) or 0)
+                        if max_dmg == 0 and type_dmg == 0:
+                            warn_text = tr("level.shoot_warn_zero_damage", name=bullet_sprite)
+                            warn_color = "#d8a23a"
+        if warn_text:
+            self._lbl_bullet_warning.setText(warn_text)
+            self._lbl_bullet_warning.setStyleSheet(f"font-size:10px; color:{warn_color};")
+            self._lbl_bullet_warning.setVisible(True)
+        else:
+            self._lbl_bullet_warning.setVisible(False)
+        self._combo_bullet_sprite.setStyleSheet(combo_border)
+
+    def _refresh_death_fx_ui(self, role: str, spr: dict) -> None:
+        """Populate the Death FX group: combo lists '(auto)' + all scene sprites,
+        and the help label tells the user whether the runtime will actually play
+        anything (auto-detected sprite, explicit pick, or fallback). Visible for
+        both enemies and players — both can die and benefit from a death FX.
+        Also refreshes the inline entity_death action list at the bottom of the
+        group so users don't need to go to Globals tab for play_sfx / score / etc."""
+        if not hasattr(self, "_grp_death_fx"):
+            return
+        if role not in ("enemy", "player"):
+            self._grp_death_fx.setVisible(False)
+            return
+        self._grp_death_fx.setVisible(True)
+        self._refresh_death_actions(role)
+        self._updating_props = True
+        cb = self._combo_death_fx_sprite
+        cb.blockSignals(True)
+        cb.clear()
+        cb.addItem(tr("level.death_fx_auto"), "")
+        sprite_names: list[str] = []
+        if self._scene:
+            for s in (self._scene.get("sprites") or []):
+                rel = str(s.get("file") or "")
+                name = Path(rel).stem if rel else str(s.get("name") or "")
+                if name:
+                    cb.addItem(name, name)
+                    sprite_names.append(name)
+        picked = str(spr.get("death_fx_sprite") or "")
+        idx_pick = cb.findData(picked)
+        cb.setCurrentIndex(max(0, idx_pick))
+        cb.blockSignals(False)
+        # Status hint: tell the user what will actually play
+        if picked and picked in sprite_names:
+            self._lbl_death_fx_status.setText(
+                tr("level.death_fx_status_picked", name=picked)
+            )
+            self._lbl_death_fx_status.setStyleSheet("font-size:10px; color:#7fc97f;")
+        else:
+            # Auto mode — preview what the runtime will pick
+            auto_name = self._predict_auto_explosion_sprite()
+            if auto_name:
+                self._lbl_death_fx_status.setText(
+                    tr("level.death_fx_status_auto", name=auto_name)
+                )
+                self._lbl_death_fx_status.setStyleSheet("font-size:10px; color:#9aa3ad;")
+            else:
+                self._lbl_death_fx_status.setText(tr("level.death_fx_status_none"))
+                self._lbl_death_fx_status.setStyleSheet("font-size:10px; color:#d8a23a;")
+        self._updating_props = False
+
+    def _predict_auto_explosion_sprite(self) -> str:
+        """Mirror the runtime's find_unused_prop_type() logic so the UI can show
+        which sprite will be auto-picked as the fallback explosion."""
+        if not self._scene:
+            return ""
+        used_types: set[str] = set()
+        for ent in (self._scene.get("entities") or []):
+            used_types.add(str(ent.get("type") or ""))
+        for s in (self._scene.get("sprites") or []):
+            role = str((s.get("ctrl") or {}).get("role", "") or "").lower().strip()
+            if role != "prop":
+                continue
+            rel = str(s.get("file") or "")
+            name = Path(rel).stem if rel else str(s.get("name") or "")
+            if name and name not in used_types:
+                return name
+        return ""
+
+    def _on_hit_flash_changed(self, v: int) -> None:
+        """Spinbox value 0 = disabled, > 0 = N frames of blink on non-fatal hit.
+        Stored top-level on the sprite (it's a per-type visual property)."""
+        if self._updating_props:
+            return
+        spr = self._shooting_spr()
+        if spr is None:
+            return
+        if v <= 0:
+            if "hit_flash_frames" in spr:
+                del spr["hit_flash_frames"]
+        else:
+            spr["hit_flash_frames"] = int(v) & 0xFF
+        self._update_diagnostics()
+
+    # ------------------------------------------------------------------
+    # Death actions helpers — surface entity_death events inline so users
+    # don't need to dig into Globals tab → Entity Types → Events.
+    # ------------------------------------------------------------------
+
+    def _current_archetype(self) -> Optional[dict]:
+        """Return the entity_type archetype dict for the currently selected
+        entity (via its type_id), or None if the entity has no archetype yet."""
+        idx = self._selected
+        if not (0 <= idx < len(self._entities)):
+            return None
+        tid = str(self._entities[idx].get("type_id", "") or "")
+        if not tid:
+            return None
+        for t in self._project_entity_types or []:
+            if isinstance(t, dict) and t.get("id") == tid:
+                return t
+        return None
+
+    def _refresh_death_actions(self, role: str) -> None:
+        """Populate the entity_death action list from the archetype, or show a
+        helper message if the entity has no archetype yet."""
+        if not hasattr(self, "_list_death_actions"):
+            return
+        archetype = self._current_archetype()
+        self._list_death_actions.clear()
+        if archetype is None:
+            self._lbl_death_actions_hint.setText(tr("level.death_actions_no_type"))
+            self._lbl_death_actions_hint.setVisible(True)
+            self._list_death_actions.setEnabled(False)
+            self._btn_death_action_add.setEnabled(False)
+            self._btn_death_action_remove.setEnabled(False)
+            return
+        events = archetype.get("events") or {}
+        actions = events.get("entity_death") or []
+        self._list_death_actions.setEnabled(True)
+        self._btn_death_action_add.setEnabled(True)
+        self._btn_death_action_remove.setEnabled(bool(actions))
+        if not actions:
+            self._lbl_death_actions_hint.setText(tr("level.death_actions_empty"))
+            self._lbl_death_actions_hint.setVisible(True)
+        else:
+            self._lbl_death_actions_hint.setVisible(False)
+        for a in actions:
+            if not isinstance(a, dict):
+                continue
+            self._list_death_actions.addItem(self._format_death_action(a))
+
+    def _format_death_action(self, act: dict) -> str:
+        """One-line label for an action dict — mirrors what the Globals tab
+        list shows so the user sees the same wording everywhere."""
+        action = str(act.get("action") or "?")
+        bits: list[str] = [action]
+        if "a0" in act and act.get("a0") not in (None, ""):
+            bits.append(f"a0={act['a0']}")
+        if "flag_var_index" in act and act.get("flag_var_index") not in (None, ""):
+            bits.append(f"var[{act['flag_var_index']}]")
+        if "a1" in act and act.get("a1") not in (None, "") and act.get("a1") != 0:
+            bits.append(f"a1={act['a1']}")
+        if "scene_to" in act and act.get("scene_to"):
+            bits.append(f"→ {act['scene_to']}")
+        if act.get("once"):
+            bits.append("(1x)")
+        return "  ".join(bits)
+
+    def _on_add_death_action(self) -> None:
+        """Open the shared _TypeEventDialog locked to entity_death, append the
+        returned action to the archetype's events list, refresh the list."""
+        archetype = self._current_archetype()
+        if archetype is None:
+            return
+        try:
+            from ui.tabs.globals_tab import _TypeEventDialog
+        except ImportError:
+            return
+        role = str(archetype.get("role") or self._entity_effective_role(
+            self._entities[self._selected] if 0 <= self._selected < len(self._entities) else {}
+        ))
+        dlg = _TypeEventDialog(
+            role,
+            self._project_data_root or {},
+            ev_name="entity_death",
+            act=None,
+            parent=self,
+        )
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        # _TypeEventDialog forces ev=entity_death since we passed it; result is
+        # available on .result_action — same shape as Globals tab uses.
+        new_act = getattr(dlg, "result_action", None) or {}
+        if not new_act:
+            return
+        events = archetype.setdefault("events", {})
+        if not isinstance(events, dict):
+            events = {}
+            archetype["events"] = events
+        lst = events.setdefault("entity_death", [])
+        if not isinstance(lst, list):
+            lst = []
+            events["entity_death"] = lst
+        lst.append(new_act)
+        self._refresh_death_actions(role)
+        if self._on_save:
+            self._on_save()
+
+    def _on_remove_death_action(self) -> None:
+        """Drop the currently-selected action from the archetype."""
+        archetype = self._current_archetype()
+        if archetype is None:
+            return
+        row = self._list_death_actions.currentRow()
+        if row < 0:
+            return
+        events = archetype.get("events") or {}
+        actions = events.get("entity_death") or []
+        if not (0 <= row < len(actions)):
+            return
+        del actions[row]
+        # Clean up empty container so the JSON stays tidy.
+        if not actions:
+            events.pop("entity_death", None)
+        if not events:
+            archetype.pop("events", None)
+        self._refresh_death_actions(str(archetype.get("role") or ""))
+        if self._on_save:
+            self._on_save()
+
+    def _on_death_fx_sprite_changed(self, _idx: int) -> None:
+        if self._updating_props:
+            return
+        spr = self._shooting_spr()
+        if spr is None:
+            return
+        name = self._combo_death_fx_sprite.currentData() or ""
+        if name:
+            spr["death_fx_sprite"] = str(name)
+        elif "death_fx_sprite" in spr:
+            del spr["death_fx_sprite"]
+        self._refresh_entity_runtime_ui()
+        self._update_diagnostics()
 
     def _shooting_spr(self) -> Optional[dict]:
         """Return the sprite dict for the currently selected entity, or None."""
@@ -11905,12 +12389,21 @@ class LevelTab(QWidget):
         btn = self._combo_shoot_button.currentData() or "none"
         self._write_shooting("button", btn)
         self._row_shoot_params.setVisible(btn not in ("none", ""))
+        # Toggling player shoot on/off changes the inactive state → re-evaluate
+        # the bullet warning so it appears/disappears in sync.
+        self._refresh_bullet_warning()
+        if hasattr(self, "_lbl_shoot_help"):
+            self._lbl_shoot_help.setVisible(btn in ("none", ""))
 
     def _on_can_shoot_toggled(self, checked: bool) -> None:
         if self._updating_props:
             return
         self._write_shooting("can_shoot", checked)
         self._row_shoot_params.setVisible(checked)
+        # Same: enabling/disabling can_shoot must re-run the validation.
+        self._refresh_bullet_warning()
+        if hasattr(self, "_lbl_shoot_help"):
+            self._lbl_shoot_help.setVisible(not checked)
 
     def _on_shoot_param_changed(self, attr: str, value: int) -> None:
         self._write_shooting(attr, value)
@@ -11922,11 +12415,32 @@ class LevelTab(QWidget):
         self._write_shooting("fire_condition", cond)
         self._row_fire_range.setVisible(cond == 1)
 
+    def _on_sfx_fire_changed(self, v: int) -> None:
+        """Spinbox returns -1 for the '(aucun)' special value — translate that
+        to the 0xFF sentinel the codegen/runtime use to mean 'silent fire'."""
+        if self._updating_props:
+            return
+        spr = self._shooting_spr()
+        if spr is None:
+            return
+        if "shooting" not in spr or not isinstance(spr.get("shooting"), dict):
+            spr["shooting"] = {}
+        if v < 0:
+            # Don't store the field at all → exporter falls back to 0xFF anyway.
+            if "sfx_fire" in spr["shooting"]:
+                del spr["shooting"]["sfx_fire"]
+        else:
+            spr["shooting"]["sfx_fire"] = int(v) & 0xFF
+        self._update_diagnostics()
+
     def _on_bullet_sprite_changed(self, _idx: int) -> None:
         if self._updating_props:
             return
         name = self._combo_bullet_sprite.currentData() or ""
         self._write_shooting("bullet_sprite", name)
+        # Re-evaluate validation: picking a real sprite should clear the red
+        # "no bullet" warning; picking back to (aucun) brings it back.
+        self._refresh_bullet_warning()
 
     def _on_ent_preset_changed(self, combo_idx: int) -> None:
         if self._updating_props:

@@ -100,6 +100,7 @@ typedef struct NgpngEnemy {
     u8  path_idx;
     u8  path_step;
     u8  fire_cd;
+    u8  hit_flash;     /* damage feedback: countdown frames; 0 = idle. Blinks via bit-1 check. */
     u8  last_frame;
     u8  last_flags;
     u8  pal;

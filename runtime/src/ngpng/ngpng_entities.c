@@ -1016,6 +1016,7 @@ void ngpng_enemy_spawn(const NgpSceneDef *sc, NgpngEnemy *enemies,
                 enemies[i].patrol_max = sc->ent_patrol_max[ent_idx];
             }
             enemies[i].fire_cd     = (u8)(24u + ((i & 3u) * 8u));
+            enemies[i].hit_flash   = 0u;
             enemies[i].last_frame  = 0xFFu;
             enemies[i].last_flags  = 0xFFu;
             enemies[i].pal         = 0u;
@@ -1473,6 +1474,10 @@ void ngpng_enemies_update(const NgpSceneDef *sc,
         if (!enemies[i].active) continue;
         processed = (u8)(processed + 1u);
         enemies[i].anim = (u8)(enemies[i].anim + 1u);
+        /* Hit flash countdown — decrements every frame, blink handled in draw. */
+        if (enemies[i].hit_flash > 0u) {
+            enemies[i].hit_flash = (u8)(enemies[i].hit_flash - 1u);
+        }
         /* Off-screen guard: skip expensive tilecol physics for enemies far outside viewport.
          * PLATFORMER: only drift enemies behind the camera (esx < -96).
          * Enemies ahead (esx > 256) are frozen until the camera reaches them.
@@ -1713,6 +1718,9 @@ void ngpng_enemies_draw(const NgpSceneDef *sc, NgpngEnemy *enemies, s16 cam_px, 
         s16 sx;
         s16 sy;
         if (!e->active) continue;
+        /* Hit flash blink: skip render on frames where bit 1 of the countdown
+         * is set. Same pattern as player_invul. Tick happens in update. */
+        if (e->hit_flash > 0u && (e->hit_flash & 2u)) continue;
         if (spr >= spr_end) break;
         anim_frame = e->cached_anim_frame;
         def        = e->cached_def;
@@ -1742,6 +1750,11 @@ void ngpng_enemies_draw(const NgpSceneDef *sc, NgpngEnemy *enemies, s16 cam_px, 
         s16 sx;
         s16 sy;
         if (!e->active) {
+            ngpng_enemy_hide_cached(enemies, i);
+            continue;
+        }
+        /* Hit flash blink: bit-1 of the countdown toggles visibility. */
+        if (e->hit_flash > 0u && (e->hit_flash & 2u)) {
             ngpng_enemy_hide_cached(enemies, i);
             continue;
         }
@@ -2739,15 +2752,24 @@ void ngpng_player_collide_enemies(const NgpSceneDef *sc, NgpngEnemy *enemies,
                 (s8)((enemies[i].hb_x < 0) ? enemies[i].hb_x : 0));
             s8 ex_roy = ngpng_type_s8(sc->render_off_y, sc->type_role_count, enemies[i].type,
                 (s8)((enemies[i].hb_y < 0) ? enemies[i].hb_y : 0));
+            /* cc900 quirk: initialised decls must precede any statement in the
+             * enclosing block — declare ekill_type/dfx here, assign below. */
+            u8 ekill_type;
+            u8 dfx;
             ex = (s16)(ex + ex_rox);
             ey = (s16)(ey + ex_roy);
             *py        = (s16)(enemy_top - player_hb_y - player_hb_h);
             *player_vy = -4;
             if (score) *score = (u16)(*score + enemies[i].score);
+            ekill_type = enemies[i].type;
+            dfx = (sc && sc->type_death_fx) ? sc->type_death_fx[ekill_type] : 0xFFu;
             ngpng_enemy_kill(enemies, enemy_active_count, i);
-            if (sc && ngpng_type_anim_count(sc, enemies[i].type, NGPNG_ANIM_DEATH) > 0u) {
+            /* Death FX resolution: per-type explicit > own death anim > scene auto. */
+            if (dfx != 0xFFu) {
+                ngpng_fx_spawn(fx, fx_active_count, fx_alloc_idx, dfx, ex, ey);
+            } else if (sc && ngpng_type_anim_count(sc, ekill_type, NGPNG_ANIM_DEATH) > 0u) {
                 ngpng_fx_spawn_anim_state(sc, fx, fx_active_count, fx_alloc_idx,
-                    enemies[i].type, NGPNG_ANIM_DEATH, ex, ey);
+                    ekill_type, NGPNG_ANIM_DEATH, ex, ey);
             } else {
                 ngpng_fx_spawn(fx, fx_active_count, fx_alloc_idx, explosion_type, ex, ey);
             }

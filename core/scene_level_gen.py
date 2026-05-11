@@ -781,6 +781,11 @@ def make_scene_level_h(
         fire_cond_vals: list[str] = []
         fire_range_vals: list[str] = []
         bullet_btype_vals: list[str] = []
+        bullet_vx_vals: list[str] = []
+        bullet_vy_vals: list[str] = []
+        death_fx_vals: list[str] = []
+        sfx_fire_vals: list[str] = []
+        hit_flash_vals: list[str] = []
         for t in seen_types:
             meta = sprite_meta.get(t) or {}
             role_name = str(entity_roles.get(t, "prop") or "prop").strip().lower()
@@ -877,6 +882,41 @@ def make_scene_level_h(
                 bullet_btype_vals.append(str(seen_types.index(bullet_spr_name)))
             else:
                 bullet_btype_vals.append("0xFFu")
+            # Bullet velocities (s8). vy=0 means "auto-aim vertical" in the runtime
+            # (preserves pre-fix behaviour for legacy projects with no speed_y key).
+            _svx = int(shoot.get("speed_x", -2) or 0)
+            _svy = int(shoot.get("speed_y", 0) or 0)
+            bullet_vx_vals.append(str(max(-128, min(127, _svx))))
+            bullet_vy_vals.append(str(max(-128, min(127, _svy))))
+            # Per-type death FX sprite. 0xFF = fall back to scene-level auto
+            # explosion_type (legacy behaviour). User-picked sprite name → index.
+            dfx_name = str(meta.get("death_fx_sprite") or "")
+            if dfx_name and dfx_name in seen_types:
+                death_fx_vals.append(str(seen_types.index(dfx_name)))
+            else:
+                death_fx_vals.append("0xFFu")
+            # Per-type SFX on fire. 0xFF = silent (no Sfx_Play call). Optional;
+            # absent or null in the JSON → 0xFF → backward-compat silent fire.
+            _sfx_raw = shoot.get("sfx_fire")
+            if _sfx_raw is None or _sfx_raw == "":
+                sfx_fire_vals.append("0xFFu")
+            else:
+                try:
+                    _sfx_n = int(_sfx_raw)
+                except (TypeError, ValueError):
+                    _sfx_n = 0xFF
+                sfx_fire_vals.append(str(max(0, min(255, _sfx_n)) & 0xFF))
+            # Damage flash duration in frames. 0 = disabled (default, backward
+            # compat: legacy projects show no flash). Stored top-level on sprite.
+            _hf_raw = meta.get("hit_flash_frames")
+            if _hf_raw is None:
+                hit_flash_vals.append("0u")
+            else:
+                try:
+                    _hf_n = int(_hf_raw)
+                except (TypeError, ValueError):
+                    _hf_n = 0
+                hit_flash_vals.append(str(max(0, min(255, _hf_n)) & 0xFF))
         lines += [sep, "/* Runtime type tables                                                 */", sep]
         if not atk_flat_x_vals:
             atk_flat_x_vals = ["0"]
@@ -956,6 +996,11 @@ def make_scene_level_h(
         lines.append(f"static const u8 g_{sym_use}_type_fire_cond[] = {{{', '.join(fire_cond_vals)}}};")
         lines.append(f"static const u8 g_{sym_use}_type_fire_range[] = {{{', '.join(fire_range_vals)}}};")
         lines.append(f"static const u8 g_{sym_use}_type_bullet_btype[] = {{{', '.join(bullet_btype_vals)}}};")
+        lines.append(f"static const s8 g_{sym_use}_type_bullet_vx[] = {{{', '.join(bullet_vx_vals)}}};")
+        lines.append(f"static const s8 g_{sym_use}_type_bullet_vy[] = {{{', '.join(bullet_vy_vals)}}};")
+        lines.append(f"static const u8 g_{sym_use}_type_death_fx[] = {{{', '.join(death_fx_vals)}}};")
+        lines.append(f"static const u8 g_{sym_use}_type_sfx_fire[] = {{{', '.join(sfx_fire_vals)}}};")
+        lines.append(f"static const u8 g_{sym_use}_type_hit_flash[] = {{{', '.join(hit_flash_vals)}}};")
         lines.append("")
 
     # ---- Hurtboxes ----

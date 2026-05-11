@@ -1549,6 +1549,8 @@ def _detect_features(project_data: dict) -> dict:
     _player_shoot_button: str = "A"
     _player_bullet_sprite: str = ""
     _player_fire_rate: int = 10
+    _player_bullet_vx: int = 4
+    _player_bullet_vy: int = 0
 
     scenes_list = (project_data or {}).get("scenes") or []
     for sc in scenes_list:
@@ -1577,6 +1579,8 @@ def _detect_features(project_data: dict) -> dict:
                     _player_shoot_button = _btn
                     _player_bullet_sprite = str(_sh.get("bullet_sprite") or "").strip()
                     _player_fire_rate = max(1, int(_sh.get("fire_rate", 10) or 10))
+                    _player_bullet_vx = max(-128, min(127, int(_sh.get("speed_x", 4) or 0)))
+                    _player_bullet_vy = max(-128, min(127, int(_sh.get("speed_y", 0) or 0)))
                 _mv = int((spr.get("props") or {}).get("move_type", 0) or 0)
                 if _mv == 2:
                     _player_has_platform_physics = True
@@ -1808,6 +1812,8 @@ def _detect_features(project_data: dict) -> dict:
         "player_shoot_button":  _player_shoot_button if _has_shooting_ctrl else "A",
         "player_bullet_sprite": _player_bullet_sprite,
         "player_fire_rate":     _player_fire_rate if _has_shooting_ctrl else 8,
+        "player_bullet_vx":     _player_bullet_vx if _has_shooting_ctrl else 4,
+        "player_bullet_vy":     _player_bullet_vy if _has_shooting_ctrl else 0,
         "has_prop_actor":  has_prop_actor,
         "has_triggers":    has_triggers,
         "has_hud":         has_hud,
@@ -1989,6 +1995,8 @@ def write_autorun_main_c(
     _shoot_btn      = str(feat.get("player_shoot_button", "A") or "A").strip()
     _bullet_spr_nm  = str(feat.get("player_bullet_sprite", "") or "").strip()
     _player_fr_rate = int(feat.get("player_fire_rate", 8) or 8)
+    _player_bvx     = int(feat.get("player_bullet_vx", 4) or 0)
+    _player_bvy     = int(feat.get("player_bullet_vy", 0) or 0)
     # PAD expression for player fire button
     _fire_btn_expr  = {
         "A": "PAD_A", "B": "PAD_B", "AB": "(PAD_A | PAD_B)"
@@ -3621,7 +3629,7 @@ def write_autorun_main_c(
         c.append('}\n')
         c.append('\n')
     if has_shooting:
-        c.append('static void ngpng_demo_fire_player(NgpngPlayerShot *shots, u8 *active_count, u8 *alloc_idx, u16 tile, u8 pal, u8 flags, s16 ox, s16 oy, s8 hb_x, s8 hb_y, u8 hb_w, u8 hb_h, u8 damage, s8 kb_x, s8 kb_y, s16 px, s16 py, s16 cam_px, s16 cam_py)\n')
+        c.append('static void ngpng_demo_fire_player(NgpngPlayerShot *shots, u8 *active_count, u8 *alloc_idx, u16 tile, u8 pal, u8 flags, s16 ox, s16 oy, s8 hb_x, s8 hb_y, u8 hb_w, u8 hb_h, u8 damage, s8 kb_x, s8 kb_y, s8 vx_in, s8 vy_in, s16 px, s16 py, s16 cam_px, s16 cam_py)\n')
         c.append('{\n')
         c.append('    u8 k;\n')
         c.append('    s16 world_x;\n')
@@ -3657,8 +3665,8 @@ def write_autorun_main_c(
         c.append('            shots[i].oy = oy;\n')
         c.append('            shots[i].last_sx = (s16)(sx + ox);\n')
         c.append('            shots[i].last_sy = (s16)(sy + oy);\n')
-        c.append('            shots[i].vx = 4;\n')
-        c.append('            shots[i].vy = 0;\n')
+        c.append('            shots[i].vx = vx_in;\n')
+        c.append('            shots[i].vy = vy_in;\n')
         c.append('            ngpc_sprite_set(slot, (u8)((u16)shots[i].last_sx & 0xFFu), (u8)((u16)shots[i].last_sy & 0xFFu), tile, pal, flags);\n')
         c.append('            *active_count = (u8)(*active_count + 1u);\n')
         c.append('            *alloc_idx = (u8)(i + 1u);\n')
@@ -3677,16 +3685,24 @@ def write_autorun_main_c(
         c.append('}\n')
         c.append('\n')
     if has_bullets:
-        c.append('static void ngpng_enemy_bullet_spawn(NgpngEnemyBullet *shots, u8 *active_count, u8 *alloc_idx, u16 tile, u8 pal, u8 flags, s16 ox, s16 oy, s8 hb_x, s8 hb_y, u8 hb_w, u8 hb_h, u8 damage, s8 kb_x, s8 kb_y, s16 ex, s16 ey, s16 player_world_y, s16 cam_px, s16 cam_py)\n')
+        c.append('static void ngpng_enemy_bullet_spawn(NgpngEnemyBullet *shots, u8 *active_count, u8 *alloc_idx, u16 tile, u8 pal, u8 flags, s16 ox, s16 oy, s8 hb_x, s8 hb_y, u8 hb_w, u8 hb_h, u8 damage, s8 kb_x, s8 kb_y, s8 vx_in, s8 vy_in, s16 ex, s16 ey, s16 player_world_y, s16 cam_px, s16 cam_py)\n')
         c.append('{\n')
         c.append('    u8 k;\n')
-        c.append('    s8 vy = 0;\n')
+        c.append('    s8 vy;\n')
         c.append('    u8 slot;\n')
         c.append('    s16 sx;\n')
         c.append('    s16 sy;\n')
         c.append('    if (*active_count >= (u8)NGPNG_AUTORUN_MAX_EBULLETS) return;\n')
-        c.append('    if (player_world_y > ey + 4) vy = 1;\n')
-        c.append('    else if (player_world_y < ey - 4) vy = -1;\n')
+        c.append('    /* vy_in == 0 keeps the legacy auto-aim vertical (player tracking). */\n')
+        c.append('    if (vy_in != 0) {\n')
+        c.append('        vy = vy_in;\n')
+        c.append('    } else if (player_world_y > ey + 4) {\n')
+        c.append('        vy = 1;\n')
+        c.append('    } else if (player_world_y < ey - 4) {\n')
+        c.append('        vy = -1;\n')
+        c.append('    } else {\n')
+        c.append('        vy = 0;\n')
+        c.append('    }\n')
         c.append('    for (k = 0; k < (u8)NGPNG_AUTORUN_MAX_EBULLETS; ++k) {\n')
         c.append('        u8 i = (u8)(*alloc_idx + k);\n')
         c.append('        if (i >= (u8)NGPNG_AUTORUN_MAX_EBULLETS) i = (u8)(i - (u8)NGPNG_AUTORUN_MAX_EBULLETS);\n')
@@ -3712,7 +3728,7 @@ def write_autorun_main_c(
         c.append('            shots[i].oy = oy;\n')
         c.append('            shots[i].last_sx = (s16)(sx + ox);\n')
         c.append('            shots[i].last_sy = (s16)(sy + oy);\n')
-        c.append('            shots[i].vx = -3;\n')
+        c.append('            shots[i].vx = vx_in;\n')
         c.append('            shots[i].vy = vy;\n')
         c.append('            ngpc_sprite_set(slot, (u8)((u16)shots[i].last_sx & 0xFFu), (u8)((u16)shots[i].last_sy & 0xFFu), tile, pal, flags);\n')
         c.append('            *active_count = (u8)(*active_count + 1u);\n')
@@ -3771,12 +3787,35 @@ def write_autorun_main_c(
         c.append('            else if (enemies[j].hp > 0u) enemies[j].hp = (u8)(enemies[j].hp - shots[i].damage);\n')
         c.append('            enemies[j].vx = ngpng_add_s8_clamped(enemies[j].vx, shots[i].kb_x);\n')
         c.append('            enemies[j].vy = ngpng_add_s8_clamped(enemies[j].vy, shots[i].kb_y);\n')
+        c.append('            /* Non-fatal hit feedback — start hit flash countdown only if the enemy\n')
+        c.append('             * survived AND its sprite type opted in via type_hit_flash.\n')
+        c.append('             * cc900: decl without initialiser, assign below to avoid nested-block crash. */\n')
+        c.append('            if (enemies[j].hp > 0u && sc->type_hit_flash) {\n')
+        c.append('                u8 hflen;\n')
+        c.append('                hflen = sc->type_hit_flash[enemies[j].type];\n')
+        c.append('                if (hflen > 0u) enemies[j].hit_flash = hflen;\n')
+        c.append('            }\n')
         c.append('            if (enemies[j].hp == 0u) {\n')
-        c.append('                s16 ex = enemies[j].world_x;\n')
-        c.append('                s16 ey = enemies[j].world_y;\n')
+        c.append('                /* cc900: keep all decls at the top of this block — no initialisers\n')
+        c.append('                 * mixed with statements. Assign immediately below. */\n')
+        c.append('                u8 ekill_type;\n')
+        c.append('                u8 dfx;\n')
+        c.append('                s16 ex;\n')
+        c.append('                s16 ey;\n')
+        c.append('                ekill_type = enemies[j].type;\n')
+        c.append('                ex = enemies[j].world_x;\n')
+        c.append('                ey = enemies[j].world_y;\n')
         c.append('                *score = (u16)(*score + ((u16)enemies[j].score * 10u));\n')
         c.append('                ngpng_enemy_kill(enemies, enemy_active_count, j);\n')
-        c.append('                ngpng_fx_spawn(fx, fx_active_count, fx_alloc_idx, explosion_type, ex, ey);\n')
+        c.append('                /* Death FX resolution (priority: per-type explicit > enemy own death anim > scene auto). */\n')
+        c.append('                dfx = sc->type_death_fx ? sc->type_death_fx[ekill_type] : 0xFFu;\n')
+        c.append('                if (dfx != 0xFFu) {\n')
+        c.append('                    ngpng_fx_spawn(fx, fx_active_count, fx_alloc_idx, dfx, ex, ey);\n')
+        c.append('                } else if (ngpng_type_anim_count(sc, ekill_type, NGPNG_ANIM_DEATH) > 0u) {\n')
+        c.append('                    ngpng_fx_spawn_anim_state(sc, fx, fx_active_count, fx_alloc_idx, ekill_type, NGPNG_ANIM_DEATH, ex, ey);\n')
+        c.append('                } else {\n')
+        c.append('                    ngpng_fx_spawn(fx, fx_active_count, fx_alloc_idx, explosion_type, ex, ey);\n')
+        c.append('                }\n')
         c.append('            }\n')
         c.append('            break;\n')
         c.append('        }\n')
@@ -3793,6 +3832,7 @@ def write_autorun_main_c(
         c.append('    const u8 *type_can_shoot, const u8 *type_fire_rate,\n')
         c.append('    const u8 *type_fire_cond, const u8 *type_fire_range,\n')
         c.append('    const u8 *type_bullet_btype,\n')
+        c.append('    const s8 *type_bullet_vx, const s8 *type_bullet_vy,\n')
         c.append('    s16 player_world_x, s16 player_world_y,\n')
         c.append('    s16 cam_px, s16 cam_py)\n')
         c.append('{\n')
@@ -3812,6 +3852,7 @@ def write_autorun_main_c(
         c.append('        u8 hb_w, hb_h;\n')
         c.append('        u8 damage;\n')
         c.append('        s8 kb_x, kb_y;\n')
+        c.append('        s8 bvx, bvy;\n')
         c.append('        if (!enemies[i].active) continue;\n')
         c.append('        processed = (u8)(processed + 1u);\n')
         c.append('        etype = enemies[i].type;\n')
@@ -3856,7 +3897,13 @@ def write_autorun_main_c(
         c.append('        damage = ngpng_type_attack_damage_u8(sc->attack_hitbox_damage, sc->type_damage, sc->type_role_count, btype, 1u);\n')
         c.append('        kb_x = ngpng_type_attack_s8(sc->attack_hitbox_kb_x, 0, sc->type_role_count, btype, 0);\n')
         c.append('        kb_y = ngpng_type_attack_s8(sc->attack_hitbox_kb_y, 0, sc->type_role_count, btype, 0);\n')
-        c.append('        ngpng_enemy_bullet_spawn(shots, shot_active_count, shot_alloc_idx, btile, bpal, bflags, box, boy, hb_x, hb_y, hb_w, hb_h, damage, kb_x, kb_y, enemies[i].world_x, enemies[i].world_y, player_world_y, cam_px, cam_py);\n')
+        c.append('        bvx = type_bullet_vx ? type_bullet_vx[etype] : (s8)-3;\n')
+        c.append('        bvy = type_bullet_vy ? type_bullet_vy[etype] : (s8)0;\n')
+        c.append('        ngpng_enemy_bullet_spawn(shots, shot_active_count, shot_alloc_idx, btile, bpal, bflags, box, boy, hb_x, hb_y, hb_w, hb_h, damage, kb_x, kb_y, bvx, bvy, enemies[i].world_x, enemies[i].world_y, player_world_y, cam_px, cam_py);\n')
+        c.append('        /* Optional SFX on fire — 0xFF sentinel = silent (default for legacy projects). */\n')
+        c.append('        if (sc->type_sfx_fire && sc->type_sfx_fire[etype] != 0xFFu) {\n')
+        c.append('            Sfx_Play(sc->type_sfx_fire[etype]);\n')
+        c.append('        }\n')
         c.append('        enemies[i].fire_cd = type_fire_rate ? type_fire_rate[etype] : 40u;\n')
         c.append('        if (processed >= enemy_active_count) break;\n')
         c.append('    }\n')
@@ -5873,7 +5920,11 @@ def write_autorun_main_c(
         if has_shooting:
             c.append("            if (fire_cd > 0u) fire_cd = (u8)(fire_cd - 1u);\n")
             c.append(f"            if (player_bullet_ready && fire_cd == 0u && (ngpc_pad_held & {_fire_btn_expr})) {{\n")
-            c.append(f"                ngpng_demo_fire_player(shots, &player_shots_active, &player_shots_alloc, player_bullet_tile, player_bullet_pal, player_bullet_flags, player_bullet_ox, player_bullet_oy, player_bullet_hb_x, player_bullet_hb_y, player_bullet_hb_w, player_bullet_hb_h, player_bullet_damage, player_bullet_kb_x, player_bullet_kb_y, (s16)(cam_px + s_{players[0]['name']}.x), (s16)(cam_py + s_{players[0]['name']}.y), cam_px, cam_py);\n")
+            c.append(f"                ngpng_demo_fire_player(shots, &player_shots_active, &player_shots_alloc, player_bullet_tile, player_bullet_pal, player_bullet_flags, player_bullet_ox, player_bullet_oy, player_bullet_hb_x, player_bullet_hb_y, player_bullet_hb_w, player_bullet_hb_h, player_bullet_damage, player_bullet_kb_x, player_bullet_kb_y, (s8){_player_bvx}, (s8){_player_bvy}, (s16)(cam_px + s_{players[0]['name']}.x), (s16)(cam_py + s_{players[0]['name']}.y), cam_px, cam_py);\n")
+            c.append("                /* Optional SFX on player fire — 0xFF = silent. */\n")
+            c.append("                if (sc->type_sfx_fire && player_type < sc->type_role_count && sc->type_sfx_fire[player_type] != 0xFFu) {\n")
+            c.append("                    Sfx_Play(sc->type_sfx_fire[player_type]);\n")
+            c.append("                }\n")
             c.append(f"                fire_cd = {_player_fr_rate}u;\n")
             c.append("            }\n")
         c.append("        }\n")
@@ -6054,7 +6105,7 @@ def write_autorun_main_c(
             c.append("            }\n")
             c.append("        }\n")
     if has_bullets and players:
-        c.append(f"        if (!game_over) ngpng_enemy_fire_update(sc, enemies, enemy_active_count, enemy_bullets, &enemy_bullets_active, &enemy_bullets_alloc, sc->type_can_shoot, sc->type_fire_rate, sc->type_fire_cond, sc->type_fire_range, sc->type_bullet_btype, (s16)(cam_px + s_{players[0]['name']}.x), (s16)(cam_py + s_{players[0]['name']}.y), cam_px, cam_py);\n")
+        c.append(f"        if (!game_over) ngpng_enemy_fire_update(sc, enemies, enemy_active_count, enemy_bullets, &enemy_bullets_active, &enemy_bullets_alloc, sc->type_can_shoot, sc->type_fire_rate, sc->type_fire_cond, sc->type_fire_range, sc->type_bullet_btype, sc->type_bullet_vx, sc->type_bullet_vy, (s16)(cam_px + s_{players[0]['name']}.x), (s16)(cam_py + s_{players[0]['name']}.y), cam_px, cam_py);\n")
         c.append(f"        ngpng_enemy_bullets_update_and_collide(sc, enemy_bullets, &enemy_bullets_active, s_{players[0]['name']}.x, s_{players[0]['name']}.y, &s_{players[0]['name']}.vx, &s_{players[0]['name']}.vy, player_hb_x, player_hb_y, player_hb_w, player_hb_h, &player_hp, &player_invul, cam_px, cam_py);\n")
         if not has_topdown_physics:
             c.append(f"        s_{players[0]['name']}.vx = ngpng_clamp_s8_range(s_{players[0]['name']}.vx, -{player_hspeed_cap}, {player_hspeed_cap});\n")
@@ -6116,6 +6167,22 @@ def write_autorun_main_c(
             c.append(f"        s_{n}.frame = s_{players[0]['name']}.frame;\n")
             c.append(f"        s_{n}.face_hflip = s_{players[0]['name']}.face_hflip;\n")
         c.append("        if (!stage_clear && !game_over && respawn_timer == 0u && player_hp == 0u) {\n")
+        if has_fx:
+            c.append("            /* Player death FX — mirrors enemy death FX resolution.\n")
+            c.append("             *   priority: per-type explicit (sc->type_death_fx) > player own death anim > scene auto. */\n")
+            c.append("            u8 pdfx;\n")
+            c.append("            s16 pex;\n")
+            c.append("            s16 pey;\n")
+            c.append("            pdfx = (sc->type_death_fx && player_type < sc->type_role_count) ? sc->type_death_fx[player_type] : 0xFFu;\n")
+            c.append(f"            pex = (s16)(cam_px + s_{players[0]['name']}.x);\n")
+            c.append(f"            pey = (s16)(cam_py + s_{players[0]['name']}.y);\n")
+            c.append("            if (pdfx != 0xFFu) {\n")
+            c.append("                ngpng_fx_spawn(fx, &fx_active_count, &fx_alloc_idx, pdfx, pex, pey);\n")
+            c.append("            } else if (player_type < sc->type_role_count && ngpng_type_anim_count(sc, player_type, NGPNG_ANIM_DEATH) > 0u) {\n")
+            c.append("                ngpng_fx_spawn_anim_state(sc, fx, &fx_active_count, &fx_alloc_idx, player_type, NGPNG_ANIM_DEATH, pex, pey);\n")
+            c.append("            } else if (explosion_type != 0xFFu) {\n")
+            c.append("                ngpng_fx_spawn(fx, &fx_active_count, &fx_alloc_idx, explosion_type, pex, pey);\n")
+            c.append("            }\n")
         c.append("            if (sc->start_lives > 0u) {\n")
         c.append("                if (lives > 0u) lives = (u8)(lives - 1u);\n")
         c.append("                if (lives > 0u) {\n")
@@ -6474,7 +6541,11 @@ def write_autorun_main_c(
         if has_shooting and players:
             c.append("            if (t->action == TRIG_ACT_FIRE_PLAYER_SHOT) {\n")
             c.append("                if (!game_over && player_bullet_ready && fire_cd == 0u) {\n")
-            c.append(f"                    ngpng_demo_fire_player(shots, &player_shots_active, &player_shots_alloc, player_bullet_tile, player_bullet_pal, player_bullet_flags, player_bullet_ox, player_bullet_oy, player_bullet_hb_x, player_bullet_hb_y, player_bullet_hb_w, player_bullet_hb_h, player_bullet_damage, player_bullet_kb_x, player_bullet_kb_y, (s16)(cam_px + s_{players[0]['name']}.x), (s16)(cam_py + s_{players[0]['name']}.y), cam_px, cam_py);\n")
+            c.append(f"                    ngpng_demo_fire_player(shots, &player_shots_active, &player_shots_alloc, player_bullet_tile, player_bullet_pal, player_bullet_flags, player_bullet_ox, player_bullet_oy, player_bullet_hb_x, player_bullet_hb_y, player_bullet_hb_w, player_bullet_hb_h, player_bullet_damage, player_bullet_kb_x, player_bullet_kb_y, (s8){_player_bvx}, (s8){_player_bvy}, (s16)(cam_px + s_{players[0]['name']}.x), (s16)(cam_py + s_{players[0]['name']}.y), cam_px, cam_py);\n")
+            c.append("                    /* Optional SFX on player fire (trigger path) — 0xFF = silent. */\n")
+            c.append("                    if (sc->type_sfx_fire && player_type < sc->type_role_count && sc->type_sfx_fire[player_type] != 0xFFu) {\n")
+            c.append("                        Sfx_Play(sc->type_sfx_fire[player_type]);\n")
+            c.append("                    }\n")
             c.append(f"                    fire_cd = {_player_fr_rate}u;\n")
             c.append("                }\n")
             c.append("            }\n")
