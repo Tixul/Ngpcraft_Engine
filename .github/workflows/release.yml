@@ -1,0 +1,157 @@
+name: Release
+
+# Build NgpCraft Engine for Windows / Linux / macOS.
+#
+# Triggers:
+#   - push of a tag matching v*  -> builds + publishes a GitHub Release
+#   - manual workflow_dispatch    -> builds only (artifacts kept for 90 days)
+#
+# Note on macOS Gatekeeper:
+#   Builds are NOT signed with an Apple Developer ID ($99/yr). On recent macOS,
+#   users will need to right-click -> Open the first time, or run:
+#       xattr -cr /Applications/NgpCraftEngine.app
+#   to clear the quarantine flag set by Safari/Finder.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # required for softprops/action-gh-release on tag pushes
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: NgpCraftEngine-windows
+          - os: ubuntu-latest
+            artifact_name: NgpCraftEngine-linux
+          - os: macos-latest
+            artifact_name: NgpCraftEngine-macos
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      # PyInstaller's BUNDLE step needs a .icns icon on macOS. Generate one
+      # on the fly from the existing .ico so the repo doesn't need both.
+      - name: Generate macOS .icns from .ico
+        if: runner.os == 'macOS'
+        run: |
+          python - <<'PY'
+          from PIL import Image
+          ico = Image.open('assets/ngpcraft.ico')
+          sizes = list(ico.info.get('sizes') or []) or [ico.size]
+          best = max(sizes, key=lambda s: s[0] * s[1])
+          ico.size = best
+          ico.load()
+          ico.convert('RGBA').resize((1024, 1024), Image.LANCZOS).save('icon-1024.png', 'PNG')
+          PY
+          mkdir -p icon.iconset
+          sips -z 16   16   icon-1024.png --out icon.iconset/icon_16x16.png
+          sips -z 32   32   icon-1024.png --out icon.iconset/icon_16x16@2x.png
+          sips -z 32   32   icon-1024.png --out icon.iconset/icon_32x32.png
+          sips -z 64   64   icon-1024.png --out icon.iconset/icon_32x32@2x.png
+          sips -z 128  128  icon-1024.png --out icon.iconset/icon_128x128.png
+          sips -z 256  256  icon-1024.png --out icon.iconset/icon_128x128@2x.png
+          sips -z 256  256  icon-1024.png --out icon.iconset/icon_256x256.png
+          sips -z 512  512  icon-1024.png --out icon.iconset/icon_256x256@2x.png
+          sips -z 512  512  icon-1024.png --out icon.iconset/icon_512x512.png
+          cp icon-1024.png  icon.iconset/icon_512x512@2x.png
+          iconutil -c icns -o assets/ngpcraft.icns icon.iconset
+
+      - name: Build with PyInstaller
+        run: pyinstaller --noconfirm ngpcraft_engine.spec
+
+      # ---- Package per platform ----------------------------------------------
+
+      - name: Package (Windows zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/NgpCraftEngine/* -DestinationPath dist/NgpCraftEngine-windows.zip -Force
+
+      - name: Package (Linux tar.gz)
+        if: runner.os == 'Linux'
+        run: |
+          tar -C dist -czf dist/NgpCraftEngine-linux.tar.gz NgpCraftEngine
+
+      - name: Package (macOS dmg, zip fallback)
+        if: runner.os == 'macOS'
+        run: |
+          # Clear quarantine attrs that may have been inherited during build.
+          xattr -cr dist/NgpCraftEngine.app || true
+
+          brew install create-dmg
+          if create-dmg \
+              --volname "NgpCraft Engine" \
+              --window-pos 200 120 \
+              --window-size 600 400 \
+              --icon-size 100 \
+              --icon "NgpCraftEngine.app" 175 200 \
+              --hide-extension "NgpCraftEngine.app" \
+              --app-drop-link 425 200 \
+              "dist/NgpCraftEngine-macos.dmg" \
+              "dist/NgpCraftEngine.app"; then
+            echo "DMG built successfully."
+          else
+            echo "create-dmg failed — falling back to a plain zip of the .app"
+            (cd dist && zip -r NgpCraftEngine-macos.zip NgpCraftEngine.app)
+          fi
+
+      # ---- Upload as workflow artifacts (always) -----------------------------
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            dist/NgpCraftEngine-windows.zip
+            dist/NgpCraftEngine-linux.tar.gz
+            dist/NgpCraftEngine-macos.dmg
+            dist/NgpCraftEngine-macos.zip
+          if-no-files-found: ignore
+          retention-days: 90
+
+  # On tag push, gather all platform artifacts and publish a GitHub Release.
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List downloaded files
+        run: find artifacts -type f -printf '%p  %s bytes\n'
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          fail_on_unmatched_files: false
+          generate_release_notes: true
+          draft: false
+          prerelease: false

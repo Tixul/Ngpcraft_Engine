@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.bug_report import build_issue_url, system_info_block
+from core import toolchain
 from i18n.lang import tr
 
 
@@ -71,9 +72,19 @@ class BuildDialog(QDialog):
 
         self._proc = QProcess(self)
         self._proc.setWorkingDirectory(str(project_dir))
+        # Inject THOME + augmented PATH so `make`, cc900, asm900, tulink,
+        # tuconv, s242ngp and python resolve even when the user has not
+        # touched the Windows system PATH. Resolved from QSettings overrides
+        # ("toolchain/t900_path", "toolchain/python_path") with sensible
+        # autodetection fallbacks — see core/toolchain.py.
+        self._proc.setProcessEnvironment(toolchain.make_subprocess_env())
         self._proc.readyReadStandardOutput.connect(self._on_out)
         self._proc.readyReadStandardError.connect(self._on_err)
         self._proc.finished.connect(self._on_finished)
+        # Catch silent QProcess startup failures (binary not found, permission
+        # denied, etc.) — without this handler QProcess emits errorOccurred
+        # but nothing reaches the console and the build appears frozen.
+        self._proc.errorOccurred.connect(self._on_proc_error)
 
         self._queue: list[list[str]] = []
         self._last_exit: int | None = None
@@ -250,6 +261,29 @@ class BuildDialog(QDialog):
             # Not fatal; some templates use lowercase or include Makefile elsewhere.
             QMessageBox.information(self, tr("build.title"), tr("build.no_makefile"))
 
+        # Refresh the QProcess env each run — the user may have just opened
+        # the toolchain config dialog and changed the path.
+        self._proc.setProcessEnvironment(toolchain.make_subprocess_env())
+
+        # Preflight: surface a clear message instead of QProcess.start()
+        # failing silently when `make` or python can't be found.
+        status = toolchain.toolchain_status()
+        missing = []
+        if status["make"] is None:
+            missing.append("make")
+        if status["t900_root"] is None:
+            missing.append("T900 (cc900)")
+        if status["python"] is None:
+            missing.append("Python 3")
+        if missing:
+            self._out.clear()
+            self._append(
+                tr("build.preflight_missing", names=", ".join(missing)) + "\n"
+            )
+            self._lbl_status.setText(tr("build.preflight_fail"))
+            self._lbl_status.setStyleSheet("color: #e07030;")
+            return
+
         idx = max(0, int(self._target.currentIndex()))
         plan = self._plans[idx] if idx < len(self._plans) else self._plans[0]
 
@@ -310,6 +344,32 @@ class BuildDialog(QDialog):
             return
         self._proc.kill()
         self._proc.waitForFinished(3000)
+
+    def _on_proc_error(self, err) -> None:  # type: ignore[override]
+        # QProcess.ProcessError values: FailedToStart=0, Crashed=1, Timedout=2,
+        # WriteError=3, ReadError=4, UnknownError=5.
+        program = (self._current_cmd or ["?"])[0]
+        is_failed_to_start = int(err) == 0
+        if is_failed_to_start:
+            self._append(
+                "\n" + tr("build.exec_failed_to_start", program=program) + "\n"
+            )
+        else:
+            self._append(
+                "\n" + tr("build.exec_error", program=program, err=int(err)) + "\n"
+            )
+
+        # FailedToStart does not trigger `finished`, so reset the UI here or
+        # the dialog stays stuck on "Running…" with Stop enabled and the
+        # remaining queue stalled forever.
+        if is_failed_to_start:
+            self._queue.clear()
+            self._last_exit = -1
+            self._btn_stop.setEnabled(False)
+            self._btn_start.setEnabled(True)
+            self._lbl_status.setText(tr("build.fail", code=-1))
+            self._lbl_status.setStyleSheet("color: #e07030;")
+            self._btn_report.setEnabled(True)
 
     def _on_finished(self, exit_code: int, exit_status) -> None:  # type: ignore[override]
         self._last_exit = int(exit_code)

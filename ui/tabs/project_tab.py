@@ -1594,6 +1594,10 @@ class ProjectTab(ProjectPathMixin, QWidget):
         self._btn_template_contract.clicked.connect(self._show_template_contract_details)
         self._btn_template_contract.setEnabled(False)
         template_row.addWidget(self._btn_template_contract)
+        self._btn_toolchain_config = QPushButton(tr("proj.toolchain_configure"))
+        self._btn_toolchain_config.setToolTip(tr("proj.toolchain_configure_tt"))
+        self._btn_toolchain_config.clicked.connect(self._open_toolchain_config)
+        template_row.addWidget(self._btn_toolchain_config)
         al.addLayout(template_row)
 
         _sep_act = QFrame()
@@ -2396,70 +2400,77 @@ class ProjectTab(ProjectPathMixin, QWidget):
         return "ok", summary, details
 
     def _toolchain_contract_check(self, tpl: Path) -> tuple[int, list[str], list[str]]:
-        """Return warn-count, detailed lines, and warning-only lines for build toolchain checks."""
+        """Return warn-count, detailed lines, and warning-only lines for build toolchain checks.
+
+        Honors the engine-wide QSettings overrides set via the toolchain
+        configuration dialog ("toolchain/t900_path", "toolchain/python_path");
+        falls back to autodetection (THOME env var, common install paths)
+        and finally to the per-project build.bat compilerPath as a hint.
+        """
+        from core import toolchain as _tc
+
         warns = 0
         details: list[str] = []
         issues: list[str] = []
 
+        # build.bat compilerPath is just a hint for the autodetector — read
+        # it so we can suggest it to find_t900_root(), but don't warn if it
+        # is empty (we have better fallbacks now).
         build_bat = tpl / "build.bat"
-        compiler_path = ""
+        bat_compiler_path = ""
         if build_bat.exists():
             try:
-                build_bat_text = build_bat.read_text(encoding="utf-8", errors="ignore")
+                for raw_line in build_bat.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    line = raw_line.strip()
+                    if line.lower().startswith("set compilerpath="):
+                        bat_compiler_path = line.split("=", 1)[1].strip().strip('"')
+                        break
             except Exception:
-                build_bat_text = ""
-            for raw_line in build_bat_text.splitlines():
-                line = raw_line.strip()
-                if not line.lower().startswith("set compilerpath="):
-                    continue
-                compiler_path = line.split("=", 1)[1].strip().strip('"')
-                break
-            if compiler_path:
-                cp = Path(compiler_path)
-                cand = (
-                    cp / "BIN" / "cc900.exe",
-                    cp / "bin" / "cc900.exe",
-                    cp / "cc900.exe",
-                )
-                cc900_path = next((p for p in cand if p.exists()), None)
-                if cc900_path is not None:
-                    details.append(tr("proj.template_contract_compiler_path_ok", path=str(cc900_path)))
-                else:
-                    warns += 1
-                    msg = tr("proj.template_contract_compiler_path_missing", path=compiler_path)
-                    details.append(msg)
-                    issues.append(msg)
-            else:
+                bat_compiler_path = ""
+
+        status = _tc.toolchain_status(explicit_t900=bat_compiler_path or None)
+
+        # T900 root + required tools
+        t900 = status["t900_root"]
+        if t900 is None:
+            warns += 1
+            msg = tr("proj.template_contract_t900_missing")
+            details.append(msg)
+            issues.append(msg)
+        else:
+            details.append(tr("proj.template_contract_t900_ok", path=str(t900)))
+            missing_tools = [n for n in _tc.T900_TOOL_NAMES if status["tools"].get(n) is None]
+            if missing_tools:
                 warns += 1
-                msg = tr("proj.template_contract_compiler_path_empty")
+                msg = tr("proj.template_contract_t900_tools_missing", names=", ".join(missing_tools))
                 details.append(msg)
                 issues.append(msg)
-        else:
-            warns += 1
-            msg = tr("proj.template_contract_build_bat_missing")
-            details.append(msg)
-            issues.append(msg)
+            # s242ngp is optional but flag it — needed for the .ngp ROM step.
+            if status["tools"].get("s242ngp.exe") is None:
+                warns += 1
+                msg = tr("proj.template_contract_s242ngp_missing")
+                details.append(msg)
+                issues.append(msg)
+            else:
+                details.append(tr("proj.template_contract_t900_tools_ok"))
 
-        local_helpers = ("asm900.exe", "thc1.exe", "thc2.exe")
-        missing_helpers = [name for name in local_helpers if not (tpl / name).exists()]
-        if missing_helpers:
+        # Python
+        if status["python"] is None:
             warns += 1
-            msg = tr("proj.template_contract_local_helpers_missing", names=", ".join(missing_helpers))
+            msg = tr("proj.template_contract_python_missing")
             details.append(msg)
             issues.append(msg)
         else:
-            details.append(tr("proj.template_contract_local_helpers_ok"))
+            details.append(tr("proj.template_contract_python_ok", path=str(status["python"])))
 
-        path_cmds = ("cc900", "tulink", "tuconv", "s242ngp")
-        found_path_cmds = [name for name in path_cmds if shutil.which(name)]
-        missing_path_cmds = [name for name in path_cmds if name not in found_path_cmds]
-        if missing_path_cmds:
+        # make
+        if status["make"] is None:
             warns += 1
-            msg = tr("proj.template_contract_path_tools_missing", names=", ".join(missing_path_cmds))
+            msg = tr("proj.template_contract_make_missing")
             details.append(msg)
             issues.append(msg)
         else:
-            details.append(tr("proj.template_contract_path_tools_ok"))
+            details.append(tr("proj.template_contract_make_ok", path=str(status["make"])))
 
         return warns, details, issues
 
@@ -2484,6 +2495,54 @@ class ProjectTab(ProjectPathMixin, QWidget):
             tr("proj.template_contract_title"),
             tr("proj.template_contract_dialog", details=body),
         )
+
+    def _open_toolchain_config(self) -> None:
+        """Open the toolchain config dialog and refresh the contract check on save."""
+        from ui.toolchain_config_dialog import ToolchainConfigDialog
+        from core import toolchain as _tc
+
+        dlg = ToolchainConfigDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        # Sync build.bat files so CLI builds (double-click on build.bat,
+        # `build` in cmd, etc.) match what the engine's Build & Run uses.
+        # Only patches files that look like the template default — a user
+        # who has set a working custom compilerPath is left alone.
+        t900 = _tc.find_t900_root()
+        python = _tc.find_python()
+        synced: list[str] = []
+        candidates: list[Path] = []
+        if self._project_dir:
+            candidates.append(self._project_dir / "build.bat")
+        # Also sync the template source so future "New Project" exports
+        # inherit the new path. user_template_root() is the writable copy
+        # used when the engine is frozen; in source mode we fall back to
+        # the repo-relative template folder.
+        try:
+            from core.app_paths import user_template_root
+            tpl_root = user_template_root()
+            if tpl_root is None:
+                tpl_root = Path(__file__).resolve().parents[2] / "templates" / "NgpCraft_base_template"
+            candidates.append(tpl_root / "build.bat")
+        except Exception:
+            pass
+        for bat in candidates:
+            try:
+                if _tc.sync_build_bat(bat, t900_root=t900, python_path=python):
+                    synced.append(str(bat))
+            except Exception:
+                pass
+
+        if synced:
+            QMessageBox.information(
+                self,
+                tr("toolchain.title"),
+                tr("toolchain.build_bat_synced", names="\n".join(f"  - {p}" for p in synced)),
+            )
+
+        # Re-run the contract check so the warning chip updates immediately.
+        self._update_template_contract()
 
     def _project_check_item_html(self, status: str, title: str, detail: str) -> str:
         tag, color = {
