@@ -48,6 +48,7 @@ from ui.tabs.level_tab import LevelTab
 from ui.navigator_panel import NavigatorPanel
 from ui.tabs.palette_tab import PaletteTab
 from ui.tabs.globals_tab import GlobalsTab
+from ui.tabs.mechanics_tab import MechanicsTab
 from ui.tabs.project_tab import ProjectTab, FontTab
 from ui.tabs.scene_map_tab import SceneMapTab
 from ui.tabs.tilemap_tab import TilemapTab
@@ -195,6 +196,15 @@ class MainWindow(QMainWindow):
         )
         self._tabs.addTab(self._globals_tab, tr("tab.globals"))
 
+        # Mechanics tab — toggles for gameplay mechanics (shooting, bounce,
+        # hit_feedback, death_fx, …). Disabling hides config UI elsewhere.
+        self._mechanics_tab = MechanicsTab(
+            project_data=self._project_data,
+            on_save=self._save_project,
+            parent=self,
+        )
+        self._tabs.addTab(self._mechanics_tab, tr("tab.mechanics"))
+
         # Wire GlobalsTab ↔ ProjectTab signal + inject reference for export delegation
         self._globals_tab.manifest_reloaded.connect(self._project_tab.set_audio_manifest)
         self._project_tab.set_globals_tab(self._globals_tab)
@@ -223,6 +233,11 @@ class MainWindow(QMainWindow):
         self._level_tab.open_globals_tab_requested.connect(
             lambda: self._navigate_to(self._globals_tab)
         )
+        # Mechanics toggles affect which config groups the LevelTab displays.
+        # Re-render the entity props when a toggle flips so the UI updates live.
+        self._mechanics_tab.mechanics_changed.connect(
+            self._level_tab._on_mechanics_changed
+        )
         self._tabs.addTab(self._level_tab, tr("tab.level"))
 
         self._palette_tab = PaletteTab(self)
@@ -245,6 +260,11 @@ class MainWindow(QMainWindow):
 
         self._hitbox_tab = HitboxTab(self)
         self._hitbox_tab.hitboxes_changed.connect(self._save_project)
+        # Mechanics toggles also affect hitbox group visibility (Combat, Top-down,
+        # Projectiles groups + jump/gravity/death anim rows). Re-render on toggle.
+        self._mechanics_tab.mechanics_changed.connect(
+            self._hitbox_tab._update_section_visibility
+        )
         self._tabs.addTab(self._hitbox_tab, tr("tab.hitbox"))
 
         # --- Group: Tools ---
@@ -370,7 +390,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     _TAB_GROUPS: dict[str, tuple[str, ...]] = {
-        "project": ("_project_tab", "_globals_tab", "_font_tab", "_map_tab"),
+        "project": ("_project_tab", "_globals_tab", "_mechanics_tab", "_font_tab", "_map_tab"),
         "scene":   ("_level_tab", "_palette_tab", "_tilemap_tab", "_dialogues_tab", "_hitbox_tab"),
         "tools":   ("_editor_tab", "_vram_tab", "_bundle_tab"),
         "help":    ("_help_tab",),

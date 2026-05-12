@@ -71,6 +71,7 @@ from PyQt6.QtWidgets import (
 )
 from ui.no_scroll import NoScrollSpinBox as QSpinBox, NoScrollComboBox as QComboBox  # noqa: F811
 from core.collision_boxes import active_attack_hitboxes, first_hurtbox
+from core.mechanics import is_mechanic_enabled
 from core.scene_collision import fit_collision_grid
 
 from core.entity_roles import (
@@ -4038,10 +4039,12 @@ class LevelTab(QWidget):
             tr("level.shoot_fire_range"), tr("level.shoot_fire_range_tt"), "fire_range", 0, 255, 0)
         _sp_layout.addWidget(self._row_fire_range)
 
-        # SFX on fire — optional. Range -1..254 ; -1 displays "(aucun)" via
-        # setSpecialValueText (Qt shows it at the minimum value). Stored as 0xFF
-        # when -1 so the runtime sentinel matches: 0xFF = silent fire.
-        _sfx_row = QHBoxLayout()
+        # SFX on fire — optional, gated by the 'sfx_fire' mechanic toggle.
+        # Wrapped in a QWidget so the whole row can be hidden in one call when
+        # the toggle is off.
+        self._row_sfx_fire = QWidget()
+        _sfx_row = QHBoxLayout(self._row_sfx_fire)
+        _sfx_row.setContentsMargins(0, 0, 0, 0)
         _sfx_lbl = QLabel(tr("level.shoot_sfx_fire"))
         _sfx_lbl.setFixedWidth(100)
         _sfx_row.addWidget(_sfx_lbl)
@@ -4052,7 +4055,7 @@ class LevelTab(QWidget):
         self._spin_sfx_fire.setToolTip(tr("level.shoot_sfx_fire_tt"))
         self._spin_sfx_fire.valueChanged.connect(self._on_sfx_fire_changed)
         _sfx_row.addWidget(self._spin_sfx_fire, 1)
-        _sp_layout.addLayout(_sfx_row)
+        _sp_layout.addWidget(self._row_sfx_fire)
 
         # Note label
         self._lbl_shoot_type_note = QLabel(tr("level.shoot_type_note"))
@@ -4126,13 +4129,13 @@ class LevelTab(QWidget):
         # ---- Actions à la mort — surfaces entity_death events inline ----
         # Avoids the 5-click trip to Globals tab → Entity Types → Events for the
         # common case of "play SFX / add score / spawn loot on death".
-        _da_sep = QFrame()
-        _da_sep.setFrameShape(QFrame.Shape.HLine)
-        _da_sep.setStyleSheet("color:#3a3f46;")
-        dfv.addWidget(_da_sep)
-        _da_header = QLabel(tr("level.death_actions_header"))
-        _da_header.setStyleSheet("font-size:10px; color:#d8a23a; font-weight:bold;")
-        dfv.addWidget(_da_header)
+        self._da_sep = QFrame()
+        self._da_sep.setFrameShape(QFrame.Shape.HLine)
+        self._da_sep.setStyleSheet("color:#3a3f46;")
+        dfv.addWidget(self._da_sep)
+        self._da_header = QLabel(tr("level.death_actions_header"))
+        self._da_header.setStyleSheet("font-size:10px; color:#d8a23a; font-weight:bold;")
+        dfv.addWidget(self._da_header)
         self._lbl_death_actions_hint = QLabel(tr("level.death_actions_no_type"))
         self._lbl_death_actions_hint.setWordWrap(True)
         self._lbl_death_actions_hint.setStyleSheet("font-size:10px; color:#9aa3ad;")
@@ -4155,6 +4158,103 @@ class LevelTab(QWidget):
 
         self._grp_death_fx.setVisible(False)
         ev.addWidget(self._grp_death_fx)
+
+        # ---- Bounce group (MECH-3) ----
+        # Per-sprite-type bounce config. Mostly useful on sprites used as
+        # bullets (where the projectile reflects off the camera viewport
+        # instead of despawning at the edge). Visible for any selected entity
+        # — the user can pick any instance of the sprite to edit its type.
+        self._grp_bounce = QGroupBox(tr("level.grp_bounce"))
+        self._grp_bounce.setFlat(True)
+        bcv = QVBoxLayout(self._grp_bounce)
+        bcv.setSpacing(5)
+        bcv.setContentsMargins(6, 6, 6, 6)
+        _bc_help = QLabel(tr("level.bounce_help"))
+        _bc_help.setWordWrap(True)
+        _bc_help.setStyleSheet("color:#9aa3ad; font-size:10px;")
+        bcv.addWidget(_bc_help)
+        self._chk_bounce_h = QCheckBox(tr("level.bounce_h"))
+        self._chk_bounce_h.setToolTip(tr("level.bounce_h_tt"))
+        self._chk_bounce_h.toggled.connect(self._on_bounce_h_toggled)
+        bcv.addWidget(self._chk_bounce_h)
+        self._chk_bounce_v = QCheckBox(tr("level.bounce_v"))
+        self._chk_bounce_v.setToolTip(tr("level.bounce_v_tt"))
+        self._chk_bounce_v.toggled.connect(self._on_bounce_v_toggled)
+        bcv.addWidget(self._chk_bounce_v)
+        _bsfx_row = QHBoxLayout()
+        _bsfx_lbl = QLabel(tr("level.bounce_sfx"))
+        _bsfx_lbl.setFixedWidth(100)
+        _bsfx_row.addWidget(_bsfx_lbl)
+        self._spin_bounce_sfx = QSpinBox()
+        self._spin_bounce_sfx.setRange(-1, 254)
+        self._spin_bounce_sfx.setValue(-1)
+        self._spin_bounce_sfx.setSpecialValueText(tr("level.shoot_sfx_none"))
+        self._spin_bounce_sfx.setToolTip(tr("level.bounce_sfx_tt"))
+        self._spin_bounce_sfx.valueChanged.connect(self._on_bounce_sfx_changed)
+        _bsfx_row.addWidget(self._spin_bounce_sfx, 1)
+        bcv.addLayout(_bsfx_row)
+        self._grp_bounce.setVisible(False)
+        ev.addWidget(self._grp_bounce)
+
+        # ---- Dash group (MECH-9) ----
+        # Configures the tunable params of the dash mechanic. The button itself
+        # is bound via Sprite Setup → Controller → assign "dash" to a PAD button
+        # (centralised binding system, avoids conflicts with shoot/jump/etc.).
+        self._grp_dash = QGroupBox(tr("level.grp_dash"))
+        self._grp_dash.setFlat(True)
+        dgv = QVBoxLayout(self._grp_dash)
+        dgv.setSpacing(5)
+        dgv.setContentsMargins(6, 6, 6, 6)
+        _dh_help = QLabel(tr("level.dash_help"))
+        _dh_help.setWordWrap(True)
+        _dh_help.setStyleSheet("color:#9aa3ad; font-size:10px;")
+        dgv.addWidget(_dh_help)
+        self._lbl_dash_btn_status = QLabel("")
+        self._lbl_dash_btn_status.setWordWrap(True)
+        self._lbl_dash_btn_status.setStyleSheet("font-size:10px;")
+        dgv.addWidget(self._lbl_dash_btn_status)
+
+        def _dash_spin_row(label_key: str, tooltip_key: str, attr: str,
+                           lo: int, hi: int, default: int) -> QSpinBox:
+            row = QHBoxLayout()
+            lbl = QLabel(tr(label_key))
+            lbl.setFixedWidth(110)
+            row.addWidget(lbl)
+            sp = QSpinBox()
+            sp.setRange(lo, hi)
+            sp.setValue(default)
+            sp.setToolTip(tr(tooltip_key))
+            sp.valueChanged.connect(lambda v, _a=attr: self._on_dash_param_changed(_a, v))
+            row.addWidget(sp, 1)
+            dgv.addLayout(row)
+            return sp
+
+        self._spin_dash_duration = _dash_spin_row(
+            "level.dash_duration", "level.dash_duration_tt", "duration", 1, 120, 12)
+        self._spin_dash_speed    = _dash_spin_row(
+            "level.dash_speed",    "level.dash_speed_tt",    "speed",    1,   8,  3)
+        self._spin_dash_cooldown = _dash_spin_row(
+            "level.dash_cooldown", "level.dash_cooldown_tt", "cooldown", 0, 255, 30)
+        self._chk_dash_iframes = QCheckBox(tr("level.dash_iframes"))
+        self._chk_dash_iframes.setToolTip(tr("level.dash_iframes_tt"))
+        self._chk_dash_iframes.toggled.connect(
+            lambda v: self._on_dash_param_changed("iframes", v))
+        dgv.addWidget(self._chk_dash_iframes)
+        _dsfx_row = QHBoxLayout()
+        _dsfx_lbl = QLabel(tr("level.dash_sfx"))
+        _dsfx_lbl.setFixedWidth(110)
+        _dsfx_row.addWidget(_dsfx_lbl)
+        self._spin_dash_sfx = QSpinBox()
+        self._spin_dash_sfx.setRange(-1, 254)
+        self._spin_dash_sfx.setValue(-1)
+        self._spin_dash_sfx.setSpecialValueText(tr("level.shoot_sfx_none"))
+        self._spin_dash_sfx.setToolTip(tr("level.dash_sfx_tt"))
+        self._spin_dash_sfx.valueChanged.connect(
+            lambda v: self._on_dash_param_changed("sfx", v))
+        _dsfx_row.addWidget(self._spin_dash_sfx, 1)
+        dgv.addLayout(_dsfx_row)
+        self._grp_dash.setVisible(False)
+        ev.addWidget(self._grp_dash)
 
         grp_spr = QGroupBox(tr("level.sprite_info_group"))
         sv = QVBoxLayout(grp_spr)
@@ -4412,6 +4512,45 @@ class LevelTab(QWidget):
         rv.addWidget(hint)
 
         rlv.addWidget(grp_rules)
+
+        # MECH-14: per-scene Option Satellite override. Visible only when the
+        # mechanic is enabled project-wide. Stored under scene["option_satellite"]
+        # as {"override_count": N | -1, "disabled": bool}. -1 / absent = use the
+        # project default count from MechanicsTab; an explicit N (0-4) overrides.
+        # `disabled` short-circuits the system entirely for this scene (useful
+        # for boss rooms where OAM is saturated).
+        self._grp_option_scene = QGroupBox(tr("level.option_scene_group"))
+        _opt_lay = QVBoxLayout(self._grp_option_scene)
+        _opt_lay.setContentsMargins(8, 6, 8, 6)
+        _opt_lay.setSpacing(4)
+
+        _opt_hint = QLabel(tr("level.option_scene_hint"))
+        _opt_hint.setWordWrap(True)
+        _opt_hint.setStyleSheet("color:#aaa; font-size:10px;")
+        _opt_lay.addWidget(_opt_hint)
+
+        self._chk_option_disabled = QCheckBox(tr("level.option_scene_disabled"))
+        self._chk_option_disabled.setToolTip(tr("level.option_scene_disabled_tt"))
+        self._chk_option_disabled.toggled.connect(self._on_option_scene_disabled_changed)
+        _opt_lay.addWidget(self._chk_option_disabled)
+
+        _opt_row = QHBoxLayout()
+        _opt_row.addWidget(QLabel(tr("level.option_scene_count")))
+        self._spin_option_count = QSpinBox()
+        # -1 stored as 0 in UI? We use a separate checkbox for "override count"
+        # to keep the spinbox in 0-4 range (matches max_options in registry).
+        self._chk_option_override = QCheckBox(tr("level.option_scene_override"))
+        self._chk_option_override.setToolTip(tr("level.option_scene_override_tt"))
+        self._chk_option_override.toggled.connect(self._on_option_scene_override_changed)
+        _opt_lay.addWidget(self._chk_option_override)
+        self._spin_option_count.setRange(0, 4)
+        self._spin_option_count.setToolTip(tr("level.option_scene_count_tt"))
+        self._spin_option_count.valueChanged.connect(self._on_option_scene_count_changed)
+        _opt_row.addWidget(self._spin_option_count)
+        _opt_row.addStretch()
+        _opt_lay.addLayout(_opt_row)
+
+        rlv.addWidget(self._grp_option_scene)
         rlv.addStretch()
         self._right_tabs.addTab(tab_rules, tr("level.tab_rules"))
 
@@ -4747,6 +4886,22 @@ class LevelTab(QWidget):
         wtv.setContentsMargins(0, 0, 0, 0)
         wtv.setSpacing(4)
 
+        # MECH-4: per-scene wave trigger mode (frame / scroll_x / scroll_y).
+        # Stored in scene["wave_trigger_mode"]. Default "frame" = legacy compat.
+        # Row visible only when MECH-4 mechanic is enabled project-wide.
+        self._row_wave_mode = QWidget()
+        _wm_lay = QHBoxLayout(self._row_wave_mode)
+        _wm_lay.setContentsMargins(0, 0, 0, 0)
+        _wm_lay.addWidget(QLabel(tr("level.wave_mode")))
+        self._combo_wave_mode = QComboBox()
+        self._combo_wave_mode.addItem(tr("level.wave_mode_frame"),    "frame")
+        self._combo_wave_mode.addItem(tr("level.wave_mode_scroll_x"), "scroll_x")
+        self._combo_wave_mode.addItem(tr("level.wave_mode_scroll_y"), "scroll_y")
+        self._combo_wave_mode.setToolTip(tr("level.wave_mode_tt"))
+        self._combo_wave_mode.currentIndexChanged.connect(self._on_wave_mode_changed)
+        _wm_lay.addWidget(self._combo_wave_mode, 1)
+        wtv.addWidget(self._row_wave_mode)
+
         wave_ctrl = QHBoxLayout()
         self._btn_wave_add = QPushButton(tr("level.wave_add"))
         self._btn_wave_add.clicked.connect(self._add_wave)
@@ -4788,7 +4943,10 @@ class LevelTab(QWidget):
         _sc3.setContext(Qt.ShortcutContext.WidgetShortcut)
         _sc3.activated.connect(self._dup_wave)
 
-        delay_row = QHBoxLayout()
+        # Frame-based delay row (visible when scene mode = "frame")
+        self._row_wave_delay = QWidget()
+        delay_row = QHBoxLayout(self._row_wave_delay)
+        delay_row.setContentsMargins(0, 0, 0, 0)
         delay_row.addWidget(QLabel(tr("level.wave_delay")))
         self._spin_wave_delay = QSpinBox()
         self._spin_wave_delay.setRange(0, 9999)
@@ -4797,7 +4955,22 @@ class LevelTab(QWidget):
         self._spin_wave_delay.setEnabled(False)
         delay_row.addWidget(self._spin_wave_delay)
         delay_row.addWidget(QLabel("f"))
-        wtv.addLayout(delay_row)
+        wtv.addWidget(self._row_wave_delay)
+
+        # MECH-4 scroll-position row (visible when scene mode = "scroll_*")
+        self._row_wave_at_scroll = QWidget()
+        scr_row = QHBoxLayout(self._row_wave_at_scroll)
+        scr_row.setContentsMargins(0, 0, 0, 0)
+        scr_row.addWidget(QLabel(tr("level.wave_at_scroll")))
+        self._spin_wave_at_scroll = QSpinBox()
+        self._spin_wave_at_scroll.setRange(0, 32767)
+        self._spin_wave_at_scroll.setToolTip(tr("level.wave_at_scroll_tt"))
+        self._spin_wave_at_scroll.valueChanged.connect(self._on_wave_at_scroll_changed)
+        self._spin_wave_at_scroll.setEnabled(False)
+        scr_row.addWidget(self._spin_wave_at_scroll)
+        scr_row.addWidget(QLabel("px"))
+        self._row_wave_at_scroll.setVisible(False)
+        wtv.addWidget(self._row_wave_at_scroll)
         # Wave spawn X helper — shows suggested map X so enemy enters from off-screen right.
         # Formula: x = floor(delay * speed_x / 8) + screen_w_tiles + margin
         self._lbl_wave_spawn_x = QLabel("")
@@ -4975,7 +5148,7 @@ class LevelTab(QWidget):
         wv.addWidget(waves_split, 1)
 
         self._tab_waves = tab_waves
-        self._right_tabs.addTab(tab_waves, tr("level.tab_waves"))
+        self._tab_waves_index = self._right_tabs.addTab(tab_waves, tr("level.tab_waves"))
 
         # --- Tab 1b: Regions ---------------------------------------------
         tab_regions = QWidget()
@@ -6143,7 +6316,7 @@ class LevelTab(QWidget):
         gv.addWidget(self._procgen_sub_tabs, 1)
 
         self._tab_procgen = tab_gen
-        self._right_tabs.addTab(tab_gen, tr("level.tab_procgen"))
+        self._tab_procgen_index = self._right_tabs.addTab(tab_gen, tr("level.tab_procgen"))
 
         # --- Tab 3: Layout / scroll --------------------------------------
         tab_layout = QWidget()
@@ -6846,6 +7019,9 @@ class LevelTab(QWidget):
         self._refresh_neighbor_combos()
         self._refresh_procgen_scene_combos()
         self._restore_procgen_assets_state()
+        # Mechanics-gated sub-tab visibility — now that _project_data_root is
+        # set, hide Waves / Procgen tabs if their mechanic is disabled.
+        self._refresh_sub_tab_visibility()
 
     def _scene_idx_for_id(self, sid: str) -> int | None:
         sid = str(sid or "").strip()
@@ -7210,6 +7386,8 @@ class LevelTab(QWidget):
             self._canvas.update()
             self._update_budget()
             self._refresh_wave_list()
+            self._refresh_wave_mode_ui()
+            self._refresh_option_scene_ui()
             self._refresh_region_list()
             self._refresh_region_props()
             self._refresh_text_labels_ui()
@@ -11241,6 +11419,37 @@ class LevelTab(QWidget):
             "flags":           int(ent.get("flags", 0)),
         }
 
+    def _mechanic_enabled(self, mech_id: str) -> bool:
+        """Convenience wrapper — checks the project-level toggle for the given
+        mechanic. Used by all the group-visibility code so a disabled mechanic
+        hides its UI everywhere it could appear. Defaults to the registry's
+        default_enabled if the project hasn't been loaded yet."""
+        return is_mechanic_enabled(getattr(self, "_project_data_root", None), mech_id)
+
+    def _on_mechanics_changed(self) -> None:
+        """Slot connected to MechanicsTab.mechanics_changed. Re-renders the
+        entity props panel AND the right-side sub-tabs so visibility tracks
+        the Mechanics tab toggles live."""
+        self._refresh_entity_runtime_ui()
+        self._refresh_sub_tab_visibility()
+        if hasattr(self, "_refresh_wave_mode_ui"):
+            self._refresh_wave_mode_ui()
+        if hasattr(self, "_refresh_option_scene_ui"):
+            self._refresh_option_scene_ui()
+
+    def _refresh_sub_tab_visibility(self) -> None:
+        """Hide/show the Waves and Procgen sub-tabs based on Mechanics toggles.
+        Uses QTabWidget.setTabVisible (Qt 5.15+) so the tabs disappear from the
+        bar entirely when disabled — cleaner than just disabling them."""
+        if hasattr(self, "_tab_waves_index") and self._tab_waves_index is not None:
+            self._right_tabs.setTabVisible(
+                self._tab_waves_index, self._mechanic_enabled("wave_spawning")
+            )
+        if hasattr(self, "_tab_procgen_index") and self._tab_procgen_index is not None:
+            self._right_tabs.setTabVisible(
+                self._tab_procgen_index, self._mechanic_enabled("procgen")
+            )
+
     def _on_save_as_type(self) -> None:
         """Save current entity as a template in Globals → entity_templates."""
         if self._project_data_root is None:
@@ -11833,6 +12042,10 @@ class LevelTab(QWidget):
                 self._grp_death_fx.setVisible(False)
             if hasattr(self, "_grp_hit_feedback"):
                 self._grp_hit_feedback.setVisible(False)
+            if hasattr(self, "_grp_bounce"):
+                self._grp_bounce.setVisible(False)
+            if hasattr(self, "_grp_dash"):
+                self._grp_dash.setVisible(False)
             return
 
         ent = self._entities[idx]
@@ -11870,9 +12083,15 @@ class LevelTab(QWidget):
         # ---- Death FX group visibility + population (enemies + player) ----
         self._refresh_death_fx_ui(role, spr)
 
+        # ---- Bounce group (MECH-3) — populated for every selected entity ----
+        self._refresh_bounce_ui(spr)
+
+        # ---- Dash group (MECH-9) — player role only ----
+        self._refresh_dash_ui(role, spr)
+
         # ---- Hit feedback group visibility + population (enemies only) ----
         if hasattr(self, "_grp_hit_feedback"):
-            if role == "enemy":
+            if role == "enemy" and self._mechanic_enabled("hit_feedback"):
                 self._grp_hit_feedback.setVisible(True)
                 self._updating_props = True
                 _hf_raw = spr.get("hit_flash_frames")
@@ -12022,8 +12241,9 @@ class LevelTab(QWidget):
         cb.blockSignals(False)
 
     def _refresh_shooting_ui(self, role: str, spr: dict) -> None:
-        """Show/hide and populate the shooting group based on role."""
-        if role not in ("player", "enemy"):
+        """Show/hide and populate the shooting group based on role + the
+        project-level 'shooting' mechanic toggle."""
+        if role not in ("player", "enemy") or not self._mechanic_enabled("shooting"):
             self._grp_shooting.setVisible(False)
             return
 
@@ -12050,6 +12270,8 @@ class LevelTab(QWidget):
         fire_rate_default = 10 if is_player else 40
         self._spin_bullet_fire_rate.setValue(int(shooting.get("fire_rate", fire_rate_default) or fire_rate_default))
         # SFX on fire — absent/null in JSON means silent; map to -1 in the spinbox.
+        # Row visibility is gated by the 'sfx_fire' mechanic toggle.
+        self._row_sfx_fire.setVisible(self._mechanic_enabled("sfx_fire"))
         _sfx_raw = shooting.get("sfx_fire")
         if _sfx_raw is None or _sfx_raw == "":
             self._spin_sfx_fire.setValue(-1)
@@ -12143,19 +12365,43 @@ class LevelTab(QWidget):
         self._combo_bullet_sprite.setStyleSheet(combo_border)
 
     def _refresh_death_fx_ui(self, role: str, spr: dict) -> None:
-        """Populate the Death FX group: combo lists '(auto)' + all scene sprites,
-        and the help label tells the user whether the runtime will actually play
-        anything (auto-detected sprite, explicit pick, or fallback). Visible for
-        both enemies and players — both can die and benefit from a death FX.
-        Also refreshes the inline entity_death action list at the bottom of the
-        group so users don't need to go to Globals tab for play_sfx / score / etc."""
+        """Populate the Death FX group, gated by the 'death_fx' mechanic toggle.
+        The inline entity_death action list inside is independently gated by
+        the 'death_actions' toggle."""
         if not hasattr(self, "_grp_death_fx"):
             return
-        if role not in ("enemy", "player"):
+        # Whole group hidden if neither death_fx nor death_actions are enabled,
+        # OR if role is unsuitable. When only one of the two sub-toggles is on,
+        # the group shows but the disabled half stays hidden.
+        fx_on = self._mechanic_enabled("death_fx")
+        actions_on = self._mechanic_enabled("death_actions")
+        if role not in ("enemy", "player") or not (fx_on or actions_on):
             self._grp_death_fx.setVisible(False)
             return
         self._grp_death_fx.setVisible(True)
-        self._refresh_death_actions(role)
+        # Sprite combo + status only visible when death_fx is on.
+        if hasattr(self, "_combo_death_fx_sprite"):
+            self._combo_death_fx_sprite.setVisible(fx_on)
+        if hasattr(self, "_lbl_death_fx_help"):
+            self._lbl_death_fx_help.setVisible(fx_on)
+        if hasattr(self, "_lbl_death_fx_status"):
+            self._lbl_death_fx_status.setVisible(fx_on)
+        # Actions list (header + separator + list + buttons) only visible when
+        # death_actions is on.
+        if hasattr(self, "_da_sep"):
+            self._da_sep.setVisible(actions_on)
+        if hasattr(self, "_da_header"):
+            self._da_header.setVisible(actions_on)
+        if hasattr(self, "_lbl_death_actions_hint"):
+            self._lbl_death_actions_hint.setVisible(actions_on)
+        if hasattr(self, "_list_death_actions"):
+            self._list_death_actions.setVisible(actions_on)
+        if hasattr(self, "_btn_death_action_add"):
+            self._btn_death_action_add.setVisible(actions_on)
+        if hasattr(self, "_btn_death_action_remove"):
+            self._btn_death_action_remove.setVisible(actions_on)
+        if actions_on:
+            self._refresh_death_actions(role)
         self._updating_props = True
         cb = self._combo_death_fx_sprite
         cb.blockSignals(True)
@@ -12209,6 +12455,136 @@ class LevelTab(QWidget):
             if name and name not in used_types:
                 return name
         return ""
+
+    def _refresh_dash_ui(self, role: str, spr: dict) -> None:
+        """Populate the Dash group from spr["dash"] dict. Visible only for
+        player-role sprites AND when the 'dash' mechanic is enabled. The button
+        binding is shown read-only (config lives in Sprite Setup → Controller)."""
+        if not hasattr(self, "_grp_dash"):
+            return
+        if role != "player" or not self._mechanic_enabled("dash"):
+            self._grp_dash.setVisible(False)
+            return
+        self._grp_dash.setVisible(True)
+        self._updating_props = True
+        dash = dict(spr.get("dash") or {})
+        # Show current button binding status (read-only, from spr.ctrl["dash"])
+        ctrl_dict = spr.get("ctrl") or {}
+        bound_pad = str(ctrl_dict.get("dash") or "").strip()
+        if bound_pad:
+            self._lbl_dash_btn_status.setText(
+                tr("level.dash_btn_bound", pad=bound_pad)
+            )
+            self._lbl_dash_btn_status.setStyleSheet("font-size:10px; color:#7fc97f;")
+        else:
+            self._lbl_dash_btn_status.setText(tr("level.dash_btn_unbound"))
+            self._lbl_dash_btn_status.setStyleSheet("font-size:10px; color:#d8a23a;")
+        self._spin_dash_duration.setValue(max(1, min(120, int(dash.get("duration", 12) or 12))))
+        self._spin_dash_speed.setValue(max(1, min(8, int(dash.get("speed", 3) or 3))))
+        self._spin_dash_cooldown.setValue(max(0, min(255, int(dash.get("cooldown", 30) or 30))))
+        self._chk_dash_iframes.setChecked(bool(dash.get("iframes", True)))
+        _sfx_raw = dash.get("sfx")
+        if _sfx_raw is None or _sfx_raw == "":
+            self._spin_dash_sfx.setValue(-1)
+        else:
+            try:
+                _sfx_val = int(_sfx_raw)
+            except (TypeError, ValueError):
+                _sfx_val = -1
+            self._spin_dash_sfx.setValue(max(-1, min(254, _sfx_val)))
+        self._updating_props = False
+
+    def _on_dash_param_changed(self, attr: str, value) -> None:
+        """Write a single field into spr["dash"]. Used by all dash spinboxes +
+        the iframes checkbox + the SFX spinbox (special-value -1 = no sfx)."""
+        if self._updating_props:
+            return
+        spr = self._shooting_spr()
+        if spr is None:
+            return
+        dash = spr.get("dash")
+        if not isinstance(dash, dict):
+            dash = {}
+            spr["dash"] = dash
+        if attr == "iframes":
+            dash["iframes"] = bool(value)
+        elif attr == "sfx":
+            if int(value) < 0:
+                dash.pop("sfx", None)
+            else:
+                dash["sfx"] = int(value) & 0xFF
+        else:
+            dash[attr] = int(value)
+        self._update_diagnostics()
+
+    def _refresh_bounce_ui(self, spr: dict) -> None:
+        """Populate the bounce group from spr.bounce_flags + spr.bounce_sfx.
+        Gated by the 'bounce' mechanic toggle."""
+        if not hasattr(self, "_grp_bounce"):
+            return
+        if not self._mechanic_enabled("bounce"):
+            self._grp_bounce.setVisible(False)
+            return
+        self._grp_bounce.setVisible(True)
+        self._updating_props = True
+        try:
+            flags = int(spr.get("bounce_flags") or 0)
+        except (TypeError, ValueError):
+            flags = 0
+        self._chk_bounce_h.setChecked(bool(flags & 1))
+        self._chk_bounce_v.setChecked(bool(flags & 2))
+        _bsfx_raw = spr.get("bounce_sfx")
+        if _bsfx_raw is None or _bsfx_raw == "":
+            self._spin_bounce_sfx.setValue(-1)
+        else:
+            try:
+                _bsfx_val = int(_bsfx_raw)
+            except (TypeError, ValueError):
+                _bsfx_val = -1
+            self._spin_bounce_sfx.setValue(max(-1, min(254, _bsfx_val)))
+        self._updating_props = False
+
+    def _write_bounce_flag(self, bit: int, on: bool) -> None:
+        spr = self._shooting_spr()
+        if spr is None:
+            return
+        try:
+            flags = int(spr.get("bounce_flags") or 0)
+        except (TypeError, ValueError):
+            flags = 0
+        if on:
+            flags |= bit
+        else:
+            flags &= ~bit
+        if flags == 0:
+            if "bounce_flags" in spr:
+                del spr["bounce_flags"]
+        else:
+            spr["bounce_flags"] = flags & 0xFF
+        self._update_diagnostics()
+
+    def _on_bounce_h_toggled(self, checked: bool) -> None:
+        if self._updating_props:
+            return
+        self._write_bounce_flag(1, checked)
+
+    def _on_bounce_v_toggled(self, checked: bool) -> None:
+        if self._updating_props:
+            return
+        self._write_bounce_flag(2, checked)
+
+    def _on_bounce_sfx_changed(self, v: int) -> None:
+        if self._updating_props:
+            return
+        spr = self._shooting_spr()
+        if spr is None:
+            return
+        if v < 0:
+            if "bounce_sfx" in spr:
+                del spr["bounce_sfx"]
+        else:
+            spr["bounce_sfx"] = int(v) & 0xFF
+        self._update_diagnostics()
 
     def _on_hit_flash_changed(self, v: int) -> None:
         """Spinbox value 0 = disabled, > 0 = N frames of blink on non-fatal hit.
@@ -12605,21 +12981,159 @@ class LevelTab(QWidget):
         self._wave_selected   = row
         self._wave_entity_sel = -1
         if 0 <= row < len(self._waves):
-            delay = self._waves[row].get("delay", 0)
+            w = self._waves[row]
+            delay = w.get("delay", 0)
             self._spin_wave_delay.blockSignals(True)
             self._spin_wave_delay.setValue(delay)
             self._spin_wave_delay.blockSignals(False)
             self._spin_wave_delay.setEnabled(True)
+            # MECH-4 per-wave at_scroll value
+            at_scroll = int(w.get("at_scroll", 0) or 0)
+            self._spin_wave_at_scroll.blockSignals(True)
+            self._spin_wave_at_scroll.setValue(max(0, min(32767, at_scroll)))
+            self._spin_wave_at_scroll.blockSignals(False)
+            self._spin_wave_at_scroll.setEnabled(True)
             self._btn_wave_edit.setEnabled(True)
             self._lbl_wave_spawn_x.setText(f"→ spawn X suggéré : {self._wave_spawn_x(delay)} tuiles")
         else:
             self._spin_wave_delay.setEnabled(False)
+            self._spin_wave_at_scroll.setEnabled(False)
             self._btn_wave_edit.setEnabled(False)
             self._lbl_wave_spawn_x.setText("")
         self._btn_wave_del.setEnabled(row >= 0 and len(self._waves) > 0)
         self._refresh_wave_entities()
         self._refresh_wave_ent_rand_panel()
+        self._refresh_wave_mode_ui()
         self._canvas.update()
+
+    def _refresh_wave_mode_ui(self) -> None:
+        """MECH-4: show/hide the mode combo + alternate delay/at_scroll rows
+        based on the project-level mechanic toggle + scene mode."""
+        mech_on = self._mechanic_enabled("wave_scroll_spawn")
+        if hasattr(self, "_row_wave_mode"):
+            self._row_wave_mode.setVisible(mech_on)
+        mode = "frame"
+        if self._scene is not None:
+            mode = str(self._scene.get("wave_trigger_mode", "frame") or "frame")
+        if mech_on and mode != "frame":
+            # Scroll-based scene → show at_scroll spinbox, hide delay spinbox
+            if hasattr(self, "_row_wave_delay"):     self._row_wave_delay.setVisible(False)
+            if hasattr(self, "_row_wave_at_scroll"): self._row_wave_at_scroll.setVisible(True)
+        else:
+            if hasattr(self, "_row_wave_delay"):     self._row_wave_delay.setVisible(True)
+            if hasattr(self, "_row_wave_at_scroll"): self._row_wave_at_scroll.setVisible(False)
+        # Sync the mode combo
+        if hasattr(self, "_combo_wave_mode"):
+            self._combo_wave_mode.blockSignals(True)
+            idx = self._combo_wave_mode.findData(mode)
+            self._combo_wave_mode.setCurrentIndex(max(0, idx))
+            self._combo_wave_mode.blockSignals(False)
+
+    def _on_wave_mode_changed(self, _idx: int) -> None:
+        """Persist the per-scene wave_trigger_mode and refresh the rows."""
+        if self._scene is None:
+            return
+        mode = self._combo_wave_mode.currentData() or "frame"
+        if mode == "frame":
+            # Clean up the key so default-frame scenes stay tidy in JSON
+            self._scene.pop("wave_trigger_mode", None)
+        else:
+            self._scene["wave_trigger_mode"] = mode
+        self._refresh_wave_mode_ui()
+        if self._on_save:
+            self._on_save()
+
+    # ---------------- MECH-14 per-scene Option Satellite override --------------
+    def _refresh_option_scene_ui(self) -> None:
+        """Show/hide the option_satellite scene-override group based on the
+        project-level mechanic toggle, and sync the controls with the scene state."""
+        mech_on = self._mechanic_enabled("option_satellite")
+        if hasattr(self, "_grp_option_scene"):
+            self._grp_option_scene.setVisible(mech_on)
+        if not mech_on or self._scene is None:
+            return
+        opt = self._scene.get("option_satellite") or {}
+        if not isinstance(opt, dict):
+            opt = {}
+        is_disabled = bool(opt.get("disabled", False))
+        has_override = "override_count" in opt and isinstance(opt.get("override_count"), int)
+        count = int(opt.get("override_count", 0) or 0) if has_override else 0
+
+        self._chk_option_disabled.blockSignals(True)
+        self._chk_option_disabled.setChecked(is_disabled)
+        self._chk_option_disabled.blockSignals(False)
+
+        self._chk_option_override.blockSignals(True)
+        self._chk_option_override.setChecked(has_override)
+        self._chk_option_override.blockSignals(False)
+
+        self._spin_option_count.blockSignals(True)
+        self._spin_option_count.setValue(max(0, min(4, count)))
+        self._spin_option_count.setEnabled(has_override and not is_disabled)
+        self._spin_option_count.blockSignals(False)
+
+    def _opt_scene_dict(self) -> dict | None:
+        """Get-or-create the per-scene option_satellite override dict.
+        Returns None if no scene is selected."""
+        if self._scene is None:
+            return None
+        opt = self._scene.get("option_satellite")
+        if not isinstance(opt, dict):
+            opt = {}
+            self._scene["option_satellite"] = opt
+        return opt
+
+    def _on_option_scene_disabled_changed(self, checked: bool) -> None:
+        opt = self._opt_scene_dict()
+        if opt is None:
+            return
+        if checked:
+            opt["disabled"] = True
+        else:
+            opt.pop("disabled", None)
+        # Clean up: if the dict is now empty, remove the key entirely.
+        if not opt:
+            self._scene.pop("option_satellite", None)
+        self._refresh_option_scene_ui()
+        if self._on_save:
+            self._on_save()
+
+    def _on_option_scene_override_changed(self, checked: bool) -> None:
+        opt = self._opt_scene_dict()
+        if opt is None:
+            return
+        if checked:
+            opt["override_count"] = int(self._spin_option_count.value())
+        else:
+            opt.pop("override_count", None)
+        if not opt:
+            self._scene.pop("option_satellite", None)
+        self._refresh_option_scene_ui()
+        if self._on_save:
+            self._on_save()
+
+    def _on_option_scene_count_changed(self, value: int) -> None:
+        opt = self._opt_scene_dict()
+        if opt is None:
+            return
+        # Only persist if the user explicitly enabled the override toggle —
+        # otherwise the spinbox is disabled and this handler shouldn't fire.
+        if self._chk_option_override.isChecked():
+            opt["override_count"] = int(value)
+            if self._on_save:
+                self._on_save()
+
+    def _on_wave_at_scroll_changed(self, value: int) -> None:
+        """Persist the per-wave scroll trigger position."""
+        if not (0 <= self._wave_selected < len(self._waves)):
+            return
+        w = self._waves[self._wave_selected]
+        if value <= 0:
+            w.pop("at_scroll", None)
+        else:
+            w["at_scroll"] = int(value)
+        if self._on_save:
+            self._on_save()
 
     def _wave_spawn_x(self, delay: int) -> int:
         """Suggest map tile X so enemy spawns just off the right screen edge."""

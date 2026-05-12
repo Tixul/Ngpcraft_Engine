@@ -1551,6 +1551,14 @@ def _detect_features(project_data: dict) -> dict:
     _player_fire_rate: int = 10
     _player_bullet_vx: int = 4
     _player_bullet_vy: int = 0
+    # MECH-9 dash — per-player-sprite config
+    _has_dash: bool = False
+    _player_dash_button: str = "none"
+    _player_dash_duration: int = 12
+    _player_dash_speed: int = 3
+    _player_dash_cooldown: int = 30
+    _player_dash_iframes: bool = True
+    _player_dash_sfx: int = 0xFF
 
     scenes_list = (project_data or {}).get("scenes") or []
     for sc in scenes_list:
@@ -1581,6 +1589,26 @@ def _detect_features(project_data: dict) -> dict:
                     _player_fire_rate = max(1, int(_sh.get("fire_rate", 10) or 10))
                     _player_bullet_vx = max(-128, min(127, int(_sh.get("speed_x", 4) or 0)))
                     _player_bullet_vy = max(-128, min(127, int(_sh.get("speed_y", 0) or 0)))
+                # MECH-9 dash — button comes from the centralised ctrl binding
+                # (Sprite Setup → Controller → assign "dash" to a PAD button)
+                # so it can't conflict with shoot / jump / etc. Only the gameplay
+                # tuning (duration/speed/cooldown/iframes/sfx) lives in spr["dash"].
+                _ctrl_dict = spr.get("ctrl") or {}
+                _dash_pad  = str(_ctrl_dict.get("dash") or "").strip()
+                _dash_cfg = spr.get("dash") or {}
+                if _dash_pad and isinstance(_dash_cfg, dict):
+                    _has_dash = True
+                    _player_dash_button   = _dash_pad   # e.g. "PAD_B"
+                    _player_dash_duration = max(1, min(120, int(_dash_cfg.get("duration", 12) or 12)))
+                    _player_dash_speed    = max(1, min(8,   int(_dash_cfg.get("speed",    3) or 3)))
+                    _player_dash_cooldown = max(0, min(255, int(_dash_cfg.get("cooldown", 30) or 30)))
+                    _player_dash_iframes  = bool(_dash_cfg.get("iframes", True))
+                    _sfx_raw = _dash_cfg.get("sfx")
+                    try:
+                        _player_dash_sfx = int(_sfx_raw) if _sfx_raw is not None and _sfx_raw != "" else 0xFF
+                    except (TypeError, ValueError):
+                        _player_dash_sfx = 0xFF
+                    _player_dash_sfx = max(0, min(255, _player_dash_sfx)) & 0xFF
                 _mv = int((spr.get("props") or {}).get("move_type", 0) or 0)
                 if _mv == 2:
                     _player_has_platform_physics = True
@@ -1814,6 +1842,14 @@ def _detect_features(project_data: dict) -> dict:
         "player_fire_rate":     _player_fire_rate if _has_shooting_ctrl else 8,
         "player_bullet_vx":     _player_bullet_vx if _has_shooting_ctrl else 4,
         "player_bullet_vy":     _player_bullet_vy if _has_shooting_ctrl else 0,
+        # MECH-9 dash
+        "has_dash":             _has_dash,
+        "player_dash_button":   _player_dash_button,
+        "player_dash_duration": _player_dash_duration,
+        "player_dash_speed":    _player_dash_speed,
+        "player_dash_cooldown": _player_dash_cooldown,
+        "player_dash_iframes":  _player_dash_iframes,
+        "player_dash_sfx":      _player_dash_sfx,
         "has_prop_actor":  has_prop_actor,
         "has_triggers":    has_triggers,
         "has_hud":         has_hud,
@@ -1997,10 +2033,88 @@ def write_autorun_main_c(
     _player_fr_rate = int(feat.get("player_fire_rate", 8) or 8)
     _player_bvx     = int(feat.get("player_bullet_vx", 4) or 0)
     _player_bvy     = int(feat.get("player_bullet_vy", 0) or 0)
+    # MECH-9 dash — gated by the 'dash' mechanic toggle AND a valid per-player config.
+    from core.mechanics import (
+        is_mechanic_enabled as _mech_on_dash,
+        get_mechanic_config as _get_mech_cfg,
+    )
+    _has_dash_runtime = bool(feat.get("has_dash", False)) and _mech_on_dash(project_data, "dash")
+    # MECH-4 wave scroll-based — per-scene table of trigger modes.
+    _has_wave_scroll = _mech_on_dash(project_data, "wave_scroll_spawn")
+    # MECH-6 hi-score — table extends the existing NgpngSaveData struct (single
+    # flash slot, append-only). Pattern validated on hardware in StarGunner.
+    _has_hiscore   = _mech_on_dash(project_data, "highscore")
+    _hs_cfg        = _get_mech_cfg(project_data, "highscore")
+    _hs_n          = max(1, min(10, int(_hs_cfg.get("num_entries", 10) or 10)))
+    _hs_l          = max(1, min(5,  int(_hs_cfg.get("initials_length", 3) or 3)))
+    _hs_save       = bool(_hs_cfg.get("save_to_flash", True))
+    _hs_auto       = bool(_hs_cfg.get("auto_submit", True))
+    _hs_def_init   = str(_hs_cfg.get("default_initials", "AAA") or "AAA")[:_hs_l].ljust(_hs_l, "A")
+    _hs_def_score  = int(_hs_cfg.get("default_score", 0) or 0) & 0xFFFF
+    # MECH-13 game-over flow
+    _has_gof       = _mech_on_dash(project_data, "game_over_flow")
+    _gof_cfg       = _get_mech_cfg(project_data, "game_over_flow")
+    _gof_cont_en   = bool(_gof_cfg.get("enable_continue", True))
+    _gof_cd_sec    = int(_gof_cfg.get("continue_countdown_sec", 9) or 9) & 0xFF
+    _gof_cont_max  = int(_gof_cfg.get("continue_max_uses", 3) or 3) & 0xFF
+    _gof_fin_en    = bool(_gof_cfg.get("enable_final_screen", True))
+    _gof_fin_min   = int(_gof_cfg.get("final_min_duration_sec", 3) or 3) & 0xFF
+    _gof_text_cont = str(_gof_cfg.get("text_continue_prompt", "CONTINUE?") or "CONTINUE?")[:16]
+    _gof_text_yes  = str(_gof_cfg.get("text_continue_yes", "YES") or "YES")[:8]
+    _gof_text_no   = str(_gof_cfg.get("text_continue_no",  "NO")  or "NO")[:8]
+    _gof_text_fin  = str(_gof_cfg.get("text_final", "GAME OVER") or "GAME OVER")[:16]
+    # MECH-11 damage popup — tilemap-based floating digits on a FIXED plane.
+    _has_dmg_popup = _mech_on_dash(project_data, "damage_popup")
+    _dp_cfg        = _get_mech_cfg(project_data, "damage_popup")
+    _dp_ttl        = int(_dp_cfg.get("ttl_frames", 40) or 40) & 0xFF
+    _dp_rise       = int(_dp_cfg.get("rise_tiles",  2) or 2) & 0xFF
+    _dp_plane      = "GFX_SCR1" if str(_dp_cfg.get("plane", "SCR2") or "SCR2").upper() == "SCR1" else "GFX_SCR2"
+    _dp_pal        = int(_dp_cfg.get("palette",     1) or 1) & 0x0F
+    # MECH-12 fade transitions (auto-death + manual via fade_out/fade_in triggers)
+    _has_death_fade = _mech_on_dash(project_data, "fade_transitions")
+    _df_cfg          = _get_mech_cfg(project_data, "fade_transitions")
+    _df_wait         = int(_df_cfg.get("wait_frames", 60) or 60) & 0xFF
+    _df_fade         = int(_df_cfg.get("fade_frames", 64) or 64) & 0xFF
+    _df_color        = str(_df_cfg.get("fade_color", "black") or "black")
+    # Total respawn delay = wait + fade when death_fade is on (so the player
+    # sees the full fade before the respawn happens), else the legacy 30 frames.
+    _respawn_delay   = (
+        f"(u8){min(255, _df_wait + _df_fade)}u" if _has_death_fade else "30u"
+    )
+    # MECH-14 Option Satellite — Gradius-style trailing drones. The mechanic
+    # is only meaningful when a player sprite exists (drones follow the player
+    # position). `players` is computed later in this function; we coerce
+    # _has_options to False after that point so downstream codegen gates stay
+    # consistent and don't reference undefined globals.
+    _has_options    = bool(_mech_on_dash(project_data, "option_satellite"))
+    _opt_cfg        = _get_mech_cfg(project_data, "option_satellite")
+    _opt_max        = max(1, min(4, int(_opt_cfg.get("max_options",   2) or 2)))
+    _opt_delay      = max(0, min(60, int(_opt_cfg.get("delay_frames", 12) or 12)))
+    _opt_spacing    = max(0, min(60, int(_opt_cfg.get("spacing_frames", 8) or 8)))
+    _opt_start      = max(0, min(_opt_max, int(_opt_cfg.get("start_count", 0) or 0)))
+    _opt_fire_sync  = bool(_opt_cfg.get("fire_sync_with_player", True))
+    _opt_destruct   = bool(_opt_cfg.get("destructible", False))
+    # Sanity-check the ring buffer size against the worst-case lag: delay + (max-1)*spacing
+    # must fit in 64 frames. Cap silently if user misconfigured (UI should also warn).
+    _opt_worst_lag  = _opt_delay + (_opt_max - 1) * _opt_spacing
+    if _opt_worst_lag >= 64:
+        _opt_spacing = max(0, (63 - _opt_delay) // max(1, _opt_max - 1)) if _opt_max > 1 else 0
+    _dash_btn         = str(feat.get("player_dash_button", "none") or "none")
+    _dash_duration    = int(feat.get("player_dash_duration", 12) or 12)
+    _dash_speed       = int(feat.get("player_dash_speed", 3) or 3)
+    _dash_cooldown    = int(feat.get("player_dash_cooldown", 30) or 30)
+    _dash_iframes     = bool(feat.get("player_dash_iframes", True))
+    _dash_sfx         = int(feat.get("player_dash_sfx", 0xFF) or 0xFF)
     # PAD expression for player fire button
     _fire_btn_expr  = {
         "A": "PAD_A", "B": "PAD_B", "AB": "(PAD_A | PAD_B)"
     }.get(_shoot_btn.upper(), "PAD_A")
+    # PAD expression for dash — _dash_btn is already a full PAD_xxx name from
+    # the centralised ctrl binding (PAD_A / PAD_B / PAD_OPTION / d-pad direction).
+    # Validate it; fall back to PAD_B if anything looks off (defensive).
+    _VALID_PADS = {"PAD_A", "PAD_B", "PAD_OPTION",
+                   "PAD_UP", "PAD_DOWN", "PAD_LEFT", "PAD_RIGHT"}
+    _dash_btn_expr = _dash_btn if _dash_btn in _VALID_PADS else "PAD_B"
     has_paths      = feat.get("has_paths", False)
     has_tilecol      = feat.get("has_tilecol", False)
     has_ladder       = feat.get("has_ladder", False)
@@ -2022,6 +2136,10 @@ def write_autorun_main_c(
     has_dialogues    = feat.get("has_dialogues", False)
     dialog_scenes    = feat.get("dialog_scenes") or []
     has_palfx        = feat.get("has_palfx", False)
+    # MECH-12: ngpc_palfx needs to be compiled in if fade_transitions is on
+    # (used by automatic death fade AND the fade_out/fade_in trigger actions).
+    if _mech_on_dash(project_data, "fade_transitions"):
+        has_palfx = True
     has_waves        = feat.get("has_waves", False)
     has_wave_rand    = feat.get("has_wave_rand", False)
     max_rwave_per_scene = int(feat.get("max_rwave_per_scene", 1) or 1)
@@ -2559,10 +2677,19 @@ def write_autorun_main_c(
         if _sc_best_time: _sc_fixed += 2
         for _f in _sc_custom:
             _sc_fixed += 2 if str(_f.get("type", "u8")) == "u16" else 1
+        # MECH-6 hi-score table — append-in-struct, single flash slot.
+        # Per-entry: N_INIT chars + 2 bytes (score lo/hi, split per StarGunner pattern).
+        if _has_hiscore and _hs_save:
+            _sc_fixed += _hs_n * (_hs_l + 2)
+        # MECH-13 doesn't need any save struct extension — its counter is
+        # per-session (resets at boot), kept as a main-scope u8 (g_gof_cont_used).
 
         c.append('#include "ngpc_flash.h"\n')
         c.append("\n/* ---- Standalone flash save (NGP_ENABLE_FLASH_SAVE=1 required) ---- */\n")
         c.append("#define NGPNG_SAVE_VERSION 2\n")
+        if _has_hiscore and _hs_save:
+            c.append(f"#define NGPNG_HISCORE_N {_hs_n}u\n")
+            c.append(f"#define NGPNG_HISCORE_L {_hs_l}u\n")
         c.append("typedef struct {\n")
         c.append("    u8 magic[4];           /* { 0xCA, 0xFE, 0x20, 0x26 } */\n")
         c.append("    u8 version;\n")
@@ -2593,6 +2720,13 @@ def write_autorun_main_c(
             _fn  = str(_f.get("name", "")).strip()
             _fty = str(_f.get("type", "u8"))
             c.append(f"    {_fty} {_fn};\n")
+        if _has_hiscore and _hs_save:
+            # MECH-6 hi-score table — split score per StarGunner pattern (cc900
+            # alignment can't guarantee u16 single-word storage in a struct).
+            c.append("    /* MECH-6 hi-score table (auto-extended save struct). */\n")
+            c.append("    u8  hs_initials[NGPNG_HISCORE_N][NGPNG_HISCORE_L];\n")
+            c.append("    u8  hs_score_lo[NGPNG_HISCORE_N];\n")
+            c.append("    u8  hs_score_hi[NGPNG_HISCORE_N];\n")
         c.append(f"    u8 _pad[SAVE_SIZE - {_sc_fixed}u]; /* pad to exactly SAVE_SIZE bytes */\n")
         c.append("} NgpngSaveData;\n")
         c.append("static NgpngSaveData s_save;\n")
@@ -2607,6 +2741,22 @@ def write_autorun_main_c(
         c.append("    s_save.resume_scene = 0xFFu;\n")
         c.append("    s_save.checkpoint_scene = 0xFFu;\n")
         c.append("    s_save.checkpoint_region = 0xFFu;\n")
+        if _has_hiscore and _hs_save:
+            # MECH-6 init defaults: fill every entry with the configured
+            # placeholder initials + score. cc900: nested loops use uninit
+            # decls at top of block (then statements), no init-decl mix.
+            c.append("    {\n")
+            c.append("        u8 hi;\n")
+            c.append("        u8 hj;\n")
+            c.append("        for (hi = 0u; hi < NGPNG_HISCORE_N; hi = (u8)(hi + 1u)) {\n")
+            c.append("            for (hj = 0u; hj < NGPNG_HISCORE_L; hj = (u8)(hj + 1u)) {\n")
+            for _idx, _ch in enumerate(_hs_def_init):
+                c.append(f"                if (hj == {_idx}u) s_save.hs_initials[hi][hj] = (u8)'{_ch}';\n")
+            c.append("            }\n")
+            c.append(f"            s_save.hs_score_lo[hi] = (u8)({_hs_def_score}u & 0xFFu);\n")
+            c.append(f"            s_save.hs_score_hi[hi] = (u8)(({_hs_def_score}u >> 8) & 0xFFu);\n")
+            c.append("        }\n")
+            c.append("    }\n")
         c.append("}\n")
         c.append("static void ngpng_save_init(void) {\n")
         c.append("    ngpc_flash_init();\n")
@@ -2630,6 +2780,60 @@ def write_autorun_main_c(
         c.append("    ngpc_flash_save(&s_save);\n")
         c.append("    s_save_dirty = 0u;\n")
         c.append("}\n")
+        if _has_hiscore and _hs_save:
+            # MECH-6 hi-score API — based on StarGunner reference, adapted to
+            # the engine's extended NgpngSaveData struct.
+            c.append("\n/* ---- MECH-6 hi-score API ---- */\n")
+            # qualifies — returns rank 0..N-1 if score beats that slot, 0xFF otherwise.
+            c.append("static u8 ngpng_hiscore_qualifies(u16 score) {\n")
+            c.append("    u8 i;\n")
+            c.append("    u16 entry_score;\n")
+            c.append("    for (i = 0u; i < NGPNG_HISCORE_N; i = (u8)(i + 1u)) {\n")
+            c.append("        entry_score = (u16)((u16)s_save.hs_score_lo[i] | ((u16)s_save.hs_score_hi[i] << 8));\n")
+            c.append("        if (score > entry_score) return i;\n")
+            c.append("    }\n")
+            c.append("    return 0xFFu;\n")
+            c.append("}\n")
+            # submit — shift entries down, insert at rank, mark dirty + commit.
+            c.append("static void ngpng_hiscore_submit(u16 score, const u8 *initials) {\n")
+            c.append("    u8 rank;\n")
+            c.append("    u8 i;\n")
+            c.append("    u8 j;\n")
+            c.append("    rank = ngpng_hiscore_qualifies(score);\n")
+            c.append("    if (rank == 0xFFu) return;\n")
+            c.append("    /* Shift entries down from end to rank+1. cc900-safe: i is u8 strictly > rank. */\n")
+            c.append("    for (i = (u8)(NGPNG_HISCORE_N - 1u); i > rank; i = (u8)(i - 1u)) {\n")
+            c.append("        s_save.hs_score_lo[i] = s_save.hs_score_lo[i - 1u];\n")
+            c.append("        s_save.hs_score_hi[i] = s_save.hs_score_hi[i - 1u];\n")
+            c.append("        for (j = 0u; j < NGPNG_HISCORE_L; j = (u8)(j + 1u)) {\n")
+            c.append("            s_save.hs_initials[i][j] = s_save.hs_initials[i - 1u][j];\n")
+            c.append("        }\n")
+            c.append("    }\n")
+            c.append("    s_save.hs_score_lo[rank] = (u8)(score & 0xFFu);\n")
+            c.append("    s_save.hs_score_hi[rank] = (u8)((score >> 8) & 0xFFu);\n")
+            c.append("    for (j = 0u; j < NGPNG_HISCORE_L; j = (u8)(j + 1u)) {\n")
+            c.append("        s_save.hs_initials[rank][j] = initials ? initials[j] : (u8)'A';\n")
+            c.append("    }\n")
+            c.append("    s_save_dirty = 1u;\n")
+            c.append("    ngpc_flash_save(&s_save);  /* commit immediately — hi-score is rare, don't risk losing it */\n")
+            c.append("    s_save_dirty = 0u;\n")
+            c.append("}\n")
+            # clear — reset to defaults (used by clear_highscores trigger).
+            c.append("static void ngpng_hiscore_clear(void) {\n")
+            c.append("    u8 i;\n")
+            c.append("    u8 j;\n")
+            c.append("    for (i = 0u; i < NGPNG_HISCORE_N; i = (u8)(i + 1u)) {\n")
+            c.append(f"        s_save.hs_score_lo[i] = (u8)({_hs_def_score}u & 0xFFu);\n")
+            c.append(f"        s_save.hs_score_hi[i] = (u8)(({_hs_def_score}u >> 8) & 0xFFu);\n")
+            c.append("        for (j = 0u; j < NGPNG_HISCORE_L; j = (u8)(j + 1u)) {\n")
+            for _idx, _ch in enumerate(_hs_def_init):
+                c.append(f"            if (j == {_idx}u) s_save.hs_initials[i][j] = (u8)'{_ch}';\n")
+            c.append("        }\n")
+            c.append("    }\n")
+            c.append("    s_save_dirty = 1u;\n")
+            c.append("    ngpc_flash_save(&s_save);\n")
+            c.append("    s_save_dirty = 0u;\n")
+            c.append("}\n")
     if has_palfx:
         c.append('#include "fx/ngpc_palfx.h"\n')
     if has_waves and has_enemy:
@@ -2639,7 +2843,14 @@ def write_autorun_main_c(
         _sync_optional_module(template_root, "optional/ngpc_rwave")
         c.append('#include "../optional/ngpc_rwave/ngpc_rwave.h"\n')
         c.append('#include "ngpc_rtc.h"  /* ngpc_rwave_seed_rtc() */\n')
-    if bool((project_data or {}).get("no_sysfont")):
+    # no_sysfont is only effective when a custom font PNG is also configured.
+    # If the user enabled the checkbox but never provided a font, fall back to
+    # sysfont silently — otherwise we'd emit `#include "ngpc_custom_font.h"`
+    # for a header that the font-export step never produced → build fails.
+    _no_sysfont_eff = bool((project_data or {}).get("no_sysfont")) and bool(
+        str((project_data or {}).get("custom_font_png") or "").strip()
+    )
+    if _no_sysfont_eff:
         c.append("#ifdef NO_SYSFONT\n")
         c.append('#include "ngpc_custom_font.h"\n')
         c.append("#endif\n")
@@ -2707,6 +2918,10 @@ def write_autorun_main_c(
         dict(p, name=re.sub(r"[^a-zA-Z0-9_]+", "_", str(p["name"])).strip("_"))
         for p in (player_sprites or []) if p.get("name")
     ]
+    # MECH-14: coerce off if no player — downstream codegen relies on
+    # `players[0]['name']` for the ring-buffer push site.
+    if not players:
+        _has_options = False
     # Mixed-project TD detection: compute BEFORE _emit_player_ctrl_macros is called.
     # True when a platformer project has at least one top-down scene whose player form
     # uses vehicle or relative control — controls & statics are shared across scenes.
@@ -3298,6 +3513,8 @@ def write_autorun_main_c(
         c.append('    u16 tile;\n')
         c.append('    s8 vx;\n')
         c.append('    s8 vy;\n')
+        c.append('    u8 bounce_flags;  /* MECH-3: 1=H walls, 2=V top/bot; 0=despawn at edge */\n')
+        c.append('    u8 bounce_sfx;    /* MECH-3: SFX id on bounce; 0xFF=silent */\n')
         c.append('} NgpngEnemyBullet;\n')
         c.append('\n')
     # --- NgpngPlayerShot: player projectiles ---
@@ -3326,6 +3543,8 @@ def write_autorun_main_c(
         c.append("    u16 tile;\n")
         c.append("    s8 vx;\n")
         c.append("    s8 vy;\n")
+        c.append("    u8 bounce_flags;  /* MECH-3: 1=H walls, 2=V top/bot; 0=despawn at edge */\n")
+        c.append("    u8 bounce_sfx;    /* MECH-3: SFX id on bounce; 0xFF=silent */\n")
         c.append("} NgpngPlayerShot;\n\n")
     # --- Forward declarations (only for types that were emitted) ---
     if has_shooting:
@@ -3629,7 +3848,7 @@ def write_autorun_main_c(
         c.append('}\n')
         c.append('\n')
     if has_shooting:
-        c.append('static void ngpng_demo_fire_player(NgpngPlayerShot *shots, u8 *active_count, u8 *alloc_idx, u16 tile, u8 pal, u8 flags, s16 ox, s16 oy, s8 hb_x, s8 hb_y, u8 hb_w, u8 hb_h, u8 damage, s8 kb_x, s8 kb_y, s8 vx_in, s8 vy_in, s16 px, s16 py, s16 cam_px, s16 cam_py)\n')
+        c.append('static void ngpng_demo_fire_player(NgpngPlayerShot *shots, u8 *active_count, u8 *alloc_idx, u16 tile, u8 pal, u8 flags, s16 ox, s16 oy, s8 hb_x, s8 hb_y, u8 hb_w, u8 hb_h, u8 damage, s8 kb_x, s8 kb_y, s8 vx_in, s8 vy_in, u8 bounce_flags_in, u8 bounce_sfx_in, s16 px, s16 py, s16 cam_px, s16 cam_py)\n')
         c.append('{\n')
         c.append('    u8 k;\n')
         c.append('    s16 world_x;\n')
@@ -3667,6 +3886,8 @@ def write_autorun_main_c(
         c.append('            shots[i].last_sy = (s16)(sy + oy);\n')
         c.append('            shots[i].vx = vx_in;\n')
         c.append('            shots[i].vy = vy_in;\n')
+        c.append('            shots[i].bounce_flags = bounce_flags_in;\n')
+        c.append('            shots[i].bounce_sfx   = bounce_sfx_in;\n')
         c.append('            ngpc_sprite_set(slot, (u8)((u16)shots[i].last_sx & 0xFFu), (u8)((u16)shots[i].last_sy & 0xFFu), tile, pal, flags);\n')
         c.append('            *active_count = (u8)(*active_count + 1u);\n')
         c.append('            *alloc_idx = (u8)(i + 1u);\n')
@@ -3685,7 +3906,7 @@ def write_autorun_main_c(
         c.append('}\n')
         c.append('\n')
     if has_bullets:
-        c.append('static void ngpng_enemy_bullet_spawn(NgpngEnemyBullet *shots, u8 *active_count, u8 *alloc_idx, u16 tile, u8 pal, u8 flags, s16 ox, s16 oy, s8 hb_x, s8 hb_y, u8 hb_w, u8 hb_h, u8 damage, s8 kb_x, s8 kb_y, s8 vx_in, s8 vy_in, s16 ex, s16 ey, s16 player_world_y, s16 cam_px, s16 cam_py)\n')
+        c.append('static void ngpng_enemy_bullet_spawn(NgpngEnemyBullet *shots, u8 *active_count, u8 *alloc_idx, u16 tile, u8 pal, u8 flags, s16 ox, s16 oy, s8 hb_x, s8 hb_y, u8 hb_w, u8 hb_h, u8 damage, s8 kb_x, s8 kb_y, s8 vx_in, s8 vy_in, u8 bounce_flags_in, u8 bounce_sfx_in, s16 ex, s16 ey, s16 player_world_y, s16 cam_px, s16 cam_py)\n')
         c.append('{\n')
         c.append('    u8 k;\n')
         c.append('    s8 vy;\n')
@@ -3730,6 +3951,8 @@ def write_autorun_main_c(
         c.append('            shots[i].last_sy = (s16)(sy + oy);\n')
         c.append('            shots[i].vx = vx_in;\n')
         c.append('            shots[i].vy = vy;\n')
+        c.append('            shots[i].bounce_flags = bounce_flags_in;\n')
+        c.append('            shots[i].bounce_sfx   = bounce_sfx_in;\n')
         c.append('            ngpc_sprite_set(slot, (u8)((u16)shots[i].last_sx & 0xFFu), (u8)((u16)shots[i].last_sy & 0xFFu), tile, pal, flags);\n')
         c.append('            *active_count = (u8)(*active_count + 1u);\n')
         c.append('            *alloc_idx = (u8)(i + 1u);\n')
@@ -3761,9 +3984,32 @@ def write_autorun_main_c(
         c.append('        processed = (u8)(processed + 1u);\n')
         c.append('        shots[i].world_x = (s16)(shots[i].world_x + shots[i].vx);\n')
         c.append('        shots[i].world_y = (s16)(shots[i].world_y + shots[i].vy);\n')
+        c.append('        /* MECH-3 bounce — clamp on camera viewport edges and reverse v. */\n')
+        c.append('        if (shots[i].bounce_flags & 1u) {\n')
+        c.append('            if (shots[i].world_x < cam_px) {\n')
+        c.append('                shots[i].world_x = cam_px;\n')
+        c.append('                shots[i].vx = (s8)(-shots[i].vx);\n')
+        c.append('                if (shots[i].bounce_sfx != 0xFFu) Sfx_Play(shots[i].bounce_sfx);\n')
+        c.append('            } else if (shots[i].world_x > (s16)(cam_px + 152)) {\n')
+        c.append('                shots[i].world_x = (s16)(cam_px + 152);\n')
+        c.append('                shots[i].vx = (s8)(-shots[i].vx);\n')
+        c.append('                if (shots[i].bounce_sfx != 0xFFu) Sfx_Play(shots[i].bounce_sfx);\n')
+        c.append('            }\n')
+        c.append('        }\n')
+        c.append('        if (shots[i].bounce_flags & 2u) {\n')
+        c.append('            if (shots[i].world_y < cam_py) {\n')
+        c.append('                shots[i].world_y = cam_py;\n')
+        c.append('                shots[i].vy = (s8)(-shots[i].vy);\n')
+        c.append('                if (shots[i].bounce_sfx != 0xFFu) Sfx_Play(shots[i].bounce_sfx);\n')
+        c.append('            } else if (shots[i].world_y > (s16)(cam_py + 144)) {\n')
+        c.append('                shots[i].world_y = (s16)(cam_py + 144);\n')
+        c.append('                shots[i].vy = (s8)(-shots[i].vy);\n')
+        c.append('                if (shots[i].bounce_sfx != 0xFFu) Sfx_Play(shots[i].bounce_sfx);\n')
+        c.append('            }\n')
+        c.append('        }\n')
         c.append('        sx_chk = (s16)(shots[i].world_x - cam_px);\n')
         c.append('        sy_chk = (s16)(shots[i].world_y - cam_py);\n')
-        c.append('        if (sx_chk < -24 || sx_chk > 184 || sy_chk < -24 || sy_chk > 184) {\n')
+        c.append('        if (shots[i].bounce_flags == 0u && (sx_chk < -24 || sx_chk > 184 || sy_chk < -24 || sy_chk > 184)) {\n')
         c.append('            ngpng_player_shot_kill(shots, active_count, i);\n')
         c.append('            continue;\n')
         c.append('        }\n')
@@ -3795,6 +4041,15 @@ def write_autorun_main_c(
         c.append('                hflen = sc->type_hit_flash[enemies[j].type];\n')
         c.append('                if (hflen > 0u) enemies[j].hit_flash = hflen;\n')
         c.append('            }\n')
+        if _has_dmg_popup:
+            # MECH-11 — fire a damage popup at the impact position (only on
+            # non-fatal hits; death already has its own FX/animation).
+            c.append('            if (enemies[j].hp > 0u) {\n')
+            c.append('                u8 _dpx, _dpy;\n')
+            c.append('                _dpx = (u8)(((u16)(enemies[j].world_x - cam_px)) >> 3);\n')
+            c.append('                _dpy = (u8)(((u16)(enemies[j].world_y - cam_py)) >> 3);\n')
+            c.append('                ngpng_dmg_popup_spawn(_dpx, _dpy, shots[i].damage);\n')
+            c.append('            }\n')
         c.append('            if (enemies[j].hp == 0u) {\n')
         c.append('                /* cc900: keep all decls at the top of this block — no initialisers\n')
         c.append('                 * mixed with statements. Assign immediately below. */\n')
@@ -3899,7 +4154,15 @@ def write_autorun_main_c(
         c.append('        kb_y = ngpng_type_attack_s8(sc->attack_hitbox_kb_y, 0, sc->type_role_count, btype, 0);\n')
         c.append('        bvx = type_bullet_vx ? type_bullet_vx[etype] : (s8)-3;\n')
         c.append('        bvy = type_bullet_vy ? type_bullet_vy[etype] : (s8)0;\n')
-        c.append('        ngpng_enemy_bullet_spawn(shots, shot_active_count, shot_alloc_idx, btile, bpal, bflags, box, boy, hb_x, hb_y, hb_w, hb_h, damage, kb_x, kb_y, bvx, bvy, enemies[i].world_x, enemies[i].world_y, player_world_y, cam_px, cam_py);\n')
+        c.append('        {\n')
+        c.append('            /* MECH-3 bounce: lookup on the BULLET sprite type (btype), not\n')
+        c.append('             * the shooter. Defaults to 0/0xFF = no bounce + silent. */\n')
+        c.append('            u8 bbflags;\n')
+        c.append('            u8 bbsfx;\n')
+        c.append('            bbflags = sc->type_bounce_flags ? sc->type_bounce_flags[btype] : 0u;\n')
+        c.append('            bbsfx   = sc->type_bounce_sfx   ? sc->type_bounce_sfx[btype]   : 0xFFu;\n')
+        c.append('            ngpng_enemy_bullet_spawn(shots, shot_active_count, shot_alloc_idx, btile, bpal, bflags, box, boy, hb_x, hb_y, hb_w, hb_h, damage, kb_x, kb_y, bvx, bvy, bbflags, bbsfx, enemies[i].world_x, enemies[i].world_y, player_world_y, cam_px, cam_py);\n')
+        c.append('        }\n')
         c.append('        /* Optional SFX on fire — 0xFF sentinel = silent (default for legacy projects). */\n')
         c.append('        if (sc->type_sfx_fire && sc->type_sfx_fire[etype] != 0xFFu) {\n')
         c.append('            Sfx_Play(sc->type_sfx_fire[etype]);\n')
@@ -3930,12 +4193,74 @@ def write_autorun_main_c(
         c.append('        processed = (u8)(processed + 1u);\n')
         c.append('        shots[i].world_x = (s16)(shots[i].world_x + shots[i].vx);\n')
         c.append('        shots[i].world_y = (s16)(shots[i].world_y + shots[i].vy);\n')
+        c.append('        /* MECH-3 bounce — same logic as player shots, mirrored. */\n')
+        c.append('        if (shots[i].bounce_flags & 1u) {\n')
+        c.append('            if (shots[i].world_x < cam_px) {\n')
+        c.append('                shots[i].world_x = cam_px;\n')
+        c.append('                shots[i].vx = (s8)(-shots[i].vx);\n')
+        c.append('                if (shots[i].bounce_sfx != 0xFFu) Sfx_Play(shots[i].bounce_sfx);\n')
+        c.append('            } else if (shots[i].world_x > (s16)(cam_px + 152)) {\n')
+        c.append('                shots[i].world_x = (s16)(cam_px + 152);\n')
+        c.append('                shots[i].vx = (s8)(-shots[i].vx);\n')
+        c.append('                if (shots[i].bounce_sfx != 0xFFu) Sfx_Play(shots[i].bounce_sfx);\n')
+        c.append('            }\n')
+        c.append('        }\n')
+        c.append('        if (shots[i].bounce_flags & 2u) {\n')
+        c.append('            if (shots[i].world_y < cam_py) {\n')
+        c.append('                shots[i].world_y = cam_py;\n')
+        c.append('                shots[i].vy = (s8)(-shots[i].vy);\n')
+        c.append('                if (shots[i].bounce_sfx != 0xFFu) Sfx_Play(shots[i].bounce_sfx);\n')
+        c.append('            } else if (shots[i].world_y > (s16)(cam_py + 144)) {\n')
+        c.append('                shots[i].world_y = (s16)(cam_py + 144);\n')
+        c.append('                shots[i].vy = (s8)(-shots[i].vy);\n')
+        c.append('                if (shots[i].bounce_sfx != 0xFFu) Sfx_Play(shots[i].bounce_sfx);\n')
+        c.append('            }\n')
+        c.append('        }\n')
         c.append('        sx_chk = (s16)(shots[i].world_x - cam_px);\n')
         c.append('        sy_chk = (s16)(shots[i].world_y - cam_py);\n')
-        c.append('        if (sx_chk < -24 || sx_chk > 184 || sy_chk < -24 || sy_chk > 184) {\n')
+        c.append('        if (shots[i].bounce_flags == 0u && (sx_chk < -24 || sx_chk > 184 || sy_chk < -24 || sy_chk > 184)) {\n')
         c.append('            ngpng_enemy_bullet_kill(shots, active_count, i);\n')
         c.append('            continue;\n')
         c.append('        }\n')
+        # MECH-14 destructible drones — option satellites absorb enemy bullets
+        # before they reach the player. Iterate the lagged drone positions and
+        # AABB-check against this bullet. On hit: kill bullet, decrement count
+        # (the last drone in the trail is the one that's "lost"), continue to
+        # the next bullet. Drones use g_opt_hb_w/h sized hitboxes centred on
+        # the drone sprite position.
+        if _has_options:
+            c.append('#if NGPNG_OPT_DESTRUCT\n')
+            c.append('        if (!g_opt_scene_disabled && g_opt_count > 0u) {\n')
+            c.append('            u8 _od_i;\n')
+            c.append('            u8 _od_hit = 0u;\n')
+            c.append('            s16 _od_bx = (s16)((shots[i].world_x - cam_px) + shots[i].hb_x);\n')
+            c.append('            s16 _od_by = (s16)((shots[i].world_y - cam_py) + shots[i].hb_y);\n')
+            c.append('            u8  _od_bw = shots[i].hb_w;\n')
+            c.append('            u8  _od_bh = shots[i].hb_h;\n')
+            c.append('            for (_od_i = 0u; _od_i < g_opt_count && _od_i < NGPNG_OPT_MAX && !_od_hit; ++_od_i) {\n')
+            c.append('                u8 _od_lag = (u8)(NGPNG_OPT_DELAY + _od_i * NGPNG_OPT_SPACING);\n')
+            c.append('                u8 _od_idx;\n')
+            c.append('                s16 _od_dx; s16 _od_dy;\n')
+            c.append('                if (_od_lag > NGPNG_OPT_HIST_MASK) _od_lag = (u8)NGPNG_OPT_HIST_MASK;\n')
+            c.append('                _od_idx = (u8)((g_opt_hist_head - _od_lag) & NGPNG_OPT_HIST_MASK);\n')
+            c.append('                _od_dx = (s16)(g_opt_hist_x[_od_idx] - cam_px);\n')
+            c.append('                _od_dy = (s16)(g_opt_hist_y[_od_idx] - cam_py);\n')
+            c.append('#if (NGPNG_OPT_FORMATION == NGPNG_OPT_FORM_V)\n')
+            c.append('                _od_dy = (s16)(_od_dy + (s16)((s8)((_od_i & 1u) ? 1 : -1) * (s8)(8 * ((_od_i >> 1) + 1u))));\n')
+            c.append('#elif (NGPNG_OPT_FORMATION == NGPNG_OPT_FORM_PARALLEL)\n')
+            c.append('                _od_dx = (s16)(_od_dx + (s16)((s8)((_od_i & 1u) ? 1 : -1) * (s8)(8 * ((_od_i >> 1) + 1u))));\n')
+            c.append('#endif\n')
+            c.append('                if (ngpng_rects_overlap(_od_dx, _od_dy, g_opt_hb_w, g_opt_hb_h, _od_bx, _od_by, _od_bw, _od_bh)) {\n')
+            c.append('                    _od_hit = 1u;\n')
+            c.append('                }\n')
+            c.append('            }\n')
+            c.append('            if (_od_hit) {\n')
+            c.append('                ngpng_enemy_bullet_kill(shots, active_count, i);\n')
+            c.append('                g_opt_count = (u8)(g_opt_count - 1u);\n')
+            c.append('                continue;\n')
+            c.append('            }\n')
+            c.append('        }\n')
+            c.append('#endif\n')
         c.append('        if (*invul == 0u && *hp > 0u) {\n')
         c.append('            bx = (s16)((shots[i].world_x - cam_px) + shots[i].hb_x);\n')
         c.append('            by = (s16)((shots[i].world_y - cam_py) + shots[i].hb_y);\n')
@@ -4190,6 +4515,72 @@ def write_autorun_main_c(
             c.append("static u8  s_dgn_cluster_count = 0u;\n")
             c.append("#endif\n")
 
+    # MECH-14 Option Satellite — ring buffer of recent player positions used to
+    # render N drones trailing behind the player at lag = NGPNG_OPT_DELAY +
+    # i * NGPNG_OPT_SPACING. Sprite visual + bullet are resolved per-scene from
+    # the option.sprite_type and option.bullet_sprite config (falls back to the
+    # player's bullet appearance if either name is absent in the current scene).
+    # Formations: trail = single-file behind, v = stacked above/below trail,
+    # parallel = mirrored left/right of player.
+    if _has_options and players:
+        c.append("/* ---- MECH-14 Option Satellite state ---- */\n")
+        c.append("#define NGPNG_OPT_HIST       64u\n")
+        c.append("#define NGPNG_OPT_HIST_MASK  63u\n")
+        c.append(f"#define NGPNG_OPT_MAX        {_opt_max}u\n")
+        c.append(f"#define NGPNG_OPT_DELAY      {_opt_delay}u\n")
+        c.append(f"#define NGPNG_OPT_SPACING    {_opt_spacing}u\n")
+        c.append(f"#define NGPNG_OPT_START      {_opt_start}u\n")
+        c.append("#define NGPNG_OPT_FORM_TRAIL    0u\n")
+        c.append("#define NGPNG_OPT_FORM_V        1u\n")
+        c.append("#define NGPNG_OPT_FORM_PARALLEL 2u\n")
+        _opt_form_id = {"trail": 0, "v": 1, "parallel": 2}.get(
+            str(_opt_cfg.get("formation", "trail") or "trail").lower(), 0
+        )
+        c.append(f"#define NGPNG_OPT_FORMATION  {_opt_form_id}u\n")
+        c.append(f"#define NGPNG_OPT_DESTRUCT   {1 if _opt_destruct else 0}u\n")
+        c.append(f"#define NGPNG_OPT_FIRE_SYNC  {1 if _opt_fire_sync else 0}u\n")
+        # OAM slot base — placed immediately after the prop block so the
+        # allocation tracks project-level changes to enemy/fx/prop counts.
+        # Project-overridable via Makefile if a specific layout is needed.
+        c.append("#ifndef NGPNG_AUTORUN_OPTION_SPR_BASE\n")
+        c.append("#define NGPNG_AUTORUN_OPTION_SPR_BASE ((u8)(NGPNG_AUTORUN_PROP_SPR_BASE + NGPNG_AUTORUN_PROP_SPR_COUNT))\n")
+        c.append("#endif\n")
+        # Hard runtime sanity: 4 options after props must fit in the 64-slot OAM.
+        c.append("#if (NGPNG_AUTORUN_OPTION_SPR_BASE + NGPNG_OPT_MAX) > 64\n")
+        c.append("#error \"MECH-14: option satellites exceed OAM budget. Reduce max_options or PROP_SPR_COUNT.\"\n")
+        c.append("#endif\n")
+        c.append("static s16 g_opt_hist_x[NGPNG_OPT_HIST];\n")
+        c.append("static s16 g_opt_hist_y[NGPNG_OPT_HIST];\n")
+        c.append("static u8  g_opt_hist_head = 0u;\n")
+        c.append("static u8  g_opt_count = NGPNG_OPT_START;\n")
+        c.append("static u8  g_opt_scene_disabled = 0u;\n")
+        # Resolved option sprite at scene-enter (visual). Index in scene's
+        # type_role table; 0xFFu = no override → use player_bullet_tile as
+        # a fallback (so options remain visible even without configured sprite).
+        c.append("static u8  g_opt_type        = 0xFFu;\n")
+        c.append("static u16 g_opt_tile        = 0u;\n")
+        c.append("static u8  g_opt_pal         = 0u;\n")
+        c.append("static u8  g_opt_flags       = 0u;\n")
+        c.append("static s16 g_opt_ox          = 0;\n")
+        c.append("static s16 g_opt_oy          = 0;\n")
+        # Drone bullet — separate sprite if configured, else falls back to the
+        # player's bullet at fire time.
+        c.append("static u8  g_opt_bullet_type = 0xFFu;\n")
+        c.append("static u16 g_opt_bullet_tile = 0u;\n")
+        c.append("static u8  g_opt_bullet_pal  = 0u;\n")
+        c.append("static u8  g_opt_bullet_flags= 0u;\n")
+        c.append("static s16 g_opt_bullet_ox   = 0;\n")
+        c.append("static s16 g_opt_bullet_oy   = 0;\n")
+        # Hitbox of drone for destructible mode (size in pixels). Filled from
+        # the scene's hitbox table at scene-enter (or 8x8 default if no override).
+        c.append("static u8  g_opt_hb_w        = 8u;\n")
+        c.append("static u8  g_opt_hb_h        = 8u;\n\n")
+
+    # Default — referenced at the player CTRL_UPDATE site (line ~5973) under a
+    # `has_topdown_physics` gate that can fire WITHOUT the facing block below
+    # initialising it. Without this default the export crashes with
+    # UnboundLocalError when a project uses topdown physics but no facing.
+    _has_td_walk_anims = False
     if has_topdown_facing or _has_mixed_td_relative or _has_mixed_td_vehicle:
         c.append("/* ---- Top-down directional facing ---- */\n")
         c.append("/* N=0 NE=1 E=2 SE=3 S=4 SW=5 W=6 NW=7  (values x16 fixed-point) */\n")
@@ -4386,6 +4777,186 @@ def write_autorun_main_c(
         # No bullet sprite configured yet — array of 0xFFu (disabled, same as before)
         _sc_count = len((project_data or {}).get("scenes") or []) or 1
         c.append(f"static const u8 s_ngpng_player_btype[NGP_SCENE_COUNT] = {{{', '.join(['0xFFu'] * _sc_count)}}};\n\n")
+
+    # MECH-14: per-scene type-index resolution for the drone sprite + drone
+    # bullet sprite + per-scene override (count + disabled). Mirrors the
+    # s_ngpng_player_btype pattern. Each entry is 0xFFu if the named sprite is
+    # not present in that scene's seen_types — runtime falls back to player
+    # bullet appearance and the project-level start count.
+    if _has_options:
+        _sc_list_opt = (project_data or {}).get("scenes") or []
+        _opt_sprite_name = str(_opt_cfg.get("sprite_type", "") or "")
+        _opt_bullet_name = str(_opt_cfg.get("bullet_sprite", "") or "")
+        _opt_btype_vals: list[str] = []
+        _opt_bullet_btype_vals: list[str] = []
+        _opt_disabled_vals: list[str] = []
+        _opt_count_override_vals: list[str] = []
+        for _sc in _sc_list_opt:
+            if not isinstance(_sc, dict):
+                _opt_btype_vals.append("0xFFu")
+                _opt_bullet_btype_vals.append("0xFFu")
+                _opt_disabled_vals.append("0u")
+                _opt_count_override_vals.append("0xFFu")
+                continue
+            _seen_opt: list[str] = []
+            for _spr in (_sc.get("sprites") or []):
+                _rel = str(_spr.get("file") or "")
+                _nm = Path(_rel).stem if _rel else str(_spr.get("name") or "")
+                if _nm:
+                    _seen_opt.append(_nm)
+            _opt_idx = _seen_opt.index(_opt_sprite_name) if (_opt_sprite_name and _opt_sprite_name in _seen_opt) else None
+            _opt_btype_vals.append(f"{_opt_idx}u" if _opt_idx is not None else "0xFFu")
+            _opt_b_idx = _seen_opt.index(_opt_bullet_name) if (_opt_bullet_name and _opt_bullet_name in _seen_opt) else None
+            _opt_bullet_btype_vals.append(f"{_opt_b_idx}u" if _opt_b_idx is not None else "0xFFu")
+            _sc_opt = _sc.get("option_satellite") or {}
+            if not isinstance(_sc_opt, dict):
+                _sc_opt = {}
+            _opt_disabled_vals.append("1u" if bool(_sc_opt.get("disabled")) else "0u")
+            _override = _sc_opt.get("override_count")
+            if isinstance(_override, int) and 0 <= _override <= 4:
+                _opt_count_override_vals.append(f"{_override}u")
+            else:
+                _opt_count_override_vals.append("0xFFu")
+        # Empty project? at least one slot so the array is well-formed
+        if not _opt_btype_vals:
+            _opt_btype_vals          = ["0xFFu"]
+            _opt_bullet_btype_vals   = ["0xFFu"]
+            _opt_disabled_vals       = ["0u"]
+            _opt_count_override_vals = ["0xFFu"]
+        c.append(f"static const u8 s_ngpng_option_type[NGP_SCENE_COUNT] = {{{', '.join(_opt_btype_vals)}}};\n")
+        c.append(f"static const u8 s_ngpng_option_bullet_type[NGP_SCENE_COUNT] = {{{', '.join(_opt_bullet_btype_vals)}}};\n")
+        c.append(f"static const u8 s_ngpng_option_scene_disabled[NGP_SCENE_COUNT] = {{{', '.join(_opt_disabled_vals)}}};\n")
+        c.append(f"static const u8 s_ngpng_option_count_override[NGP_SCENE_COUNT] = {{{', '.join(_opt_count_override_vals)}}};\n\n")
+        # Resolution helper — called from every scene-enter site so g_opt_*
+        # state stays in sync with the current scene. Uses ngpng_entity_sprite_info
+        # to fill tile/pal/flags/oxoy from the scene's type tables.
+        c.append("static void ngpng_opt_scene_enter(const NgpSceneDef *sc, u8 scene_idx)\n{\n")
+        c.append("    if (scene_idx >= (u8)NGP_SCENE_COUNT) return;\n")
+        c.append("    g_opt_scene_disabled = s_ngpng_option_scene_disabled[scene_idx];\n")
+        c.append("    g_opt_type           = s_ngpng_option_type[scene_idx];\n")
+        c.append("    g_opt_bullet_type    = s_ngpng_option_bullet_type[scene_idx];\n")
+        # Apply per-scene count override (or fall back to project start_count)
+        c.append("    {\n")
+        c.append("        u8 _ov = s_ngpng_option_count_override[scene_idx];\n")
+        c.append("        g_opt_count = (_ov == 0xFFu) ? (u8)NGPNG_OPT_START : _ov;\n")
+        c.append("        if (g_opt_count > NGPNG_OPT_MAX) g_opt_count = (u8)NGPNG_OPT_MAX;\n")
+        c.append("    }\n")
+        c.append("    /* Default visual = invalid; resolved below if a sprite is configured. */\n")
+        c.append("    g_opt_tile  = 0u; g_opt_pal = 0u; g_opt_flags = 0u; g_opt_ox = 0; g_opt_oy = 0;\n")
+        c.append("    g_opt_bullet_tile = 0u; g_opt_bullet_pal = 0u; g_opt_bullet_flags = 0u;\n")
+        c.append("    g_opt_bullet_ox   = 0; g_opt_bullet_oy   = 0;\n")
+        c.append("    g_opt_hb_w = 8u; g_opt_hb_h = 8u;\n")
+        c.append("#if NGPNG_HAS_ENEMY || NGPNG_HAS_FX || NGPNG_HAS_PROP_ACTOR\n")
+        c.append("    if (sc && g_opt_type != 0xFFu && g_opt_type < sc->type_role_count) {\n")
+        c.append("        (void)ngpng_entity_sprite_info(sc, g_opt_type, 0u,\n")
+        c.append("            &g_opt_tile, &g_opt_pal, &g_opt_flags, &g_opt_ox, &g_opt_oy);\n")
+        c.append("        /* Hitbox W/H — used for destructible mode AABB collision */\n")
+        c.append("        if (sc->hitbox_w) g_opt_hb_w = sc->hitbox_w[g_opt_type];\n")
+        c.append("        if (sc->hitbox_h) g_opt_hb_h = sc->hitbox_h[g_opt_type];\n")
+        c.append("        if (g_opt_hb_w == 0u) g_opt_hb_w = 8u;\n")
+        c.append("        if (g_opt_hb_h == 0u) g_opt_hb_h = 8u;\n")
+        c.append("    }\n")
+        c.append("    if (sc && g_opt_bullet_type != 0xFFu && g_opt_bullet_type < sc->type_role_count) {\n")
+        c.append("        (void)ngpng_entity_sprite_info(sc, g_opt_bullet_type, 0u,\n")
+        c.append("            &g_opt_bullet_tile, &g_opt_bullet_pal, &g_opt_bullet_flags,\n")
+        c.append("            &g_opt_bullet_ox, &g_opt_bullet_oy);\n")
+        c.append("    }\n")
+        c.append("#else\n")
+        c.append("    (void)sc;\n")
+        c.append("#endif\n")
+        c.append("}\n\n")
+
+    if _has_wave_scroll:
+        # MECH-4 wave scroll-based — emit per-scene mode table.
+        # Each entry: 0=frame, 1=scroll_x, 2=scroll_y. The runtime branches on
+        # this per-scene value at the wave update site.
+        _wm_vals = []
+        for _sc in ((project_data or {}).get("scenes") or []):
+            if not isinstance(_sc, dict):
+                _wm_vals.append("0u")
+                continue
+            _mode = str((_sc.get("wave_trigger_mode") or "frame")).strip().lower()
+            _wm_vals.append({"frame": "0u", "scroll_x": "1u", "scroll_y": "2u"}.get(_mode, "0u"))
+        if not _wm_vals:
+            _wm_vals = ["0u"]
+        c.append("/* MECH-4 per-scene wave trigger mode (0=frame, 1=scroll_x, 2=scroll_y). */\n")
+        c.append(f"static const u8 s_ngpng_wave_mode[NGP_SCENE_COUNT] = {{{', '.join(_wm_vals)}}};\n")
+        c.append("static u8  g_wave_scroll_cursor;     /* next entry index in scroll mode */\n")
+        c.append("static s16 g_wave_scroll_last_pos;   /* last seen cam_px/py — used for transitions */\n\n")
+
+    if _has_gof:
+        # MECH-13 Game-over flow state machine — file-scope so trigger actions
+        # can transition state. BSS-init, cc900-safe. continues_used is a
+        # per-session counter (resets at boot, not persisted).
+        c.append("/* MECH-13 game-over flow state. */\n")
+        c.append("#define NGPNG_GOF_STATE_NONE      0u\n")
+        c.append("#define NGPNG_GOF_STATE_CONTINUE  1u\n")
+        c.append("#define NGPNG_GOF_STATE_FINAL     2u\n")
+        c.append("#define NGPNG_GOF_STATE_HIGHSCORE 3u\n")
+        c.append("static u8  g_gof_state;\n")
+        c.append("static u16 g_gof_timer;\n")
+        c.append("static u8  g_gof_cont_used;  /* per-session counter, resets at boot */\n")
+        c.append("\n")
+    if _has_dmg_popup:
+        # MECH-11 damage popup pool — file-scope so the helper functions can
+        # access it. BSS-init (no runtime initialiser → cc900 safe).
+        c.append("/* MECH-11 damage popup pool — 4 slots, tilemap-rendered digits. */\n")
+        c.append("#define NGPNG_DMG_POPUP_MAX 4u\n")
+        c.append("static u8 g_dmg_popup_active[NGPNG_DMG_POPUP_MAX];\n")
+        c.append("static u8 g_dmg_popup_ttl[NGPNG_DMG_POPUP_MAX];\n")
+        c.append("static u8 g_dmg_popup_sx[NGPNG_DMG_POPUP_MAX];\n")
+        c.append("static u8 g_dmg_popup_sy[NGPNG_DMG_POPUP_MAX];\n")
+        c.append("static u8 g_dmg_popup_value[NGPNG_DMG_POPUP_MAX];\n")
+        c.append("\n")
+        c.append("/* Allocate a popup slot (or recycle the oldest if all are busy)\n")
+        c.append(" * and prime its position + value. Tile-rendering happens in\n")
+        c.append(" * ngpng_dmg_popup_update() below. */\n")
+        c.append("static void ngpng_dmg_popup_spawn(u8 sx_tile, u8 sy_tile, u8 value) {\n")
+        c.append("    u8 i;\n")
+        c.append("    u8 victim;\n")
+        c.append("    u8 victim_ttl;\n")
+        c.append("    victim = 0u;\n")
+        c.append("    victim_ttl = 0xFFu;\n")
+        c.append("    for (i = 0u; i < NGPNG_DMG_POPUP_MAX; i = (u8)(i + 1u)) {\n")
+        c.append("        if (!g_dmg_popup_active[i]) { victim = i; victim_ttl = 0u; break; }\n")
+        c.append("        if (g_dmg_popup_ttl[i] < victim_ttl) { victim = i; victim_ttl = g_dmg_popup_ttl[i]; }\n")
+        c.append("    }\n")
+        c.append(f"    g_dmg_popup_ttl[victim]    = {_dp_ttl}u;\n")
+        c.append("    g_dmg_popup_active[victim] = 1u;\n")
+        c.append("    g_dmg_popup_sx[victim]     = sx_tile;\n")
+        c.append("    g_dmg_popup_sy[victim]     = sy_tile;\n")
+        c.append("    g_dmg_popup_value[victim]  = (value > 99u) ? 99u : value;\n")
+        c.append("}\n")
+        c.append("\n")
+        c.append("/* Per-frame tick — call once per frame. Renders active popups and\n")
+        c.append(" * clears their tiles when ttl reaches 0. The rise effect is a\n")
+        c.append(" * simple stair-step: popup moves up by 1 tile at ttl == ttl/2. */\n")
+        c.append("static void ngpng_dmg_popup_update(void) {\n")
+        c.append("    u8 i;\n")
+        for i in range(0, 1):  # placeholder loop body emitted below; keep as one iteration generator
+            pass
+        # The loop body uses _dp_plane / _dp_pal / _dp_rise constants captured at codegen
+        c.append("    for (i = 0u; i < NGPNG_DMG_POPUP_MAX; i = (u8)(i + 1u)) {\n")
+        c.append("        if (!g_dmg_popup_active[i]) continue;\n")
+        c.append("        if (g_dmg_popup_ttl[i] == 0u) {\n")
+        c.append(f"            ngpc_text_print({_dp_plane}, {_dp_pal}u, g_dmg_popup_sx[i], g_dmg_popup_sy[i], \"  \");\n")
+        c.append("            g_dmg_popup_active[i] = 0u;\n")
+        c.append("            continue;\n")
+        c.append("        }\n")
+        if _dp_rise > 0:
+            # Simple stair-step rise: when half-life is reached, clear current
+            # tile then move up by 1 tile. For rise > 1 we step at multiple
+            # thresholds (1/2, 1/3, 1/4 of TTL). Keep tiny for cc900-safe code.
+            for step in range(1, min(int(_dp_rise), 4) + 1):
+                thresh = (_dp_ttl * step) // (int(_dp_rise) + 1)
+                c.append(f"        if (g_dmg_popup_ttl[i] == {thresh}u && g_dmg_popup_sy[i] > 0u) {{\n")
+                c.append(f"            ngpc_text_print({_dp_plane}, {_dp_pal}u, g_dmg_popup_sx[i], g_dmg_popup_sy[i], \"  \");\n")
+                c.append("            g_dmg_popup_sy[i] = (u8)(g_dmg_popup_sy[i] - 1u);\n")
+                c.append("        }\n")
+        c.append(f"        ngpc_text_print_dec({_dp_plane}, {_dp_pal}u, g_dmg_popup_sx[i], g_dmg_popup_sy[i], (u16)g_dmg_popup_value[i], 2u);\n")
+        c.append("        g_dmg_popup_ttl[i] = (u8)(g_dmg_popup_ttl[i] - 1u);\n")
+        c.append("    }\n")
+        c.append("}\n\n")
 
     if has_dungeongen and has_enemy:
         _procgen_assets = ((project_data or {}).get("procgen_assets") or {}) if isinstance(project_data, dict) else {}
@@ -4632,6 +5203,13 @@ def write_autorun_main_c(
     c.append("    u8 respawn_timer = 0u;\n")
     if has_shooting:
         c.append("    u8 fire_cd = 0u;\n")
+    if _has_dash_runtime:
+        c.append("    /* MECH-9 dash runtime state — emitted only when the dash mechanic\n")
+        c.append("     * is enabled AND the player sprite has a button assigned. */\n")
+        c.append("    u8 dash_timer = 0u;\n")
+        c.append("    u8 dash_cd    = 0u;\n")
+        c.append("    s8 dash_dx    = 0;\n")
+        c.append("    s8 dash_dy    = 0;\n")
     c.append("    u8 player_form = 0u;\n")
     c.append("    u8 player_form_count = 0u;\n")
     c.append("    u8 player_form_mode = 0u;\n")
@@ -4815,7 +5393,12 @@ def write_autorun_main_c(
         c.append("    dialog_runner.seq_idx = 0u;\n")
         c.append("    dialog_runner.portrait_id = 0xFFu;\n")
         c.append("\n")
-    _no_sysfont = bool((project_data or {}).get("no_sysfont"))
+    # Same gating as the include emission above — `no_sysfont` is effective
+    # only when a custom font PNG was wired, otherwise the symbol
+    # `ngpc_custom_font_load` doesn't exist.
+    _no_sysfont = bool((project_data or {}).get("no_sysfont")) and bool(
+        str((project_data or {}).get("custom_font_png") or "").strip()
+    )
     c.append("    ngpc_init();\n")
     if _no_sysfont:
         c.append("#ifndef NO_SYSFONT\n")
@@ -4939,6 +5522,8 @@ def write_autorun_main_c(
     c.append("    }\n")
     if has_shooting:
         c.append("    player_bullet_type = s_ngpng_player_btype[cur_scene];\n")
+    if _has_options:
+        c.append("    ngpng_opt_scene_enter(&g_ngp_scenes[cur_scene], cur_scene);\n")
     if has_mapstream:
         c.append("#ifdef NGPNG_HAS_MAPSTREAM\n")
         c.append("    ngpng_mapstream_load_scene(cur_scene, cam_px, cam_py);\n")
@@ -4946,6 +5531,9 @@ def write_autorun_main_c(
     if has_enemy:
         if has_waves:
             c.append("    ngpc_wave_start(&wave_seq, g_ngp_scenes[cur_scene].wave_table, g_ngp_scenes[cur_scene].wave_table_n);\n")
+            if _has_wave_scroll:
+                c.append("    g_wave_scroll_cursor   = 0u;  /* MECH-4: reset cursor at scene enter */\n")
+                c.append("    g_wave_scroll_last_pos = 0;\n")
         else:
             c.append("    next_wave = 0u;\n")
         if has_wave_rand:
@@ -5041,6 +5629,23 @@ def write_autorun_main_c(
     c.append("    print_trig_line(0);\n")
     c.append("#endif /* NGPNG_AUTORUN_DEBUG_OVERLAY */\n")
     c.append("\n")
+    # MECH-14: pre-fill the option ring buffer with the player's starting
+    # world position so the first frame's drones don't snap from (0,0). The
+    # player's screen pos is set by ngpng_scene_runtime_enter_view above;
+    # cam_px/py are also valid at this point.
+    if _has_options and players:
+        c.append("    /* MECH-14: seed option ring buffer with current player pos */\n")
+        c.append("    {\n")
+        c.append("        u8 _opt_seed_i;\n")
+        c.append(f"        s16 _opt_seed_x = (s16)(cam_px + s_{players[0]['name']}.x);\n")
+        c.append(f"        s16 _opt_seed_y = (s16)(cam_py + s_{players[0]['name']}.y);\n")
+        c.append("        for (_opt_seed_i = 0u; _opt_seed_i < NGPNG_OPT_HIST; ++_opt_seed_i) {\n")
+        c.append("            g_opt_hist_x[_opt_seed_i] = _opt_seed_x;\n")
+        c.append("            g_opt_hist_y[_opt_seed_i] = _opt_seed_y;\n")
+        c.append("        }\n")
+        c.append("        g_opt_hist_head = 0u;\n")
+        c.append("    }\n")
+        c.append("\n")
     c.append("    while (1) {\n")
     c.append("        const NgpSceneDef *sc;\n")
     c.append("        const u8 *_sc_tilecol;\n")
@@ -5293,6 +5898,9 @@ def write_autorun_main_c(
     if has_enemy:
         if has_waves:
             c.append("                    ngpc_wave_start(&wave_seq, sc->wave_table, sc->wave_table_n);\n")
+            if _has_wave_scroll:
+                c.append("                    g_wave_scroll_cursor   = 0u;\n")
+                c.append("                    g_wave_scroll_last_pos = 0;\n")
         else:
             c.append("                    next_wave = 0u;\n")
         if has_wave_rand:
@@ -5399,6 +6007,9 @@ def write_autorun_main_c(
     if has_enemy:
         if has_waves:
             c.append("            ngpc_wave_start(&wave_seq, sc->wave_table, sc->wave_table_n);\n")
+            if _has_wave_scroll:
+                c.append("            g_wave_scroll_cursor   = 0u;\n")
+                c.append("            g_wave_scroll_last_pos = 0;\n")
         else:
             c.append("            next_wave = 0u;\n")
         if has_wave_rand:
@@ -5917,17 +6528,86 @@ def write_autorun_main_c(
             c.append(f"            s_{n}.x = s_{players[0]['name']}.x;\n")
             c.append(f"            s_{n}.y = s_{players[0]['name']}.y;\n")
             c.append(f"            s_{n}.frame = s_{players[0]['name']}.frame;\n")
+        if _has_dash_runtime:
+            n0 = players[0]['name']
+            c.append("            /* MECH-9 dash — tick cooldown + apply velocity during dash window. */\n")
+            c.append("            if (dash_cd > 0u) dash_cd = (u8)(dash_cd - 1u);\n")
+            c.append("            if (dash_timer > 0u) {\n")
+            c.append("                /* During dash: freeze player input, apply fixed velocity, optional invul. */\n")
+            c.append(f"                s_{n0}.x = (u8)(s_{n0}.x + (s8)({_dash_speed} * dash_dx));\n")
+            c.append(f"                s_{n0}.y = (u8)(s_{n0}.y + (s8)({_dash_speed} * dash_dy));\n")
+            if _dash_iframes:
+                c.append("                if (player_invul < dash_timer) player_invul = dash_timer;\n")
+            c.append("                dash_timer = (u8)(dash_timer - 1u);\n")
+            c.append(f"            }} else if (dash_cd == 0u && (ngpc_pad_pressed & {_dash_btn_expr})) {{\n")
+            c.append("                /* Start dash: capture direction from currently-held d-pad.\n")
+            c.append("                 * Idle player (no direction) defaults to facing-based dash. */\n")
+            c.append("                dash_dx = 0; dash_dy = 0;\n")
+            c.append("                if (ngpc_pad_held & PAD_LEFT)  dash_dx = -1;\n")
+            c.append("                if (ngpc_pad_held & PAD_RIGHT) dash_dx =  1;\n")
+            c.append("                if (ngpc_pad_held & PAD_UP)    dash_dy = -1;\n")
+            c.append("                if (ngpc_pad_held & PAD_DOWN)  dash_dy =  1;\n")
+            c.append(f"                if (dash_dx == 0 && dash_dy == 0) dash_dx = s_{n0}.face_hflip ? (s8)-1 : (s8)1;\n")
+            c.append(f"                dash_timer = {_dash_duration}u;\n")
+            c.append(f"                dash_cd    = {_dash_cooldown}u;\n")
+            if _dash_sfx != 0xFF:
+                c.append(f"                Sfx_Play({_dash_sfx}u);\n")
+            c.append("            }\n")
         if has_shooting:
             c.append("            if (fire_cd > 0u) fire_cd = (u8)(fire_cd - 1u);\n")
             c.append(f"            if (player_bullet_ready && fire_cd == 0u && (ngpc_pad_held & {_fire_btn_expr})) {{\n")
-            c.append(f"                ngpng_demo_fire_player(shots, &player_shots_active, &player_shots_alloc, player_bullet_tile, player_bullet_pal, player_bullet_flags, player_bullet_ox, player_bullet_oy, player_bullet_hb_x, player_bullet_hb_y, player_bullet_hb_w, player_bullet_hb_h, player_bullet_damage, player_bullet_kb_x, player_bullet_kb_y, (s8){_player_bvx}, (s8){_player_bvy}, (s16)(cam_px + s_{players[0]['name']}.x), (s16)(cam_py + s_{players[0]['name']}.y), cam_px, cam_py);\n")
+            c.append(f"                ngpng_demo_fire_player(shots, &player_shots_active, &player_shots_alloc, player_bullet_tile, player_bullet_pal, player_bullet_flags, player_bullet_ox, player_bullet_oy, player_bullet_hb_x, player_bullet_hb_y, player_bullet_hb_w, player_bullet_hb_h, player_bullet_damage, player_bullet_kb_x, player_bullet_kb_y, (s8){_player_bvx}, (s8){_player_bvy}, (u8)(sc->type_bounce_flags ? sc->type_bounce_flags[player_bullet_type] : 0u), (u8)(sc->type_bounce_sfx ? sc->type_bounce_sfx[player_bullet_type] : 0xFFu), (s16)(cam_px + s_{players[0]['name']}.x), (s16)(cam_py + s_{players[0]['name']}.y), cam_px, cam_py);\n")
             c.append("                /* Optional SFX on player fire — 0xFF = silent. */\n")
             c.append("                if (sc->type_sfx_fire && player_type < sc->type_role_count && sc->type_sfx_fire[player_type] != 0xFFu) {\n")
             c.append("                    Sfx_Play(sc->type_sfx_fire[player_type]);\n")
             c.append("                }\n")
+            # MECH-14: drones fire on the same frame as the player when fire_sync
+            # is enabled. Each drone spawns one extra shot at its CURRENT lagged
+            # WORLD position (read from ring buffer). Bullets share player stats
+            # (damage / hitbox / kb / bounce) — drone-specific bullet appearance
+            # is used when g_opt_bullet_type is set, otherwise falls back to the
+            # player's bullet visual. Single SFX (already played above) so we
+            # don't deafen the player when 4 drones fire at once.
+            if _has_options:
+                c.append("#if NGPNG_OPT_FIRE_SYNC\n")
+                c.append("                if (!g_opt_scene_disabled && g_opt_count > 0u) {\n")
+                c.append("                    u8 _ofs_i;\n")
+                c.append("                    u16 _ofs_t  = (g_opt_bullet_type != 0xFFu) ? g_opt_bullet_tile  : player_bullet_tile;\n")
+                c.append("                    u8  _ofs_p  = (g_opt_bullet_type != 0xFFu) ? g_opt_bullet_pal   : player_bullet_pal;\n")
+                c.append("                    u8  _ofs_f  = (g_opt_bullet_type != 0xFFu) ? g_opt_bullet_flags : player_bullet_flags;\n")
+                c.append("                    s16 _ofs_ox = (g_opt_bullet_type != 0xFFu) ? g_opt_bullet_ox    : player_bullet_ox;\n")
+                c.append("                    s16 _ofs_oy = (g_opt_bullet_type != 0xFFu) ? g_opt_bullet_oy    : player_bullet_oy;\n")
+                c.append("                    for (_ofs_i = 0u; _ofs_i < g_opt_count && _ofs_i < NGPNG_OPT_MAX; ++_ofs_i) {\n")
+                c.append("                        u8 _ofs_lag = (u8)(NGPNG_OPT_DELAY + _ofs_i * NGPNG_OPT_SPACING);\n")
+                c.append("                        u8 _ofs_idx;\n")
+                c.append("                        s16 _ofs_wx; s16 _ofs_wy;\n")
+                c.append("                        if (_ofs_lag > NGPNG_OPT_HIST_MASK) _ofs_lag = (u8)NGPNG_OPT_HIST_MASK;\n")
+                c.append("                        _ofs_idx = (u8)((g_opt_hist_head - _ofs_lag) & NGPNG_OPT_HIST_MASK);\n")
+                c.append("                        _ofs_wx = g_opt_hist_x[_ofs_idx];\n")
+                c.append("                        _ofs_wy = g_opt_hist_y[_ofs_idx];\n")
+                c.append("#if (NGPNG_OPT_FORMATION == NGPNG_OPT_FORM_V)\n")
+                c.append("                        _ofs_wy = (s16)(_ofs_wy + (s16)((s8)((_ofs_i & 1u) ? 1 : -1) * (s8)(8 * ((_ofs_i >> 1) + 1u))));\n")
+                c.append("#elif (NGPNG_OPT_FORMATION == NGPNG_OPT_FORM_PARALLEL)\n")
+                c.append("                        _ofs_wx = (s16)(_ofs_wx + (s16)((s8)((_ofs_i & 1u) ? 1 : -1) * (s8)(8 * ((_ofs_i >> 1) + 1u))));\n")
+                c.append("#endif\n")
+                c.append(f"                        ngpng_demo_fire_player(shots, &player_shots_active, &player_shots_alloc, _ofs_t, _ofs_p, _ofs_f, _ofs_ox, _ofs_oy, player_bullet_hb_x, player_bullet_hb_y, player_bullet_hb_w, player_bullet_hb_h, player_bullet_damage, player_bullet_kb_x, player_bullet_kb_y, (s8){_player_bvx}, (s8){_player_bvy}, (u8)(sc->type_bounce_flags ? sc->type_bounce_flags[player_bullet_type] : 0u), (u8)(sc->type_bounce_sfx ? sc->type_bounce_sfx[player_bullet_type] : 0xFFu), _ofs_wx, _ofs_wy, cam_px, cam_py);\n")
+                c.append("                    }\n")
+                c.append("                }\n")
+                c.append("#endif\n")
             c.append(f"                fire_cd = {_player_fr_rate}u;\n")
             c.append("            }\n")
         c.append("        }\n")
+        # MECH-14: push current player WORLD position into the option ring buffer.
+        # Push every frame regardless of visibility — if the player is hidden,
+        # options stay frozen at the last real position (still readable from
+        # the lagged slot). Storing world coordinates so options follow the
+        # player through camera scrolls correctly.
+        if _has_options:
+            c.append("        if (!g_opt_scene_disabled) {\n")
+            c.append("            g_opt_hist_head = (u8)((g_opt_hist_head + 1u) & NGPNG_OPT_HIST_MASK);\n")
+            c.append(f"            g_opt_hist_x[g_opt_hist_head] = (s16)(cam_px + s_{players[0]['name']}.x);\n")
+            c.append(f"            g_opt_hist_y[g_opt_hist_head] = (s16)(cam_py + s_{players[0]['name']}.y);\n")
+            c.append("        }\n")
         c.append("\n")
     c.append("        timer++;\n")
     c.append("        /* OPT-E: no division — countdown tick drives timer_sec */\n")
@@ -5960,6 +6640,8 @@ def write_autorun_main_c(
         c.append("                    g_ngp_scenes[cur_scene].enter();\n")
         if has_shooting:
             c.append("                    player_bullet_type = s_ngpng_player_btype[cur_scene];\n")
+        if _has_options:
+            c.append("                    ngpng_opt_scene_enter(&g_ngp_scenes[cur_scene], cur_scene);\n")
         if has_palfx:
             c.append("                    ngpng_palfx_enter(cur_scene);\n")
         c.append("                    ngpng_scene_runtime_enter_view(sc, cur_scene, &cam_px, &cam_py, &tx, &ty);\n")
@@ -5981,6 +6663,9 @@ def write_autorun_main_c(
         if has_enemy:
             if has_waves:
                 c.append("                    ngpc_wave_start(&wave_seq, sc->wave_table, sc->wave_table_n);\n")
+            if _has_wave_scroll:
+                c.append("                    g_wave_scroll_cursor   = 0u;\n")
+                c.append("                    g_wave_scroll_last_pos = 0;\n")
             else:
                 c.append("                    next_wave = 0u;\n")
             if has_wave_rand:
@@ -6048,16 +6733,55 @@ def write_autorun_main_c(
         c.append("        if (player_invul > 0u) player_invul = (u8)(player_invul - 1u);\n")
     if has_enemy:
         if has_waves:
-            # ngpc_wave drives per-frame spawning: returns one NgpcWaveEntry per call.
-            # Cast-via-temp: extract {type,x,y,data} from NgpcWaveEntry to NgpngEnt.
-            c.append("        {\n")
-            c.append("            const NgpcWaveEntry *_we = ngpc_wave_update(&wave_seq);\n")
-            c.append("            while (_we) {\n")
-            c.append("                NgpngEnt _we_ent; _we_ent.type = _we->type; _we_ent.x = _we->x; _we_ent.y = _we->y; _we_ent.data = _we->data;\n")
-            c.append("                ngpng_enemy_spawn(sc, enemies, &enemy_active_count, &enemy_alloc_idx, &_we_ent, 0xFFu, 0xFFu, 0xFFu, 0u);\n")
-            c.append("                _we = ngpc_wave_poll(&wave_seq);\n")
-            c.append("            }\n")
-            c.append("        }\n")
+            if _has_wave_scroll:
+                # MECH-4: branch per-scene mode. Scroll-based scans the same
+                # ROM wave table but compares the entry's `delay` field against
+                # cam_px or cam_py instead of an internal frame timer.
+                c.append("        {\n")
+                c.append("            u8 _wm;\n")
+                c.append("            _wm = s_ngpng_wave_mode[cur_scene];\n")
+                c.append("            if (_wm == 0u) {\n")
+                c.append("                /* Frame-based (legacy): existing ngpc_wave_update path. */\n")
+                c.append("                const NgpcWaveEntry *_we = ngpc_wave_update(&wave_seq);\n")
+                c.append("                while (_we) {\n")
+                c.append("                    NgpngEnt _we_ent; _we_ent.type = _we->type; _we_ent.x = _we->x; _we_ent.y = _we->y; _we_ent.data = _we->data;\n")
+                c.append("                    ngpng_enemy_spawn(sc, enemies, &enemy_active_count, &enemy_alloc_idx, &_we_ent, 0xFFu, 0xFFu, 0xFFu, 0u);\n")
+                c.append("                    _we = ngpc_wave_poll(&wave_seq);\n")
+                c.append("                }\n")
+                c.append("            } else {\n")
+                c.append("                /* MECH-4 scroll-based: advance the cursor through the wave\n")
+                c.append("                 * table while cam_px/cam_py has caught up with the entry's\n")
+                c.append("                 * stored position. Monotonic in cam position — does NOT\n")
+                c.append("                 * un-spawn if the camera rewinds (e.g. cinematic camera\n")
+                c.append("                 * pan). Same robustness pattern as Nemesis. */\n")
+                c.append("                s16 _pos;\n")
+                c.append("                const NgpcWaveEntry *_we_table;\n")
+                c.append("                u8 _we_n;\n")
+                c.append("                _pos = (_wm == 1u) ? cam_px : cam_py;\n")
+                c.append("                _we_table = sc->wave_table;\n")
+                c.append("                _we_n = sc->wave_table_n;\n")
+                c.append("                while (g_wave_scroll_cursor < _we_n && (s16)_we_table[g_wave_scroll_cursor].delay <= _pos) {\n")
+                c.append("                    NgpngEnt _we_ent;\n")
+                c.append("                    _we_ent.type = _we_table[g_wave_scroll_cursor].type;\n")
+                c.append("                    _we_ent.x    = _we_table[g_wave_scroll_cursor].x;\n")
+                c.append("                    _we_ent.y    = _we_table[g_wave_scroll_cursor].y;\n")
+                c.append("                    _we_ent.data = _we_table[g_wave_scroll_cursor].data;\n")
+                c.append("                    ngpng_enemy_spawn(sc, enemies, &enemy_active_count, &enemy_alloc_idx, &_we_ent, 0xFFu, 0xFFu, 0xFFu, 0u);\n")
+                c.append("                    g_wave_scroll_cursor = (u8)(g_wave_scroll_cursor + 1u);\n")
+                c.append("                }\n")
+                c.append("                g_wave_scroll_last_pos = _pos;\n")
+                c.append("            }\n")
+                c.append("        }\n")
+            else:
+                # Original frame-based path — unchanged when MECH-4 is OFF.
+                c.append("        {\n")
+                c.append("            const NgpcWaveEntry *_we = ngpc_wave_update(&wave_seq);\n")
+                c.append("            while (_we) {\n")
+                c.append("                NgpngEnt _we_ent; _we_ent.type = _we->type; _we_ent.x = _we->x; _we_ent.y = _we->y; _we_ent.data = _we->data;\n")
+                c.append("                ngpng_enemy_spawn(sc, enemies, &enemy_active_count, &enemy_alloc_idx, &_we_ent, 0xFFu, 0xFFu, 0xFFu, 0u);\n")
+                c.append("                _we = ngpc_wave_poll(&wave_seq);\n")
+                c.append("            }\n")
+                c.append("        }\n")
         else:
             c.append("        (void)next_wave;  /* no waves in project */\n")
         if has_wave_rand:
@@ -6129,6 +6853,8 @@ def write_autorun_main_c(
         c.append("        ngpng_player_shots_update_and_collide(sc, shots, &player_shots_active, enemies, &enemy_active_count, &score, explosion_type, fx, &fx_active_count, &fx_alloc_idx, cam_px, cam_py);\n")
     if has_fx:
         c.append("        ngpng_fx_update(sc, fx, &fx_active_count, cam_px, cam_py);\n")
+    if _has_dmg_popup:
+        c.append("        ngpng_dmg_popup_update();  /* MECH-11: tick popups + rerender tiles */\n")
     if players:
         if has_combat:
             c.append(f"        ngpng_player_collide_enemies(sc, enemies, &enemy_active_count, s_{players[0]['name']}.x, &s_{players[0]['name']}.y, &s_{players[0]['name']}.vx, &s_{players[0]['name']}.vy, player_hb_x, player_hb_y, player_hb_w, player_hb_h, cam_px, cam_py, &player_hp, &player_invul, &score, explosion_type, fx, &fx_active_count, &fx_alloc_idx);\n")
@@ -6167,6 +6893,16 @@ def write_autorun_main_c(
             c.append(f"        s_{n}.frame = s_{players[0]['name']}.frame;\n")
             c.append(f"        s_{n}.face_hflip = s_{players[0]['name']}.face_hflip;\n")
         c.append("        if (!stage_clear && !game_over && respawn_timer == 0u && player_hp == 0u) {\n")
+        if _has_death_fade:
+            # MECH-12 — kick off a palette fade-to-black/white on all 3 GFX
+            # planes the moment HP hits zero. respawn_timer is extended below
+            # so the fade has time to complete before the respawn happens.
+            _df_speed = max(1, min(8, 128 // max(1, _df_fade)))
+            _df_fn = "ngpc_palfx_fade_to_white" if _df_color == "white" else "ngpc_palfx_fade_to_black"
+            c.append(f"            /* MECH-12 death fade ({_df_color}, speed {_df_speed}) — visual polish on death. */\n")
+            c.append(f"            {_df_fn}(GFX_SCR1, 0xFFu, {_df_speed}u);\n")
+            c.append(f"            {_df_fn}(GFX_SCR2, 0xFFu, {_df_speed}u);\n")
+            c.append(f"            {_df_fn}(GFX_SPR,  0xFFu, {_df_speed}u);\n")
         if has_fx:
             c.append("            /* Player death FX — mirrors enemy death FX resolution.\n")
             c.append("             *   priority: per-type explicit (sc->type_death_fx) > player own death anim > scene auto. */\n")
@@ -6186,16 +6922,84 @@ def write_autorun_main_c(
         c.append("            if (sc->start_lives > 0u) {\n")
         c.append("                if (lives > 0u) lives = (u8)(lives - 1u);\n")
         c.append("                if (lives > 0u) {\n")
-        c.append("                    if (respawn_timer == 0u) respawn_timer = 30u;\n")
+        c.append(f"                    if (respawn_timer == 0u) respawn_timer = {_respawn_delay};\n")
         c.append("                } else {\n")
         c.append("                    game_over = 1u;\n")
         c.append("                }\n")
         c.append("            } else if (checkpoint_scene < (u8)NGP_SCENE_COUNT && checkpoint_region != 0xFFu) {\n")
-        c.append("                if (respawn_timer == 0u) respawn_timer = 30u;\n")
+        c.append(f"                if (respawn_timer == 0u) respawn_timer = {_respawn_delay};\n")
         c.append("            } else {\n")
         c.append("                game_over = 1u;\n")
         c.append("            }\n")
         c.append("        }\n")
+        if _has_gof:
+            # MECH-13: transition into the game-over flow when game_over flips
+            # to 1. Auto-submit current score to hi-score table if MECH-6 is
+            # on AND its auto_submit config is True.
+            c.append("        /* MECH-13 enter-flow detection: first frame game_over goes 1 → enter screen state. */\n")
+            c.append("        if (game_over && g_gof_state == NGPNG_GOF_STATE_NONE) {\n")
+            if _has_hiscore and _hs_save and _hs_auto:
+                c.append("            /* MECH-6 auto-submit: try inserting the current score with default initials. */\n")
+                c.append("            {\n")
+                c.append("                static const u8 _hs_default_auto_init[NGPNG_HISCORE_L] = {")
+                c.append(", ".join(f"(u8)'{c_}'" for c_ in _hs_def_init))
+                c.append("};\n")
+                c.append("                ngpng_hiscore_submit(score, _hs_default_auto_init);\n")
+                c.append("            }\n")
+            if _gof_cont_en:
+                c.append(f"            if (g_gof_cont_used < {_gof_cont_max}u) {{\n")
+                c.append("                g_gof_state = NGPNG_GOF_STATE_CONTINUE;\n")
+                c.append(f"                g_gof_timer = (u16)({_gof_cd_sec}u * 60u);\n")
+                c.append("            } else {\n")
+                _entry_state = "NGPNG_GOF_STATE_FINAL" if _gof_fin_en else "NGPNG_GOF_STATE_NONE"
+                c.append(f"                g_gof_state = {_entry_state};\n")
+                c.append(f"                g_gof_timer = (u16)({_gof_fin_min}u * 60u);\n")
+                c.append("            }\n")
+            elif _gof_fin_en:
+                c.append("            g_gof_state = NGPNG_GOF_STATE_FINAL;\n")
+                c.append(f"            g_gof_timer = (u16)({_gof_fin_min}u * 60u);\n")
+            c.append("        }\n")
+            # ─── State CONTINUE ───
+            if _gof_cont_en:
+                c.append("        /* MECH-13 CONTINUE state: countdown + YES/NO prompt + text overlay. */\n")
+                c.append("        if (g_gof_state == NGPNG_GOF_STATE_CONTINUE) {\n")
+                c.append(f"            ngpc_text_print(GFX_SCR2, 1u, 4u, 7u, \"{_gof_text_cont}\");\n")
+                c.append(f"            ngpc_text_print(GFX_SCR2, 1u, 6u, 10u, \"A:{_gof_text_yes}  B:{_gof_text_no}\");\n")
+                c.append("            ngpc_text_print_dec(GFX_SCR2, 1u, 9u, 12u, (u16)(g_gof_timer / 60u), 2u);\n")
+                c.append("            if (g_gof_timer > 0u) g_gof_timer = (u16)(g_gof_timer - 1u);\n")
+                c.append("            if ((ngpc_pad_pressed & PAD_A) != 0u) {\n")
+                c.append("                /* CONTINUE accepted → consume one + respawn. */\n")
+                c.append("                g_gof_cont_used = (u8)(g_gof_cont_used + 1u);\n")
+                c.append("                player_hp    = player_hp_max;\n")
+                c.append("                game_over    = 0u;\n")
+                c.append("                respawn_timer = 0u;\n")
+                c.append("                g_gof_state  = NGPNG_GOF_STATE_NONE;\n")
+                c.append("                /* clear the overlay text so it doesn't linger */\n")
+                c.append("                ngpc_text_print(GFX_SCR2, 1u, 4u, 7u, \"                \");\n")
+                c.append("                ngpc_text_print(GFX_SCR2, 1u, 6u, 10u, \"                \");\n")
+                c.append("            } else if (((ngpc_pad_pressed & PAD_B) != 0u) || g_gof_timer == 0u) {\n")
+                if _gof_fin_en:
+                    c.append("                g_gof_state = NGPNG_GOF_STATE_FINAL;\n")
+                    c.append(f"                g_gof_timer = (u16)({_gof_fin_min}u * 60u);\n")
+                else:
+                    c.append("                g_gof_state = NGPNG_GOF_STATE_NONE;\n")
+                c.append("                ngpc_text_print(GFX_SCR2, 1u, 4u, 7u, \"                \");\n")
+                c.append("                ngpc_text_print(GFX_SCR2, 1u, 6u, 10u, \"                \");\n")
+                c.append("            }\n")
+                c.append("        }\n")
+            # ─── State FINAL ───
+            if _gof_fin_en:
+                c.append("        /* MECH-13 FINAL state: GAME OVER text overlay, min duration then any-key. */\n")
+                c.append("        if (g_gof_state == NGPNG_GOF_STATE_FINAL) {\n")
+                c.append(f"            ngpc_text_print(GFX_SCR2, 1u, 5u, 9u, \"{_gof_text_fin}\");\n")
+                c.append("            if (g_gof_timer > 0u) {\n")
+                c.append("                g_gof_timer = (u16)(g_gof_timer - 1u);\n")
+                c.append("            } else if (ngpc_pad_pressed != 0u) {\n")
+                c.append("                /* Any-key exits the FINAL screen. State NONE persists until reset. */\n")
+                c.append("                g_gof_state = NGPNG_GOF_STATE_NONE;\n")
+                c.append("                ngpc_text_print(GFX_SCR2, 1u, 5u, 9u, \"                \");\n")
+                c.append("            }\n")
+                c.append("        }\n")
         if has_save:
             c.append("        if (game_over) {\n")
             if _sc_score:
@@ -6283,6 +7087,64 @@ def write_autorun_main_c(
                 l1_slots = p["l1_slots"]
                 c.append(f"            ngpng_sprite_hide_range({l1_slot}, {l1_slots}u);\n")
                 c.append(f"            s_{n}_l1_visible = 0u;\n")
+        c.append("        }\n")
+    # MECH-14: render trailing options. 1 sprite per option, tile/pal taken
+    # from the resolved drone sprite (g_opt_tile etc.) when a sprite_type is
+    # configured in the project — otherwise falls back to the player's bullet
+    # appearance so options are still visible.
+    #
+    # Formations:
+    #   trail (0)    — straight trail behind player (offsets all zero)
+    #   v (1)        — alternating up/down offset (drone i offsets by ±8 * (i/2+1))
+    #   parallel (2) — alternating left/right offset (drone i offsets by ±8 * (i/2+1))
+    # Offset is applied AFTER reading the lagged world position, so drones
+    # still inherit the trail shape (curving with player movement) plus the
+    # formation offset.
+    if _has_options and players:
+        c.append("        /* MECH-14: render option satellites */\n")
+        c.append("        if (!g_opt_scene_disabled && g_opt_count > 0u) {\n")
+        c.append("            u8 _opt_i;\n")
+        c.append("            u16 _opt_t = (g_opt_type != 0xFFu) ? g_opt_tile : player_bullet_tile;\n")
+        c.append("            u8  _opt_p = (g_opt_type != 0xFFu) ? g_opt_pal  : player_bullet_pal;\n")
+        c.append("            u8  _opt_f = (g_opt_type != 0xFFu) ? (u8)(g_opt_flags | SPR_FRONT) : (u8)SPR_FRONT;\n")
+        c.append("            for (_opt_i = 0u; _opt_i < g_opt_count && _opt_i < NGPNG_OPT_MAX; ++_opt_i) {\n")
+        c.append("                u8 _opt_lag = (u8)(NGPNG_OPT_DELAY + _opt_i * NGPNG_OPT_SPACING);\n")
+        c.append("                u8 _opt_idx;\n")
+        c.append("                s16 _opt_wx; s16 _opt_wy; s16 _opt_sx; s16 _opt_sy;\n")
+        c.append("                s8 _opt_dx = 0; s8 _opt_dy = 0;\n")
+        c.append("                if (_opt_lag > NGPNG_OPT_HIST_MASK) _opt_lag = (u8)NGPNG_OPT_HIST_MASK;\n")
+        c.append("                _opt_idx = (u8)((g_opt_hist_head - _opt_lag) & NGPNG_OPT_HIST_MASK);\n")
+        c.append("                _opt_wx = g_opt_hist_x[_opt_idx];\n")
+        c.append("                _opt_wy = g_opt_hist_y[_opt_idx];\n")
+        c.append("#if (NGPNG_OPT_FORMATION == NGPNG_OPT_FORM_V)\n")
+        c.append("                /* V: pair-up drones above/below; offset grows with pair index. */\n")
+        c.append("                _opt_dy = (s8)((s8)((_opt_i & 1u) ? 1 : -1) * (s8)(8 * ((_opt_i >> 1) + 1u)));\n")
+        c.append("                _opt_wy = (s16)(_opt_wy + _opt_dy);\n")
+        c.append("#elif (NGPNG_OPT_FORMATION == NGPNG_OPT_FORM_PARALLEL)\n")
+        c.append("                /* Parallel: alternate L/R; offset grows with pair index. */\n")
+        c.append("                _opt_dx = (s8)((s8)((_opt_i & 1u) ? 1 : -1) * (s8)(8 * ((_opt_i >> 1) + 1u)));\n")
+        c.append("                _opt_wx = (s16)(_opt_wx + _opt_dx);\n")
+        c.append("#endif\n")
+        c.append("                _opt_sx = (s16)(_opt_wx - cam_px + g_opt_ox);\n")
+        c.append("                _opt_sy = (s16)(_opt_wy - cam_py + g_opt_oy);\n")
+        c.append("                /* Cull off-screen */\n")
+        c.append("                if (_opt_sx < (s16)-16 || _opt_sx > (s16)168 || _opt_sy < (s16)-16 || _opt_sy > (s16)160) {\n")
+        c.append("                    ngpc_sprite_set((u8)(NGPNG_AUTORUN_OPTION_SPR_BASE + _opt_i), (u8)0, (u8)0, (u16)0, (u8)0, (u8)0);\n")
+        c.append("                } else {\n")
+        c.append("                    ngpc_sprite_set((u8)(NGPNG_AUTORUN_OPTION_SPR_BASE + _opt_i),\n")
+        c.append("                                    (u8)((u16)_opt_sx & 0xFFu), (u8)((u16)_opt_sy & 0xFFu),\n")
+        c.append("                                    _opt_t, _opt_p, _opt_f);\n")
+        c.append("                }\n")
+        c.append("            }\n")
+        c.append("            /* Hide unused option slots */\n")
+        c.append("            { u8 _opt_h; for (_opt_h = g_opt_count; _opt_h < NGPNG_OPT_MAX; ++_opt_h) {\n")
+        c.append("                ngpc_sprite_set((u8)(NGPNG_AUTORUN_OPTION_SPR_BASE + _opt_h), (u8)0, (u8)0, (u16)0, (u8)0, (u8)0);\n")
+        c.append("            } }\n")
+        c.append("        } else {\n")
+        c.append("            /* MECH-14 disabled in this scene → hide all option slots. */\n")
+        c.append("            u8 _opt_h; for (_opt_h = 0u; _opt_h < NGPNG_OPT_MAX; ++_opt_h) {\n")
+        c.append("                ngpc_sprite_set((u8)(NGPNG_AUTORUN_OPTION_SPR_BASE + _opt_h), (u8)0, (u8)0, (u16)0, (u8)0, (u8)0);\n")
+        c.append("            }\n")
         c.append("        }\n")
     c.append("\n")
     if has_player_f:
@@ -6498,6 +7360,94 @@ def write_autorun_main_c(
         c.append("            if (t->action == TRIG_ACT_ADD_SCORE) {\n")
         c.append("                score = (u16)(score + ((u16)t->a0 * 10u));\n")
         c.append("            }\n")
+        if _has_dash_runtime:
+            # MECH-9 — start_dash / stop_dash trigger actions. Mirror the
+            # in-loop dash logic from the player update site.
+            c.append("            if (t->action == TRIG_ACT_START_DASH) {\n")
+            c.append("                /* MECH-9: force-dash. a0 maps to direction:\n")
+            c.append("                 *   0 = facing (default), 1=right, 2=left, 3=up, 4=down. */\n")
+            c.append("                if (dash_cd == 0u) {\n")
+            c.append("                    dash_dx = 0; dash_dy = 0;\n")
+            c.append("                    if      (t->a0 == 1u) dash_dx =  1;\n")
+            c.append("                    else if (t->a0 == 2u) dash_dx = -1;\n")
+            c.append("                    else if (t->a0 == 3u) dash_dy = -1;\n")
+            c.append("                    else if (t->a0 == 4u) dash_dy =  1;\n")
+            c.append(f"                    else dash_dx = s_{players[0]['name']}.face_hflip ? (s8)-1 : (s8)1;\n")
+            c.append(f"                    dash_timer = {_dash_duration}u;\n")
+            c.append(f"                    dash_cd    = {_dash_cooldown}u;\n")
+            if _dash_sfx != 0xFF:
+                c.append(f"                    Sfx_Play({_dash_sfx}u);\n")
+            c.append("                }\n")
+            c.append("            }\n")
+            c.append("            if (t->action == TRIG_ACT_STOP_DASH) {\n")
+            c.append("                /* MECH-9: cancel any ongoing dash immediately. Cooldown remains\n")
+            c.append("                 * so the user can't spam dash-cancel-dash for infinite movement. */\n")
+            c.append("                dash_timer = 0u;\n")
+            c.append("            }\n")
+        if _has_hiscore and _hs_save:
+            # MECH-6 trigger actions — wired against the actual API helpers.
+            c.append("            if (t->action == TRIG_ACT_SUBMIT_SCORE) {\n")
+            c.append("                /* MECH-6: submit current `score` with default initials. The user\n")
+            c.append("                 * can replace this via name-entry UI (v2). */\n")
+            c.append("                static const u8 _hs_default_init[NGPNG_HISCORE_L] = {")
+            c.append(", ".join(f"(u8)'{c_}'" for c_ in _hs_def_init))
+            c.append("};\n")
+            c.append("                ngpng_hiscore_submit(score, _hs_default_init);\n")
+            c.append("            }\n")
+            c.append("            if (t->action == TRIG_ACT_CLEAR_HIGHSCORES) {\n")
+            c.append("                ngpng_hiscore_clear();\n")
+            c.append("            }\n")
+            # show_highscore — for v1, set a flag that the GOF state machine
+            # (or a future dedicated state) can consume. Without GOF, this
+            # is a no-op visible-only-via-API.
+            c.append("            if (t->action == TRIG_ACT_SHOW_HIGHSCORE) {\n")
+            c.append("                /* MECH-6: request displaying the hi-score table on the next\n")
+            c.append("                 * frame. The actual rendering screen is part of MECH-13 GOF\n")
+            c.append("                 * state machine; if MECH-13 is off, this only sets the flag. */\n")
+            if _has_gof:
+                c.append("                g_gof_state = NGPNG_GOF_STATE_HIGHSCORE;\n")
+                c.append("                g_gof_timer = 0u;\n")
+            else:
+                c.append("                /* MECH-13 not enabled — no screen to display. */\n")
+            c.append("            }\n")
+        if _has_gof:
+            # MECH-13 game_over trigger — same effect as natural game_over but
+            # triggerable by any scene event (boss defeated → ending, etc.).
+            c.append("            if (t->action == TRIG_ACT_GAME_OVER) {\n")
+            c.append("                game_over = 1u;\n")
+            c.append("            }\n")
+        if _has_options:
+            # MECH-14 — spawn/despawn/set option count via trigger.
+            #   spawn_option:     g_opt_count = min(g_opt_count + 1, MAX)
+            #   despawn_option:   g_opt_count = (g_opt_count > 0) ? g_opt_count - 1 : 0
+            #   set_option_count: g_opt_count = min(a0, MAX)
+            c.append("            if (t->action == TRIG_ACT_SPAWN_OPTION) {\n")
+            c.append("                if (g_opt_count < NGPNG_OPT_MAX) g_opt_count = (u8)(g_opt_count + 1u);\n")
+            c.append("            }\n")
+            c.append("            if (t->action == TRIG_ACT_DESPAWN_OPTION) {\n")
+            c.append("                if (g_opt_count > 0u) g_opt_count = (u8)(g_opt_count - 1u);\n")
+            c.append("            }\n")
+            c.append("            if (t->action == TRIG_ACT_SET_OPTION_COUNT) {\n")
+            c.append("                g_opt_count = (t->a0 > NGPNG_OPT_MAX) ? (u8)NGPNG_OPT_MAX : t->a0;\n")
+            c.append("            }\n")
+        if _has_death_fade:
+            # MECH-12 — wire the previously-declared-but-unimplemented fade
+            # trigger actions. Uses the same speed/color the mechanic config
+            # has chosen, so all fades in the game look consistent.
+            _df_speed = max(1, min(8, 128 // max(1, _df_fade)))
+            _df_fn_out = "ngpc_palfx_fade_to_white" if _df_color == "white" else "ngpc_palfx_fade_to_black"
+            c.append("            if (t->action == TRIG_ACT_FADE_OUT) {\n")
+            c.append(f"                /* MECH-12: fade-out using project-level config ({_df_color}, speed {_df_speed}). */\n")
+            c.append(f"                {_df_fn_out}(GFX_SCR1, 0xFFu, {_df_speed}u);\n")
+            c.append(f"                {_df_fn_out}(GFX_SCR2, 0xFFu, {_df_speed}u);\n")
+            c.append(f"                {_df_fn_out}(GFX_SPR,  0xFFu, {_df_speed}u);\n")
+            c.append("            }\n")
+            c.append("            if (t->action == TRIG_ACT_FADE_IN) {\n")
+            c.append("                /* MECH-12: fade-in — stop_all restores each slot's original\n")
+            c.append("                 * palette (saved by palfx_fade at start). Instantaneous; for a\n")
+            c.append("                 * gradual fade-in, follow up with palfx_fade(target=orig). */\n")
+            c.append("                ngpc_palfx_stop_all();\n")
+            c.append("            }\n")
         if has_enemy:
             c.append("            if (t->action == TRIG_ACT_SPAWN_WAVE) {\n")
             if has_waves:
@@ -6541,7 +7491,7 @@ def write_autorun_main_c(
         if has_shooting and players:
             c.append("            if (t->action == TRIG_ACT_FIRE_PLAYER_SHOT) {\n")
             c.append("                if (!game_over && player_bullet_ready && fire_cd == 0u) {\n")
-            c.append(f"                    ngpng_demo_fire_player(shots, &player_shots_active, &player_shots_alloc, player_bullet_tile, player_bullet_pal, player_bullet_flags, player_bullet_ox, player_bullet_oy, player_bullet_hb_x, player_bullet_hb_y, player_bullet_hb_w, player_bullet_hb_h, player_bullet_damage, player_bullet_kb_x, player_bullet_kb_y, (s8){_player_bvx}, (s8){_player_bvy}, (s16)(cam_px + s_{players[0]['name']}.x), (s16)(cam_py + s_{players[0]['name']}.y), cam_px, cam_py);\n")
+            c.append(f"                    ngpng_demo_fire_player(shots, &player_shots_active, &player_shots_alloc, player_bullet_tile, player_bullet_pal, player_bullet_flags, player_bullet_ox, player_bullet_oy, player_bullet_hb_x, player_bullet_hb_y, player_bullet_hb_w, player_bullet_hb_h, player_bullet_damage, player_bullet_kb_x, player_bullet_kb_y, (s8){_player_bvx}, (s8){_player_bvy}, (u8)(sc->type_bounce_flags ? sc->type_bounce_flags[player_bullet_type] : 0u), (u8)(sc->type_bounce_sfx ? sc->type_bounce_sfx[player_bullet_type] : 0xFFu), (s16)(cam_px + s_{players[0]['name']}.x), (s16)(cam_py + s_{players[0]['name']}.y), cam_px, cam_py);\n")
             c.append("                    /* Optional SFX on player fire (trigger path) — 0xFF = silent. */\n")
             c.append("                    if (sc->type_sfx_fire && player_type < sc->type_role_count && sc->type_sfx_fire[player_type] != 0xFFu) {\n")
             c.append("                        Sfx_Play(sc->type_sfx_fire[player_type]);\n")
@@ -6894,6 +7844,8 @@ def write_autorun_main_c(
     c.append("            g_ngp_scenes[cur_scene].enter();\n")
     if has_shooting:
         c.append("            player_bullet_type = s_ngpng_player_btype[cur_scene];\n")
+    if _has_options:
+        c.append("            ngpng_opt_scene_enter(sc, cur_scene);\n")
     if has_palfx:
         c.append("            ngpng_palfx_enter(cur_scene);\n")
     c.append("            ngpng_scene_runtime_enter_view(sc, cur_scene, &cam_px, &cam_py, &tx, &ty);\n")
@@ -6915,6 +7867,9 @@ def write_autorun_main_c(
     if has_enemy:
         if has_waves:
             c.append("            ngpc_wave_start(&wave_seq, sc->wave_table, sc->wave_table_n);\n")
+            if _has_wave_scroll:
+                c.append("            g_wave_scroll_cursor   = 0u;\n")
+                c.append("            g_wave_scroll_last_pos = 0;\n")
         else:
             c.append("            next_wave = 0u;\n")
         if has_wave_rand:

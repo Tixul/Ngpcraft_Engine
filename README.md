@@ -58,9 +58,10 @@ New features will come later, once the core is stable.
 | Tilemap PNGs | `*_map.c/h` — scroll maps + collision grid |
 | Frame slices + hitboxes | `*_hitbox.h`, `*_ctrl.h`, `*_props.h`, `*_anims.h`, `*_motion.h` |
 | Entity placements + AI rules | Spawn tables, path tables, wave tables |
-| Trigger rules (visual) | 89 conditions × 79 actions + OR-groups → `g_scene_trig_*[]` C arrays |
+| Trigger rules (visual) | 89 conditions × 88 actions + OR-groups → `g_scene_trig_*[]` C arrays |
 | Entity type events (global) | `ngpc_entity_type_events.h` — 16 events per archetype, tree-shaken |
 | Custom events bus | `ngpc_custom_events.h` — named events, AND/OR guards, 57 actions |
+| Gameplay mechanics toggles | Project-level switches + inline config — extends struct/state, gates codegen |
 | Dialogue banks | Per-scene lines, choices, menus → `scene_*_dialogs.h` |
 | Audio manifest | `sound_data.c/h`, `Sfx_Play()` wrapper, BGM per scene |
 | Global vars / flags / entity types | `game_vars.h` (tree-shaken), `entity_types.h` (ROM-only table) |
@@ -89,6 +90,14 @@ One click on **Export (template-ready)** produces a project that compiles and ru
 - Entity type library: define archetypes (role, behavior, AI params) once, reuse across scenes
 - ROM-only `entity_types.h` + global event dispatch table `entity_type_events.h` (tree-shaken)
 - **Custom Events** — named global event bus: `ngpc_emit_event(id)` → AND/OR guard conditions → 57 actions in 11 groups. Searchable combos. Exported to `ngpc_custom_events.h`.
+
+**Mechanics tab — gameplay framework**
+- 19 toggleable mechanics (most mined from hardware-validated games) — flip each one ON/OFF at project level
+- Inline config per mechanic (fade transitions, damage popup plane/TTL, hi-score entries/save, game-over flow with continue countdown + per-screen BG, Gradius-style option drones with formations + destructible mode…)
+- Per-scene overrides where it matters (wave trigger mode frame/scroll-based, option count + disable per scene)
+- Collapsible categories + live search; toggles gate UI in Sprite Setup / Scene panels and short-circuit runtime guards via NULL pointers — zero cost when disabled
+- New trigger actions wired in: `start_dash`, `stop_dash`, `submit_score`, `show_highscore`, `clear_highscores`, `game_over`, `fade_in`, `fade_out`, `spawn_option`, `despawn_option`, `set_option_count`
+- Backward compatible: retrofit mechanics default ON, new ones default OFF, old `.ngpcraft` files load unchanged
 
 **Visual level editor**
 - Entity placement: role, AI behavior (speed, aggro range, patrol cadence), physics props

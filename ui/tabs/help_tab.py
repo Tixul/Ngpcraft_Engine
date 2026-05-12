@@ -84,6 +84,7 @@ _TOPICS_FR = [
     "Assistant Remap",
     "Onglet Projet",
     "Onglet Globals",
+    "Onglet Mécaniques",
     "VRAM Map",
     "Bundle (packer de scène)",
     "Tilemap Preview",
@@ -112,6 +113,7 @@ _TOPICS_EN = [
     "Remap Wizard",
     "Project Tab",
     "Globals Tab",
+    "Mechanics Tab",
     "VRAM Map",
     "Bundle (scene packer)",
     "Tilemap Preview",
@@ -8853,6 +8855,173 @@ The count respects word-wrap — words are never split mid-character.</p>
 
 
 # ---------------------------------------------------------------------------
+# Mechanics tab — toggles + per-mechanic config breadcrumbs
+# ---------------------------------------------------------------------------
+
+def _fr_mechanics() -> str:
+    return """
+<h1>Onglet Mécaniques (Mechanics)</h1>
+<p>Centre de contrôle des <b>mécaniques de gameplay</b>. Active uniquement
+celles dont ton jeu a besoin ; les désactivées :</p>
+<ul>
+  <li><b>Cachent</b> leur config dans les autres onglets (Scene / entité). Plus
+      de panneaux remplis de réglages inutiles.</li>
+  <li><b>Mettent à NULL</b> leur pointeur dans la struct exportée
+      <code>NgpSceneDef</code>. Les checks <code>if (sc-&gt;type_X)</code> au
+      runtime court-circuitent → <b>zéro coût CPU</b> quand désactivé.</li>
+</ul>
+
+<h2>Où configurer chaque mécanique</h2>
+<p>L'onglet Mécaniques affiche un <b>chemin de configuration</b> sous chaque
+mécanique. Il indique l'onglet + le sous-onglet + le groupe + le réglage exact
+où trouver les options une fois la mécanique activée.</p>
+<p>Exemple pour <b>Tir &amp; projectiles</b> :</p>
+<p><code>📍 Scene → panneau droit (entité sélectionnée) → groupe « Tir &amp; projectiles »</code></p>
+
+<h2>Recherche</h2>
+<p>La barre de recherche en haut filtre par <b>nom, description, mots-clés</b>
+(EN compris). Tape <code>pong</code> pour ne voir que les mécaniques liées au
+rebond ; <code>score</code> pour voir hi-score, score popups, etc.</p>
+
+<h2>Catégories</h2>
+<table>
+  <tr><th>Catégorie</th><th>Mécaniques</th></tr>
+  <tr><td><b>Combat</b></td><td>Tir &amp; projectiles, Feedback de dégât, FX d'explosion, Actions à la mort</td></tr>
+  <tr><td><b>Audio</b></td><td>SFX au tir</td></tr>
+  <tr><td><b>Physique</b></td><td>Rebond projectile</td></tr>
+  <tr><td><b>Spawn</b></td><td>Vagues d'ennemis, Génération procédurale</td></tr>
+  <tr><td><b>Score</b></td><td>Score (points)</td></tr>
+  <tr><td><b>Mouvement</b></td><td>Physique top-down véhicule, Physique platformer (gravité/saut)</td></tr>
+  <tr><td><i>(à venir)</i></td><td>Hi-score, Dash, Combat tour par tour, Damage popup, AI étagée, …</td></tr>
+</table>
+
+<h2>Sprite Setup — Groupes gérés par Mécaniques</h2>
+<p>Le panneau Sprite Setup (Hitbox) cache automatiquement les groupes liés à
+des mécaniques désactivées :</p>
+<ul>
+  <li><b>Combat</b> (HP, dégâts, inv_frames) ← <code>combat_stats</code></li>
+  <li><b>Projectiles</b> (cooldown, bullet_*) ← <code>shooting</code></li>
+  <li><b>Top-down</b> (td_speed_max, td_accel, …) ← <code>topdown_vehicle</code></li>
+  <li>Champs <b>jump/gravity/max_fall_speed</b> dans Physics ← <code>platformer_physics</code></li>
+  <li>Champ <b>Score</b> dans Misc ← <code>scoring</code></li>
+  <li>Row <b>death</b> dans Animation States ← <code>death_fx</code></li>
+</ul>
+
+<h2>Sous-onglets Scene gérés par Mécaniques</h2>
+<p>Certaines mécaniques cachent <b>tout un sous-onglet</b> de la zone Scene
+quand elles sont désactivées (pas juste un groupe dans le panneau entité) :</p>
+<ul>
+  <li><b>Vagues d'ennemis</b> → sous-onglet <i>Vagues</i> de Scene</li>
+  <li><b>Génération procédurale</b> → sous-onglet <i>Procgen</i> de Scene (avec ses 3 onglets internes : Design Map, DungeonGen, Procgen Assets)</li>
+</ul>
+<p>Désactive ces mécaniques si ton jeu n'en a pas besoin — le sous-onglet
+disparaît entièrement de la barre, plus de clutter visuel.</p>
+
+<h2>Rétro-compatibilité</h2>
+<p>Un projet sans clé <code>mechanics</code> dans son JSON hérite des
+<b>valeurs par défaut</b> du registry (toutes les mécaniques combat sont ON,
+les niches comme Rebond sont OFF). Tes projets existants continuent de
+fonctionner sans modification.</p>
+
+<h2>Workflow type</h2>
+<ol>
+  <li>Ouvre l'onglet <b>Mécaniques</b>.</li>
+  <li>Coche/décoche selon ton genre de jeu (ex: pour un Pong → coche Rebond,
+      décoche Tir / Feedback de dégât / FX explosion).</li>
+  <li>Le projet se sauve automatiquement.</li>
+  <li>Va dans Scene → clique une entité → seuls les groupes des mécaniques
+      activées apparaissent dans le panneau de droite.</li>
+</ol>
+
+<h2>Ajouter une nouvelle mécanique (dev)</h2>
+<p>Tout passe par <code>core/mechanics.py</code> → <code>MECHANICS_REGISTRY</code>.
+Append un dict (id, label, description, default_enabled, category,
+config_locations, keywords). L'onglet refresh tout seul depuis le registry.</p>
+"""
+
+
+def _en_mechanics() -> str:
+    return """
+<h1>Mechanics Tab</h1>
+<p>Control center for <b>gameplay mechanics</b>. Enable only the ones your
+game needs; the disabled ones:</p>
+<ul>
+  <li><b>Hide</b> their config in other tabs (Scene / entity panel). No more
+      panels cluttered with unused settings.</li>
+  <li><b>NULL out</b> their pointer in the exported <code>NgpSceneDef</code>
+      struct. Runtime checks <code>if (sc-&gt;type_X)</code> short-circuit
+      → <b>zero CPU cost</b> when disabled.</li>
+</ul>
+
+<h2>Where each mechanic is configured</h2>
+<p>The Mechanics tab shows a <b>configuration path</b> under each mechanic.
+It tells you the tab + sub-tab + group + exact widget where to find the
+options once the mechanic is enabled.</p>
+<p>Example for <b>Shooting &amp; projectiles</b>:</p>
+<p><code>📍 Scene → right panel (selected entity) → "Shooting &amp; projectiles" group</code></p>
+
+<h2>Search</h2>
+<p>The search bar at the top filters by <b>name, description, keywords</b>
+(EN/FR). Type <code>pong</code> to see only bounce-related mechanics;
+<code>score</code> for hi-score, score popups, etc.</p>
+
+<h2>Categories</h2>
+<table>
+  <tr><th>Category</th><th>Mechanics</th></tr>
+  <tr><td><b>Combat</b></td><td>Shooting, Hit feedback, Death FX, Death actions</td></tr>
+  <tr><td><b>Audio</b></td><td>SFX on fire</td></tr>
+  <tr><td><b>Physics</b></td><td>Projectile bounce</td></tr>
+  <tr><td><b>Spawn</b></td><td>Enemy waves, Procedural generation</td></tr>
+  <tr><td><b>Score</b></td><td>Scoring (points)</td></tr>
+  <tr><td><b>Movement</b></td><td>Top-down vehicle physics, Platformer physics (gravity/jump)</td></tr>
+  <tr><td><i>(upcoming)</i></td><td>Hi-score, Dash, Turn-based combat, Damage popup, Tiered AI, …</td></tr>
+</table>
+
+<h2>Sprite Setup — Groups gated by Mechanics</h2>
+<p>The Sprite Setup (Hitbox) panel auto-hides groups tied to disabled mechanics:</p>
+<ul>
+  <li><b>Combat</b> (HP, damage, inv_frames) ← <code>combat_stats</code></li>
+  <li><b>Projectiles</b> (cooldown, bullet_*) ← <code>shooting</code></li>
+  <li><b>Top-down</b> (td_speed_max, td_accel, …) ← <code>topdown_vehicle</code></li>
+  <li><b>jump/gravity/max_fall_speed</b> fields in Physics ← <code>platformer_physics</code></li>
+  <li><b>Score</b> field in Misc ← <code>scoring</code></li>
+  <li>"death" row in Animation States ← <code>death_fx</code></li>
+</ul>
+
+<h2>Scene sub-tabs gated by Mechanics</h2>
+<p>Some mechanics hide a <b>whole sub-tab</b> of the Scene area when disabled
+(not just a group inside the entity panel):</p>
+<ul>
+  <li><b>Enemy waves</b> → Scene <i>Waves</i> sub-tab</li>
+  <li><b>Procedural generation</b> → Scene <i>Procgen</i> sub-tab (with its 3 inner tabs: Design Map, DungeonGen, Procgen Assets)</li>
+</ul>
+<p>Disable these if your game doesn't need them — the sub-tab disappears
+entirely from the bar, less visual clutter.</p>
+
+<h2>Backward compatibility</h2>
+<p>A project without a <code>mechanics</code> key in its JSON inherits the
+registry's <b>default values</b> (all combat mechanics ON, niche ones like
+Bounce OFF). Existing projects keep working untouched.</p>
+
+<h2>Typical workflow</h2>
+<ol>
+  <li>Open the <b>Mechanics</b> tab.</li>
+  <li>Check/uncheck per your game genre (e.g. Pong → enable Bounce, disable
+      Shooting / Hit feedback / Death FX).</li>
+  <li>Project auto-saves.</li>
+  <li>Go to Scene → click an entity → only enabled mechanics' groups appear
+      in the right panel.</li>
+</ol>
+
+<h2>Adding a new mechanic (dev)</h2>
+<p>Everything goes through <code>core/mechanics.py</code> →
+<code>MECHANICS_REGISTRY</code>. Append a dict (id, label, description,
+default_enabled, category, config_locations, keywords). The tab auto-refreshes
+from the registry.</p>
+"""
+
+
+# ---------------------------------------------------------------------------
 # Topic dispatch
 # ---------------------------------------------------------------------------
 
@@ -8865,6 +9034,7 @@ _FR_TOPICS = [
     _fr_remap,
     _fr_project,
     _fr_globals,
+    _fr_mechanics,
     _fr_vram,
     _fr_bundle,
     _fr_tilemap,
@@ -8911,6 +9081,8 @@ _EN_TOPICS = [
     _en_procgen,
     _en_troubleshoot,
 ]
+# MechanicsTab help — insert at the same position as in _FR_TOPICS (after Globals)
+_EN_TOPICS.insert(8, _en_mechanics)
 
 
 def _get_html(lang: str, index: int) -> str:

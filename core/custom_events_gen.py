@@ -154,6 +154,15 @@ _ACT_TO_ID: dict[str, int] = {
     "fade_out":            63,
     "fade_in":             64,
     "save_game":           71,
+    "start_dash":          87,   # MECH-9
+    "stop_dash":           88,   # MECH-9
+    "submit_score":        89,   # MECH-6 — submit current score to hi-score table
+    "show_highscore":      90,   # MECH-6 — display hi-score table screen
+    "clear_highscores":    91,   # MECH-6 — wipe table (debug/admin)
+    "game_over":           92,   # MECH-13 — manually trigger game-over flow
+    "spawn_option":        93,   # MECH-14 — increment option count by 1 (capped at MAX)
+    "despawn_option":      94,   # MECH-14 — decrement option count by 1 (floored at 0)
+    "set_option_count":    95,   # MECH-14 — set option count to value field (clamped 0..MAX)
 }
 
 

@@ -108,6 +108,15 @@ _ACT_TO_ID: dict[str, int] = {
     "fade_out":           63,
     "fade_in":            64,
     "save_game":          71,
+    "start_dash":         87,
+    "stop_dash":          88,
+    "submit_score":       89,
+    "show_highscore":     90,
+    "clear_highscores":   91,
+    "game_over":          92,
+    "spawn_option":       93,
+    "despawn_option":     94,
+    "set_option_count":   95,
 }
 
 

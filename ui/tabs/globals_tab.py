@@ -1241,6 +1241,19 @@ class GlobalsTab(QWidget, ProjectPathMixin):
         "emit_event":          "Émettre événement",
         "save_game":           "Sauvegarder",
         "end_game":            "Fin de partie",
+        # MECH-9 Dash
+        "start_dash":          "Déclencher dash (joueur)",
+        "stop_dash":           "Annuler dash en cours",
+        # MECH-6 Hi-score
+        "submit_score":        "Soumettre le score (hi-score)",
+        "show_highscore":      "Afficher le tableau hi-score",
+        "clear_highscores":    "Effacer hi-scores (debug)",
+        # MECH-13 Game-over flow
+        "game_over":           "Déclencher Game Over (flow complet)",
+        # MECH-14 Option Satellite
+        "spawn_option":        "Acquérir un drone option (count +1)",
+        "despawn_option":      "Retirer un drone option (count -1)",
+        "set_option_count":    "Définir nb de drones (a0 = nouveau count)",
     }
 
     # Action groups for the combo (key = group label, values = ordered action keys)
@@ -1255,6 +1268,7 @@ class GlobalsTab(QWidget, ProjectPathMixin):
             "cycle_player_form", "set_player_form",
             "enable_multijump", "disable_multijump",
             "enable_wall_grab", "disable_wall_grab", "set_gravity_dir",
+            "start_dash", "stop_dash",
         ]),
         ("Entités", [
             "spawn_entity", "show_entity", "hide_entity", "move_entity_to",
@@ -1266,6 +1280,9 @@ class GlobalsTab(QWidget, ProjectPathMixin):
         ("RPG / Aventure", ["show_dialogue", "give_item", "remove_item", "unlock_door",
                             "unlock_ability", "set_quest_stage", "play_cutscene"]),
         ("Système", ["emit_event", "save_game", "end_game"]),
+        ("Score / Hi-score", ["submit_score", "show_highscore", "clear_highscores"]),
+        ("Flow / Game Over", ["game_over"]),
+        ("Option Satellite", ["spawn_option", "despawn_option", "set_option_count"]),
     ]
 
     _EV_LABELS: dict[str, str] = {

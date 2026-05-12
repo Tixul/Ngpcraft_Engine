@@ -786,6 +786,8 @@ def make_scene_level_h(
         death_fx_vals: list[str] = []
         sfx_fire_vals: list[str] = []
         hit_flash_vals: list[str] = []
+        bounce_flags_vals: list[str] = []
+        bounce_sfx_vals: list[str] = []
         for t in seen_types:
             meta = sprite_meta.get(t) or {}
             role_name = str(entity_roles.get(t, "prop") or "prop").strip().lower()
@@ -917,6 +919,25 @@ def make_scene_level_h(
                 except (TypeError, ValueError):
                     _hf_n = 0
                 hit_flash_vals.append(str(max(0, min(255, _hf_n)) & 0xFF))
+            # MECH-3 Bounce — bitfield WALL(1) + TOP_BOTTOM(2). 0 = no bounce.
+            # Stored top-level on sprite so it applies to whatever this sprite
+            # is used as (bullet sprite, item, projectile, etc.).
+            _bf_raw = meta.get("bounce_flags")
+            try:
+                _bf_n = int(_bf_raw) if _bf_raw is not None else 0
+            except (TypeError, ValueError):
+                _bf_n = 0
+            bounce_flags_vals.append(str(_bf_n & 0xFF))
+            # MECH-3 Bounce SFX. 0xFF = silent (default).
+            _bsfx_raw = meta.get("bounce_sfx")
+            if _bsfx_raw is None or _bsfx_raw == "":
+                bounce_sfx_vals.append("0xFFu")
+            else:
+                try:
+                    _bsfx_n = int(_bsfx_raw)
+                except (TypeError, ValueError):
+                    _bsfx_n = 0xFF
+                bounce_sfx_vals.append(str(max(0, min(255, _bsfx_n)) & 0xFF))
         lines += [sep, "/* Runtime type tables                                                 */", sep]
         if not atk_flat_x_vals:
             atk_flat_x_vals = ["0"]
@@ -1001,6 +1022,9 @@ def make_scene_level_h(
         lines.append(f"static const u8 g_{sym_use}_type_death_fx[] = {{{', '.join(death_fx_vals)}}};")
         lines.append(f"static const u8 g_{sym_use}_type_sfx_fire[] = {{{', '.join(sfx_fire_vals)}}};")
         lines.append(f"static const u8 g_{sym_use}_type_hit_flash[] = {{{', '.join(hit_flash_vals)}}};")
+        lines.append(f"static const u8 g_{sym_use}_type_bounce_flags[] = {{{', '.join(bounce_flags_vals)}}};")
+        lines.append(f"static const u8 g_{sym_use}_type_bounce_sfx[] = {{{', '.join(bounce_sfx_vals)}}};")
+        lines.append(f"#define {sym_use.upper()}_HAS_MECH_PERTYPE_V1 1")
         lines.append("")
 
     # ---- Hurtboxes ----
@@ -1264,8 +1288,20 @@ def make_scene_level_h(
             2: 0x04,  # TOP only
             3: 0x08,  # BOTTOM only
         }
+        # MECH-4: per-scene wave_trigger_mode swaps "delay" for "at_scroll".
+        # When mode is scroll_x/scroll_y, the value embedded in the wave table
+        # is interpreted by the runtime as a camera position (px), not a frame
+        # count. The struct field stays `delay` (u16) — same storage, different
+        # semantic. Legacy projects stay frame-based (mode absent or "frame").
+        _wave_mode = str((sc.get("wave_trigger_mode") or "frame")).strip().lower()
+        if _wave_mode not in ("frame", "scroll_x", "scroll_y"):
+            _wave_mode = "frame"
         for wave in waves:
-            delay = int(wave.get("delay", 0) or 0)
+            if _wave_mode == "frame":
+                delay = int(wave.get("delay", 0) or 0)
+            else:
+                # Scroll-based: use at_scroll; fallback to legacy delay if absent.
+                delay = int(wave.get("at_scroll", wave.get("delay", 0)) or 0)
             for ent in (wave.get("entities", []) or []):
                 if not isinstance(ent, dict):
                     continue
@@ -1801,6 +1837,15 @@ def make_scene_level_h(
             "camera_path_stop":   84,
             "camera_path_pause":  85,
             "camera_path_resume": 86,
+            # MECH-9 dash trigger actions
+            "start_dash":         87,
+            "stop_dash":          88,
+            # MECH-6 hi-score trigger actions
+            "submit_score":       89,
+            "show_highscore":     90,
+            "clear_highscores":   91,
+            # MECH-13 game-over flow
+            "game_over":          92,
         }
 
         lines += [sep, "/* Triggers (conditions -> actions)                                    */", sep]
@@ -1972,6 +2017,15 @@ def make_scene_level_h(
             "#define TRIG_ACT_CAMERA_PATH_STOP   84",
             "#define TRIG_ACT_CAMERA_PATH_PAUSE  85",
             "#define TRIG_ACT_CAMERA_PATH_RESUME 86",
+            "#define TRIG_ACT_START_DASH         87",
+            "#define TRIG_ACT_STOP_DASH          88",
+            "#define TRIG_ACT_SUBMIT_SCORE       89",
+            "#define TRIG_ACT_SHOW_HIGHSCORE     90",
+            "#define TRIG_ACT_CLEAR_HIGHSCORES   91",
+            "#define TRIG_ACT_GAME_OVER          92",
+            "#define TRIG_ACT_SPAWN_OPTION       93",
+            "#define TRIG_ACT_DESPAWN_OPTION     94",
+            "#define TRIG_ACT_SET_OPTION_COUNT   95",
             "#endif",
             "",
             "#ifndef NGPNG_TRIGGER_T",
@@ -2799,6 +2853,9 @@ def make_scene_level_h(
         f"#define {sym_use.upper()}_FORCED_SCROLL {1 if bool(sc.get('forced', False)) else 0}",
         f"#define {sym_use.upper()}_SCROLL_SPEED_X {int(sc.get('speed_x', 0) or 0)}",
         f"#define {sym_use.upper()}_SCROLL_SPEED_Y {int(sc.get('speed_y', 0) or 0)}",
+        # MECH-4: 0=frame-based, 1=scroll_x (cam_px), 2=scroll_y (cam_py).
+        # Consumed by template_integration.py at the wave update site.
+        f"#define {sym_use.upper()}_WAVE_TRIGGER_MODE {0 if _wave_mode == 'frame' else (1 if _wave_mode == 'scroll_x' else 2)}",
         f"#define {sym_use.upper()}_LOOP_X {1 if bool(sc.get('loop_x', False)) else 0}",
         f"#define {sym_use.upper()}_LOOP_Y {1 if bool(sc.get('loop_y', False)) else 0}",
         f"#define {sym_use.upper()}_BGM_COUNT {len(bgm_tracks)}",

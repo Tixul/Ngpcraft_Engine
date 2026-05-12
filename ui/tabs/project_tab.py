@@ -926,7 +926,18 @@ class ProjectTab(ProjectPathMixin, QWidget):
         try:
             _d = self._data or {}
             _has_save = project_has_save_triggers(_d)
-            _no_sysfont = bool(_d.get("no_sysfont"))
+            # no_sysfont is only effective when a font PNG is configured.
+            # Without one, the codegen + mk would reference a header/symbol
+            # the font-export step never produces. Coerce to False here so all
+            # downstream emit sites stay consistent.
+            _no_sysfont_raw = bool(_d.get("no_sysfont"))
+            _has_font_png = bool(str(_d.get("custom_font_png") or "").strip())
+            _no_sysfont = _no_sysfont_raw and _has_font_png
+            if _no_sysfont_raw and not _has_font_png:
+                errs.append(
+                    "no_sysfont est activé mais aucun PNG n'a été configuré "
+                    "(Project tab → Custom font). Fallback sur sysfont."
+                )
             if _no_sysfont:
                 self._maybe_export_custom_font(export_dir, errs)
             return write_assets_autogen_mk(self._project_dir, export_dir, has_save=_has_save, no_sysfont=_no_sysfont)

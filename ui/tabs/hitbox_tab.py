@@ -1174,6 +1174,7 @@ class HitboxTab(QWidget):
             (tr("hitbox.ctrl_act_brake"),   "brake"),
             (tr("hitbox.ctrl_act_sprint"),  "sprint"),
             (tr("hitbox.ctrl_act_shoot"),   "shoot"),
+            (tr("hitbox.ctrl_act_dash"),    "dash"),
         ]
         _PAD_ROWS: list[str] = [
             "PAD_UP", "PAD_DOWN", "PAD_LEFT", "PAD_RIGHT",
@@ -2307,6 +2308,17 @@ class HitboxTab(QWidget):
         ctx = self._derive_display_context()
         self._display_context = ctx
         props = set(ctx.get("enabled_props", {}).keys())
+        # MECH-1 toggles — when a mechanic is disabled at project level, its
+        # related groups stay hidden even if the per-entity heuristic would
+        # show them. Default True so legacy projects (no "mechanics" key) keep
+        # current behaviour.
+        from core.mechanics import is_mechanic_enabled as _mech
+        _mech_shooting = _mech(self._project_data, "shooting")
+        _mech_combat   = _mech(self._project_data, "combat_stats")
+        _mech_scoring  = _mech(self._project_data, "scoring")
+        _mech_topdown  = _mech(self._project_data, "topdown_vehicle")
+        _mech_platfm   = _mech(self._project_data, "platformer_physics")
+        _mech_death    = _mech(self._project_data, "death_fx")
         ctrl_role = str(ctx.get("ctrl_role", "none") or "none")
         gameplay_role = str(ctx.get("gameplay_role", "prop") or "prop")
         scene_profile = str(ctx.get("scene_profile", "none") or "none")
@@ -2339,7 +2351,7 @@ class HitboxTab(QWidget):
             "td_turn_rate",
             "td_decel_rate",
         )
-        show_jump = has_jump_profile or platformer_hint or _checked(*jump_keys)
+        show_jump = (has_jump_profile or platformer_hint or _checked(*jump_keys)) and _mech_platfm
         # Bug-fix: phys_scroll alone (non-player) should not show sprint/brake rows.
         show_move_tuning = player_ctx or physics_profile == "phys_jump" or _checked(
             "sprint_speed",
@@ -2358,16 +2370,16 @@ class HitboxTab(QWidget):
             "decel": show_move_tuning,
             "friction": show_move_tuning,
             "brake_force": player_ctx or _checked("brake_force"),
-            "jump_force": show_jump,
-            "gravity": show_jump,
-            "max_fall_speed": show_jump,
+            "jump_force":     show_jump and _mech_platfm,
+            "gravity":        show_jump and _mech_platfm,
+            "max_fall_speed": show_jump and _mech_platfm,
             "can_jump": show_jump,
         }
         for key, visible in physics_rows.items():
             self._set_prop_row_visible(key, visible)
 
-        show_projectiles = player_ctx or has_ctrl_shoot
-        show_topdown = topdown_active or topdown_hint or has_dir_frames or _checked(*td_keys)
+        show_projectiles = (player_ctx or has_ctrl_shoot) and _mech_shooting
+        show_topdown = (topdown_active or topdown_hint or has_dir_frames or _checked(*td_keys)) and _mech_topdown
         show_motion = motion_hint or has_motion_patterns
         show_dir_frames = has_dir_frames or topdown_active or topdown_hint
 
@@ -2375,9 +2387,9 @@ class HitboxTab(QWidget):
             self._set_prop_row_visible(key, show_projectiles or _checked(key))
 
         combat_rows = {
-            "hp": True,
-            "damage": True,
-            "inv_frames": player_ctx or enemy_ctx or npc_ctx or _checked("inv_frames"),
+            "hp":         _mech_combat,
+            "damage":     _mech_combat,
+            "inv_frames": _mech_combat and (player_ctx or enemy_ctx or npc_ctx or _checked("inv_frames")),
         }
         for key, visible in combat_rows.items():
             self._set_prop_row_visible(key, visible)
@@ -2397,8 +2409,8 @@ class HitboxTab(QWidget):
             self._set_prop_row_visible(key, visible)
 
         misc_rows = {
-            "score": True,
-            "anim_spd": True,
+            "score":      _mech_scoring,
+            "anim_spd":   True,
             "flip_x_dir": topdown_active or has_dir_frames or player_ctx or enemy_ctx or _checked("flip_x_dir"),
         }
         for key, visible in misc_rows.items():
@@ -2435,7 +2447,7 @@ class HitboxTab(QWidget):
             or bool(ctx.get("has_attack_boxes"))
             or bool(ctx.get("has_hp"))
             or bool(ctx.get("has_contact_damage"))
-        )
+        ) and _mech_combat
         # phys_none banner: shown when entity has no physics relevance
         show_phys_none_banner = physics_profile == "phys_none" and not player_ctx and not enemy_ctx
         if hasattr(self, "_lbl_phys_none_banner"):
@@ -2452,6 +2464,18 @@ class HitboxTab(QWidget):
             grp = getattr(self, name, None)
             if grp is not None:
                 grp.setVisible(bool(visible))
+
+        # Gate the "death" animation row by the death_fx mechanic — when death FX
+        # is OFF the per-sprite death anim is unused, so hide its row to keep the
+        # Animation States group focused on what's relevant.
+        if hasattr(self, "_anim_rows"):
+            death_row = self._anim_rows.get("death")
+            if death_row:
+                for w in death_row:
+                    try:
+                        w.setVisible(_mech_death)
+                    except Exception:
+                        pass
 
         if hasattr(self, "_lbl_jump_summary"):
             self._lbl_jump_summary.setVisible(show_jump)
