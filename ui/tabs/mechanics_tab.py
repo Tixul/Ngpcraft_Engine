@@ -27,17 +27,45 @@ from typing import Callable, Optional
 from PyQt6.QtCore import Qt, QSettings, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
-    QComboBox,
+    QComboBox as _QtComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
     QScrollArea,
-    QSpinBox,
+    QSpinBox as _QtSpinBox,
     QVBoxLayout,
     QWidget,
 )
+
+
+# ---------------------------------------------------------------------------
+# Wheel-scroll guarded widgets — mechanics settings must NOT change when the
+# user scrolls the tab. Wheel is disabled entirely on spinboxes and combos:
+# the previous "allow when focused" check was unreliable because Qt's
+# StrongFocus policy grabs focus from the first wheel event, after which
+# subsequent ticks mutate the value. Users change values via click + typing
+# or the on-widget arrows; the wheel is reserved for page scroll.
+# ---------------------------------------------------------------------------
+
+class _NoScrollSpinBox(_QtSpinBox):
+    """QSpinBox that always ignores wheel events. `event.ignore()` lets the
+    event bubble up to the enclosing QScrollArea so the page scrolls."""
+    def wheelEvent(self, event):  # noqa: N802 (Qt naming)
+        event.ignore()
+
+
+class _NoScrollComboBox(_QtComboBox):
+    """Same idea as _NoScrollSpinBox for combo boxes."""
+    def wheelEvent(self, event):  # noqa: N802
+        event.ignore()
+
+
+# Rebind the Qt names so every existing call site in this file (and the
+# factory helpers) picks up the guarded variant without code changes.
+QSpinBox = _NoScrollSpinBox
+QComboBox = _NoScrollComboBox
 
 
 # Shared row builder for inline config widgets — keeps inline factory code tight.
