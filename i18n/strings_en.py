@@ -122,7 +122,7 @@ STRINGS_EN: dict[str, str] = {
     "tab.level": "Level",
     "tab.globals": "Globals",
     "tab.mechanics": "Mechanics",
-    "mechanics.intro": "Enable the gameplay mechanics your game needs. A disabled mechanic hides its settings in Scene/Entity and emits a NULL pointer in the exported struct (zero runtime cost). Each enabled mechanic shows its configuration path below.",
+    "mechanics.intro": "Enable the gameplay mechanics your game needs. A disabled mechanic always hides its editor controls; depending on the mechanic, export may then emit a NULL pointer, neutral defaults, or simply gate the related UI. Each enabled mechanic shows its configuration path below.",
     "mechanics.search": "Search:",
     "mechanics.search_placeholder": "Filter by name, keyword (e.g. pong, danmaku, score)…",
     "tab.font":    "Font",

@@ -5,8 +5,8 @@ Each "mechanic" is a toggleable gameplay feature (shooting, bounce, hit flash,
 death FX, etc.). The project chooses which ones to enable in the Mechanics tab;
 disabled mechanics:
   - hide their config UI in scene/entity panels (less clutter)
-  - skip emitting their per-type table pointer in the scene struct (runtime
-    guards (`if (sc->type_X)`) already short-circuit when the pointer is NULL)
+  - and, depending on the mechanic, either skip emitting some exported data,
+    force neutral defaults, or simply gate the corresponding editor UI.
 
 Public API:
     MECHANICS_REGISTRY  — list of MechanicEntry dicts (see below)
@@ -212,14 +212,14 @@ MECHANICS_REGISTRY: list[dict] = [
     {
         "id":              "game_over_flow",
         "label":           "Game Over flow (continue / final / name entry)",
-        "description":     "State machine 3 écrans à la fin de partie : Continue countdown (YES/NO) → Final game over → Name entry (si MECH-6 hi-score activé et score qualifie). Chaque écran a son BG scène configurable, son texte custom, sa BGM optionnelle.",
+        "description":     "State machine de fin de partie actuellement supportée par l'exporteur sous forme d'overlays texte : Continue countdown (YES/NO), écran final GAME OVER, puis name-entry si le hi-score auto-submit qualifie. Les réglages inline pilotent cette version runtime actuelle.",
         "default_enabled": False,
         "category":        "feedback",
         "config_locations": [
-            ("Mechanics tab → groupe « Game Over flow » → tout configurable inline",
-             "Active/désactive chaque écran, choisis BG par écran (scene picker), customise textes et durées."),
+            ("Mechanics tab → groupe « Game Over flow » → configuration inline",
+             "Active/désactive les overlays Continue / Final et ajuste textes + durées consommés par l'export actuel, y compris le libellé du name-entry."),
             ("Mechanics tab → mécanique « highscore »",
-             "À activer en parallèle si tu veux name entry + leaderboard à la fin."),
+             "À activer en parallèle si tu veux l'auto-submit du score courant et la saisie d'initiales quand le score qualifie."),
         ],
         "keywords": ["game over", "continue", "name entry", "screen", "state machine", "flow", "arcade"],
         "inline_config": "game_over_flow",
@@ -229,14 +229,14 @@ MECHANICS_REGISTRY: list[dict] = [
     {
         "id":              "highscore",
         "label":           "Tableau hi-score (top-N + flash save)",
-        "description":     "Top-N des meilleurs scores avec initiales par joueur. Persistence flash automatique entre sessions (versionnée + checksum). Standard arcade — utilisable par tout jeu avec score.",
+        "description":     "Top-N des meilleurs scores avec initiales par joueur. Fonctionne en RAM par session ou avec persistance flash entre sessions. Affichage du tableau et flux de name-entry runtime en fin de partie. Standard arcade — utilisable par tout jeu avec score.",
         "default_enabled": False,
         "category":        "score",
         "config_locations": [
             ("Mechanics tab → groupe « Tableau hi-score » → tout configurable inline",
-             "Nombre d'entrées, longueur initiales, magic value, scène de fond pour le screen name-entry, toggle save flash."),
+             "Nombre d'entrées, longueur des initiales, score/initiales par défaut, auto-submit, et persistance flash."),
             ("Triggers (scène ou entité) → action submit_score / show_highscore / clear_highscores",
-             "Pour soumettre le score courant, afficher le tableau, ou reset (debug). submit_score déclenche aussi le screen name-entry si le score qualifie."),
+             "Pour soumettre le score courant, afficher le tableau hi-score sur SCR2, ou le réinitialiser. En flow Game Over, un score qualifié peut passer par la saisie d'initiales."),
         ],
         "keywords": ["highscore", "hi-score", "leaderboard", "score", "ranking", "top", "name entry", "arcade", "flash save"],
         "inline_config": "highscore",
@@ -386,9 +386,7 @@ MECHANICS_CONFIG_DEFAULTS: dict[str, dict] = {
     "highscore": {
         "num_entries":      10,
         "initials_length":   3,
-        "magic_value":   "NgpH",
         "save_to_flash":  True,
-        "bg_scene_id":     "",
         "default_initials": "AAA",
         "default_score":      0,
         "auto_submit":     True,
@@ -431,11 +429,6 @@ MECHANICS_CONFIG_DEFAULTS: dict[str, dict] = {
         "continue_max_uses":           3,         # how many continues granted per game
         "enable_final_screen":      True,
         "final_min_duration_sec":      3,
-        "bg_scene_continue":          "",        # scene_id for BG (empty = current scene)
-        "bg_scene_final":             "",
-        "bg_scene_name_entry":        "",        # only used if highscore mechanic ON
-        "bgm_continue":             0xFF,        # song id, 0xFF = no music change
-        "bgm_final":                0xFF,
         "text_continue_prompt":  "CONTINUE?",
         "text_continue_yes":         "YES",
         "text_continue_no":           "NO",

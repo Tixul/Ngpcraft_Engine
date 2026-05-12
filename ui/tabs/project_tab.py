@@ -999,6 +999,9 @@ class ProjectTab(ProjectPathMixin, QWidget):
         """Write procgen_config.h and/or cavegen_config.h when any scene has runtime params."""
         if not export_dir or not isinstance(self._data, dict):
             return []
+        from core.mechanics import is_mechanic_enabled
+        if not is_mechanic_enabled(self._data, "procgen"):
+            return []
         try:
             from core.procgen_config_gen import write_all_procgen_configs
             return write_all_procgen_configs(project_data=self._data, export_dir=export_dir)
@@ -1033,6 +1036,9 @@ class ProjectTab(ProjectPathMixin, QWidget):
     def _maybe_write_dungeongen_procgen_assets(self, export_dir: Path | None, errs: list[str]) -> list[Path]:
         """Write DungeonGen tiles_procgen.* and sprites_lab.* into export_dir."""
         if not export_dir or not self._project_dir or not isinstance(self._data, dict):
+            return []
+        from core.mechanics import is_mechanic_enabled
+        if not is_mechanic_enabled(self._data, "procgen"):
             return []
 
         procgen_assets = self._data.get("procgen_assets", {}) or {}

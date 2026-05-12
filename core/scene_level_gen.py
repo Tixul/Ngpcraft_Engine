@@ -1267,6 +1267,12 @@ def make_scene_level_h(
         lines.append(f"#define {sym_use.upper()}_ENTITY_COUNT 0")
         lines.append("")
 
+    # MECH-4: per-scene wave_trigger_mode is also emitted as a scene-level define,
+    # so it must exist even when the scene has no wave table.
+    _wave_mode = str((scene.get("wave_trigger_mode") or "frame")).strip().lower()
+    if _wave_mode not in ("frame", "scroll_x", "scroll_y"):
+        _wave_mode = "frame"
+
     # ---- Enemy waves — split into scripted (NgpcWaveEntry) + random (NgpcRWaveCfg) ----
     if waves:
         lines += [
@@ -1293,9 +1299,6 @@ def make_scene_level_h(
         # is interpreted by the runtime as a camera position (px), not a frame
         # count. The struct field stays `delay` (u16) — same storage, different
         # semantic. Legacy projects stay frame-based (mode absent or "frame").
-        _wave_mode = str((sc.get("wave_trigger_mode") or "frame")).strip().lower()
-        if _wave_mode not in ("frame", "scroll_x", "scroll_y"):
-            _wave_mode = "frame"
         for wave in waves:
             if _wave_mode == "frame":
                 delay = int(wave.get("delay", 0) or 0)

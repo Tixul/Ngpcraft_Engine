@@ -121,7 +121,7 @@ STRINGS_FR: dict[str, str] = {
     "tab.hitbox": "Sprite Setup",
     "tab.globals": "Globals",
     "tab.mechanics": "Mechanics",
-    "mechanics.intro": "Active les mécaniques de gameplay dont ton jeu a besoin. Une mécanique désactivée cache ses réglages dans Scene/Entité et met son pointeur à NULL dans la struct exportée (zéro coût runtime). Chaque mécanique active affiche son chemin de configuration ci-dessous.",
+    "mechanics.intro": "Active les mécaniques de gameplay dont ton jeu a besoin. Une mécanique désactivée cache toujours ses réglages dans l'éditeur ; selon la mécanique, l'exporteur émet ensuite soit un pointeur NULL, soit des valeurs neutres, soit désactive simplement l'UI concernée. Chaque mécanique active affiche son chemin de configuration ci-dessous.",
     "mechanics.search": "Rechercher :",
     "mechanics.search_placeholder": "Filtre par nom, mot-clé (ex: pong, danmaku, score)…",
     "tab.font":    "Police",

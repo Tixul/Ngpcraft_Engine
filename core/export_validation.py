@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 
 from i18n.lang import tr
+from core.mechanics import is_mechanic_enabled
 from core.dungeongen_cells import (
     dungeongen_cell_label,
     dungeongen_group_cells_per_variant,
@@ -177,9 +178,11 @@ def collect_export_pipeline_issues(project_dir: Path | None, project_data: dict)
     scene_safe_seen: dict[str, str] = {}
     sprite_name_seen: dict[str, tuple[tuple[str, int, int, int, str], str, str]] = {}
     tilemap_name_seen: dict[str, tuple[tuple[str, str], str, str]] = {}
+    known_sprite_refs: set[str] = set()
 
     procgen_assets = project_data.get("procgen_assets", {}) if isinstance(project_data, dict) else {}
     dgen_assets = (procgen_assets.get("dungeongen") or {}) if isinstance(procgen_assets, dict) else {}
+    procgen_enabled = is_mechanic_enabled(project_data, "procgen") if isinstance(project_data, dict) else False
     dgen_tileset_rel = str(dgen_assets.get("tileset_png") or "").strip() if isinstance(dgen_assets, dict) else ""
     dgen_tileset_path = _abs_path(project_dir, dgen_tileset_rel) if dgen_tileset_rel else None
     dgen_tile_roles = {
@@ -214,7 +217,7 @@ def collect_export_pipeline_issues(project_dir: Path | None, project_data: dict)
         else:
             scene_safe_seen[scene_safe] = scene_label
 
-        if dgen_enabled:
+        if procgen_enabled and dgen_enabled:
             map_mode = str(scene.get("map_mode", "topdown") or "topdown").strip().lower()
             if map_mode != "topdown":
                 issues.append(ExportValidationIssue("bad", "DungeonGen requires scene map_mode='topdown'", scene_label=scene_label))
@@ -287,6 +290,14 @@ def collect_export_pipeline_issues(project_dir: Path | None, project_data: dict)
             if not isinstance(spr, dict) or not _export_enabled(spr):
                 continue
             export_name = _sprite_export_name(spr)
+            for candidate in (
+                str(spr.get("name") or "").strip(),
+                str(spr.get("id") or "").strip(),
+                Path(str(spr.get("file") or "").strip()).stem,
+                export_name,
+            ):
+                if candidate:
+                    known_sprite_refs.add(candidate)
             fp = _sprite_fingerprint(project_dir, spr)
             prev = sprite_name_seen.get(export_name.lower())
             if prev and prev[0] != fp:
@@ -341,7 +352,7 @@ def collect_export_pipeline_issues(project_dir: Path | None, project_data: dict)
 
     # ---- DungeonGen project-level post-checks --------------------------------
     # Run once after the scene loop to avoid per-scene repetition.
-    any_dgen_enabled = any(
+    any_dgen_enabled = procgen_enabled and any(
         isinstance(sc.get("rt_dungeongen_params"), dict)
         and bool(sc["rt_dungeongen_params"].get("enabled", False))
         for sc in scenes
@@ -424,6 +435,26 @@ def collect_export_pipeline_issues(project_dir: Path | None, project_data: dict)
             audio_mk = mk_parent / "audio_autogen.mk"
             if export_has_artifacts and not audio_mk.exists():
                 issues.append(ExportValidationIssue("warn", tr("proj.validation_missing_audio_autogen", path=str(mk_parent))))
+
+    mechanics_cfg = project_data.get("mechanics_config")
+    if not isinstance(mechanics_cfg, dict):
+        mechanics_cfg = {}
+
+    opt_cfg = mechanics_cfg.get("option_satellite")
+    if isinstance(opt_cfg, dict):
+        for key, label in (
+            ("sprite_type", "option_satellite.sprite_type"),
+            ("bullet_sprite", "option_satellite.bullet_sprite"),
+        ):
+            ref = str(opt_cfg.get(key) or "").strip()
+            if ref and ref not in known_sprite_refs:
+                issues.append(
+                    ExportValidationIssue(
+                        "warn",
+                        f"Mechanics {label}: sprite reference '{ref}' was not found in exported scene sprites.",
+                        asset_label=ref,
+                    )
+                )
 
     return issues
 

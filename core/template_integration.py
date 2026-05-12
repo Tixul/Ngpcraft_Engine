@@ -1561,6 +1561,10 @@ def _detect_features(project_data: dict) -> dict:
     _player_dash_sfx: int = 0xFF
 
     scenes_list = (project_data or {}).get("scenes") or []
+    from core.mechanics import is_mechanic_enabled as _mech_on
+    _mech_wave_spawning = _mech_on(project_data, "wave_spawning")
+    _mech_procgen = _mech_on(project_data, "procgen")
+    _mech_topdown_vehicle = _mech_on(project_data, "topdown_vehicle")
     for sc in scenes_list:
         if not isinstance(sc, dict):
             continue
@@ -1780,7 +1784,9 @@ def _detect_features(project_data: dict) -> dict:
                     return True
         return False
 
-    has_waves = any(_scene_has_scripted_wave(sc) for sc in scenes_list)
+    has_waves = _mech_wave_spawning and any(
+        _scene_has_scripted_wave(sc) for sc in scenes_list
+    )
     # Random wave director: any scene with a rand=True wave entity.
     # The scripted ngpc_wave and the random ngpc_rwave coexist peacefully:
     # rand entries are lifted out of the scripted table and produce one
@@ -1798,7 +1804,7 @@ def _detect_features(project_data: dict) -> dict:
         return n
 
     rwave_counts = [_scene_rwave_count(sc) for sc in scenes_list]
-    has_wave_rand = any(n > 0 for n in rwave_counts)
+    has_wave_rand = _mech_wave_spawning and any(n > 0 for n in rwave_counts)
     # NGP_RWAVE_MAX_PER_SCENE: runtime array size. Never below 1 so the array
     # compiles even with empty scenes; tightened to the actual max so we don't
     # waste ~28 bytes per unused slot.
@@ -1806,7 +1812,7 @@ def _detect_features(project_data: dict) -> dict:
     if max_rwave_per_scene < 1:
         max_rwave_per_scene = 1
     # DungeonGen: any scene with rt_dungeongen_params.enabled=True
-    has_dungeongen = any(
+    has_dungeongen = _mech_procgen and any(
         isinstance(sc.get("rt_dungeongen_params"), dict)
         and bool(sc["rt_dungeongen_params"].get("enabled", False))
         for sc in scenes_list if isinstance(sc, dict)
@@ -1821,7 +1827,11 @@ def _detect_features(project_data: dict) -> dict:
     # Top-down sub-modes (only meaningful when has_topdown_physics is True)
     has_topdown_facing   = has_topdown_physics  # any topdown project gets directional sprites
     has_topdown_relative = has_topdown_physics and (_player_td_control == "relative")
-    has_topdown_vehicle  = has_topdown_physics and (_player_td_move == "vehicle")
+    has_topdown_vehicle  = (
+        _mech_topdown_vehicle
+        and has_topdown_physics
+        and (_player_td_move == "vehicle")
+    )
     has_topdown_advance  = has_topdown_physics and (_player_td_move == "advance")
     # Flash save: support both legacy single-action triggers and newer multi-action triggers.
     has_save = project_has_save_triggers(project_data)
@@ -2051,6 +2061,7 @@ def write_autorun_main_c(
     _hs_auto       = bool(_hs_cfg.get("auto_submit", True))
     _hs_def_init   = str(_hs_cfg.get("default_initials", "AAA") or "AAA")[:_hs_l].ljust(_hs_l, "A")
     _hs_def_score  = int(_hs_cfg.get("default_score", 0) or 0) & 0xFFFF
+    has_save       = bool(has_save or (_has_hiscore and _hs_save))
     # MECH-13 game-over flow
     _has_gof       = _mech_on_dash(project_data, "game_over_flow")
     _gof_cfg       = _get_mech_cfg(project_data, "game_over_flow")
@@ -2063,6 +2074,7 @@ def write_autorun_main_c(
     _gof_text_yes  = str(_gof_cfg.get("text_continue_yes", "YES") or "YES")[:8]
     _gof_text_no   = str(_gof_cfg.get("text_continue_no",  "NO")  or "NO")[:8]
     _gof_text_fin  = str(_gof_cfg.get("text_final", "GAME OVER") or "GAME OVER")[:16]
+    _gof_text_name = str(_gof_cfg.get("text_name_entry", "ENTER NAME") or "ENTER NAME")[:20]
     # MECH-11 damage popup — tilemap-based floating digits on a FIXED plane.
     _has_dmg_popup = _mech_on_dash(project_data, "damage_popup")
     _dp_cfg        = _get_mech_cfg(project_data, "damage_popup")
@@ -2634,6 +2646,9 @@ def write_autorun_main_c(
     c.append("#if !defined(NGP_ENABLE_SOUND) || !(NGP_ENABLE_SOUND)\n")
     c.append("static void Sfx_Play(unsigned char id) { (void)id; }\n")
     c.append("#endif\n")
+    if _has_hiscore:
+        c.append(f"#define NGPNG_HISCORE_N {_hs_n}u\n")
+        c.append(f"#define NGPNG_HISCORE_L {_hs_l}u\n")
     if has_save:
         # Read save_config from project data
         _scfg = (project_data or {}).get("save_config", {})
@@ -2687,9 +2702,6 @@ def write_autorun_main_c(
         c.append('#include "ngpc_flash.h"\n')
         c.append("\n/* ---- Standalone flash save (NGP_ENABLE_FLASH_SAVE=1 required) ---- */\n")
         c.append("#define NGPNG_SAVE_VERSION 2\n")
-        if _has_hiscore and _hs_save:
-            c.append(f"#define NGPNG_HISCORE_N {_hs_n}u\n")
-            c.append(f"#define NGPNG_HISCORE_L {_hs_l}u\n")
         c.append("typedef struct {\n")
         c.append("    u8 magic[4];           /* { 0xCA, 0xFE, 0x20, 0x26 } */\n")
         c.append("    u8 version;\n")
@@ -2780,60 +2792,185 @@ def write_autorun_main_c(
         c.append("    ngpc_flash_save(&s_save);\n")
         c.append("    s_save_dirty = 0u;\n")
         c.append("}\n")
-        if _has_hiscore and _hs_save:
-            # MECH-6 hi-score API — based on StarGunner reference, adapted to
-            # the engine's extended NgpngSaveData struct.
-            c.append("\n/* ---- MECH-6 hi-score API ---- */\n")
-            # qualifies — returns rank 0..N-1 if score beats that slot, 0xFF otherwise.
-            c.append("static u8 ngpng_hiscore_qualifies(u16 score) {\n")
-            c.append("    u8 i;\n")
-            c.append("    u16 entry_score;\n")
-            c.append("    for (i = 0u; i < NGPNG_HISCORE_N; i = (u8)(i + 1u)) {\n")
-            c.append("        entry_score = (u16)((u16)s_save.hs_score_lo[i] | ((u16)s_save.hs_score_hi[i] << 8));\n")
-            c.append("        if (score > entry_score) return i;\n")
-            c.append("    }\n")
-            c.append("    return 0xFFu;\n")
-            c.append("}\n")
-            # submit — shift entries down, insert at rank, mark dirty + commit.
-            c.append("static void ngpng_hiscore_submit(u16 score, const u8 *initials) {\n")
-            c.append("    u8 rank;\n")
-            c.append("    u8 i;\n")
-            c.append("    u8 j;\n")
-            c.append("    rank = ngpng_hiscore_qualifies(score);\n")
-            c.append("    if (rank == 0xFFu) return;\n")
-            c.append("    /* Shift entries down from end to rank+1. cc900-safe: i is u8 strictly > rank. */\n")
-            c.append("    for (i = (u8)(NGPNG_HISCORE_N - 1u); i > rank; i = (u8)(i - 1u)) {\n")
-            c.append("        s_save.hs_score_lo[i] = s_save.hs_score_lo[i - 1u];\n")
-            c.append("        s_save.hs_score_hi[i] = s_save.hs_score_hi[i - 1u];\n")
-            c.append("        for (j = 0u; j < NGPNG_HISCORE_L; j = (u8)(j + 1u)) {\n")
-            c.append("            s_save.hs_initials[i][j] = s_save.hs_initials[i - 1u][j];\n")
+        c.append("static u8 g_game_over_saved;\n")
+    if _has_hiscore:
+        _hs_rank_x = 1
+        _hs_dot_x = 3
+        _hs_name_x = 5
+        _hs_score_x = 7 + _hs_l
+        c.append("\n/* ---- MECH-6 hi-score runtime ---- */\n")
+        c.append("static u8 g_hs_initials[NGPNG_HISCORE_N][NGPNG_HISCORE_L];\n")
+        c.append("static u8 g_hs_score_lo[NGPNG_HISCORE_N];\n")
+        c.append("static u8 g_hs_score_hi[NGPNG_HISCORE_N];\n")
+        c.append("static u8 g_hs_screen_active;\n")
+        c.append("static u8 g_hs_screen_just_opened;\n")
+        c.append("static u8 g_hs_pending_entry;\n")
+        c.append("static u8 g_hs_name[NGPNG_HISCORE_L];\n")
+        c.append("static u8 g_hs_name_pos;\n")
+        c.append("static u16 ngpng_hiscore_entry_score(u8 index) {\n")
+        c.append("    return (u16)((u16)g_hs_score_lo[index] | ((u16)g_hs_score_hi[index] << 8));\n")
+        c.append("}\n")
+        c.append("static void ngpng_hiscore_defaults(void) {\n")
+        c.append("    u8 hi;\n")
+        c.append("    u8 hj;\n")
+        c.append("    for (hi = 0u; hi < NGPNG_HISCORE_N; hi = (u8)(hi + 1u)) {\n")
+        c.append("        for (hj = 0u; hj < NGPNG_HISCORE_L; hj = (u8)(hj + 1u)) {\n")
+        c.append("            g_hs_initials[hi][hj] = (u8)'A';\n")
+        for _idx, _ch in enumerate(_hs_def_init):
+            c.append(f"            if (hj == {_idx}u) g_hs_initials[hi][hj] = (u8)'{_ch}';\n")
+        c.append("        }\n")
+        c.append(f"        g_hs_score_lo[hi] = (u8)({_hs_def_score}u & 0xFFu);\n")
+        c.append(f"        g_hs_score_hi[hi] = (u8)(({_hs_def_score}u >> 8) & 0xFFu);\n")
+        c.append("    }\n")
+        c.append("}\n")
+        if has_save and _hs_save:
+            c.append("static void ngpng_hiscore_sync_from_save(void) {\n")
+            c.append("    u8 hi;\n")
+            c.append("    u8 hj;\n")
+            c.append("    for (hi = 0u; hi < NGPNG_HISCORE_N; hi = (u8)(hi + 1u)) {\n")
+            c.append("        g_hs_score_lo[hi] = s_save.hs_score_lo[hi];\n")
+            c.append("        g_hs_score_hi[hi] = s_save.hs_score_hi[hi];\n")
+            c.append("        for (hj = 0u; hj < NGPNG_HISCORE_L; hj = (u8)(hj + 1u)) {\n")
+            c.append("            g_hs_initials[hi][hj] = s_save.hs_initials[hi][hj];\n")
             c.append("        }\n")
             c.append("    }\n")
-            c.append("    s_save.hs_score_lo[rank] = (u8)(score & 0xFFu);\n")
-            c.append("    s_save.hs_score_hi[rank] = (u8)((score >> 8) & 0xFFu);\n")
-            c.append("    for (j = 0u; j < NGPNG_HISCORE_L; j = (u8)(j + 1u)) {\n")
-            c.append("        s_save.hs_initials[rank][j] = initials ? initials[j] : (u8)'A';\n")
-            c.append("    }\n")
-            c.append("    s_save_dirty = 1u;\n")
-            c.append("    ngpc_flash_save(&s_save);  /* commit immediately — hi-score is rare, don't risk losing it */\n")
-            c.append("    s_save_dirty = 0u;\n")
             c.append("}\n")
-            # clear — reset to defaults (used by clear_highscores trigger).
-            c.append("static void ngpng_hiscore_clear(void) {\n")
-            c.append("    u8 i;\n")
-            c.append("    u8 j;\n")
-            c.append("    for (i = 0u; i < NGPNG_HISCORE_N; i = (u8)(i + 1u)) {\n")
-            c.append(f"        s_save.hs_score_lo[i] = (u8)({_hs_def_score}u & 0xFFu);\n")
-            c.append(f"        s_save.hs_score_hi[i] = (u8)(({_hs_def_score}u >> 8) & 0xFFu);\n")
-            c.append("        for (j = 0u; j < NGPNG_HISCORE_L; j = (u8)(j + 1u)) {\n")
-            for _idx, _ch in enumerate(_hs_def_init):
-                c.append(f"            if (j == {_idx}u) s_save.hs_initials[i][j] = (u8)'{_ch}';\n")
+            c.append("static void ngpng_hiscore_sync_to_save(void) {\n")
+            c.append("    u8 hi;\n")
+            c.append("    u8 hj;\n")
+            c.append("    for (hi = 0u; hi < NGPNG_HISCORE_N; hi = (u8)(hi + 1u)) {\n")
+            c.append("        s_save.hs_score_lo[hi] = g_hs_score_lo[hi];\n")
+            c.append("        s_save.hs_score_hi[hi] = g_hs_score_hi[hi];\n")
+            c.append("        for (hj = 0u; hj < NGPNG_HISCORE_L; hj = (u8)(hj + 1u)) {\n")
+            c.append("            s_save.hs_initials[hi][hj] = g_hs_initials[hi][hj];\n")
             c.append("        }\n")
             c.append("    }\n")
+            c.append("}\n")
+        c.append("static void ngpng_hiscore_init(void) {\n")
+        c.append("    ngpng_hiscore_defaults();\n")
+        if has_save and _hs_save:
+            c.append("    ngpng_hiscore_sync_from_save();\n")
+        c.append("    g_hs_screen_active = 0u;\n")
+        c.append("    g_hs_screen_just_opened = 0u;\n")
+        c.append("    g_hs_pending_entry = 0u;\n")
+        c.append("    g_hs_name_pos = 0u;\n")
+        c.append("    {\n")
+        c.append("        u8 hj;\n")
+        c.append("        for (hj = 0u; hj < NGPNG_HISCORE_L; hj = (u8)(hj + 1u)) {\n")
+        c.append("            g_hs_name[hj] = (u8)'A';\n")
+        for _idx, _ch in enumerate(_hs_def_init):
+            c.append(f"            if (hj == {_idx}u) g_hs_name[hj] = (u8)'{_ch}';\n")
+        c.append("        }\n")
+        c.append("    }\n")
+        c.append("}\n")
+        c.append("static void ngpng_hiscore_name_entry_reset(void) {\n")
+        c.append("    u8 hj;\n")
+        c.append("    g_hs_name_pos = 0u;\n")
+        c.append("    for (hj = 0u; hj < NGPNG_HISCORE_L; hj = (u8)(hj + 1u)) {\n")
+        c.append("        g_hs_name[hj] = (u8)'A';\n")
+        for _idx, _ch in enumerate(_hs_def_init):
+            c.append(f"        if (hj == {_idx}u) g_hs_name[hj] = (u8)'{_ch}';\n")
+        c.append("    }\n")
+        c.append("}\n")
+        c.append("static u8 ngpng_hiscore_name_char_prev(u8 c) {\n")
+        c.append("    static const char k_name_chars[] = \"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-\";\n")
+        c.append("    u8 i;\n")
+        c.append("    for (i = 0u; i < (u8)(sizeof(k_name_chars) - 1u); i = (u8)(i + 1u)) {\n")
+        c.append("        if ((u8)k_name_chars[i] == c) {\n")
+        c.append("            return (i == 0u) ? (u8)k_name_chars[(sizeof(k_name_chars) - 2u)] : (u8)k_name_chars[i - 1u];\n")
+        c.append("        }\n")
+        c.append("    }\n")
+        c.append("    return (u8)'A';\n")
+        c.append("}\n")
+        c.append("static u8 ngpng_hiscore_name_char_next(u8 c) {\n")
+        c.append("    static const char k_name_chars[] = \"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-\";\n")
+        c.append("    u8 i;\n")
+        c.append("    for (i = 0u; i < (u8)(sizeof(k_name_chars) - 1u); i = (u8)(i + 1u)) {\n")
+        c.append("        if ((u8)k_name_chars[i] == c) {\n")
+        c.append("            return (i == (u8)(sizeof(k_name_chars) - 2u)) ? (u8)k_name_chars[0] : (u8)k_name_chars[i + 1u];\n")
+        c.append("        }\n")
+        c.append("    }\n")
+        c.append("    return (u8)'A';\n")
+        c.append("}\n")
+        c.append("static u8 ngpng_hiscore_qualifies(u16 score) {\n")
+        c.append("    u8 i;\n")
+        c.append("    for (i = 0u; i < NGPNG_HISCORE_N; i = (u8)(i + 1u)) {\n")
+        c.append("        if (score >= ngpng_hiscore_entry_score(i)) return i;\n")
+        c.append("    }\n")
+        c.append("    return 0xFFu;\n")
+        c.append("}\n")
+        c.append("static void ngpng_hiscore_submit(u16 score, const u8 *initials) {\n")
+        c.append("    u8 rank;\n")
+        c.append("    u8 i;\n")
+        c.append("    u8 j;\n")
+        c.append("    rank = ngpng_hiscore_qualifies(score);\n")
+        c.append("    if (rank == 0xFFu) return;\n")
+        c.append("    for (i = (u8)(NGPNG_HISCORE_N - 1u); i > rank; i = (u8)(i - 1u)) {\n")
+        c.append("        g_hs_score_lo[i] = g_hs_score_lo[i - 1u];\n")
+        c.append("        g_hs_score_hi[i] = g_hs_score_hi[i - 1u];\n")
+        c.append("        for (j = 0u; j < NGPNG_HISCORE_L; j = (u8)(j + 1u)) {\n")
+        c.append("            g_hs_initials[i][j] = g_hs_initials[i - 1u][j];\n")
+        c.append("        }\n")
+        c.append("    }\n")
+        c.append("    g_hs_score_lo[rank] = (u8)(score & 0xFFu);\n")
+        c.append("    g_hs_score_hi[rank] = (u8)((score >> 8) & 0xFFu);\n")
+        c.append("    for (j = 0u; j < NGPNG_HISCORE_L; j = (u8)(j + 1u)) {\n")
+        c.append("        g_hs_initials[rank][j] = initials ? initials[j] : (u8)'A';\n")
+        c.append("    }\n")
+        if has_save and _hs_save:
+            c.append("    ngpng_hiscore_sync_to_save();\n")
             c.append("    s_save_dirty = 1u;\n")
             c.append("    ngpc_flash_save(&s_save);\n")
             c.append("    s_save_dirty = 0u;\n")
-            c.append("}\n")
+        c.append("}\n")
+        c.append("static void ngpng_hiscore_clear(void) {\n")
+        c.append("    ngpng_hiscore_defaults();\n")
+        if has_save and _hs_save:
+            c.append("    ngpng_hiscore_sync_to_save();\n")
+            c.append("    s_save_dirty = 1u;\n")
+            c.append("    ngpc_flash_save(&s_save);\n")
+            c.append("    s_save_dirty = 0u;\n")
+        c.append("}\n")
+        c.append("static void ngpng_hiscore_overlay_clear(void) {\n")
+        c.append("    u8 y;\n")
+        c.append("    for (y = 2u; y <= 17u; y = (u8)(y + 1u)) {\n")
+        c.append("        ngpc_text_print(GFX_SCR2, 1u, 0u, y, \"                    \");\n")
+        c.append("    }\n")
+        c.append("}\n")
+        c.append("static void ngpng_hiscore_overlay_draw(void) {\n")
+        c.append("    u8 i;\n")
+        c.append("    u8 j;\n")
+        c.append(f"    char name_buf[{_hs_l + 1}];\n")
+        c.append("    ngpc_text_print(GFX_SCR2, 1u, 4u, 2u, \"HIGH SCORES\");\n")
+        c.append("    for (i = 0u; i < NGPNG_HISCORE_N; i = (u8)(i + 1u)) {\n")
+        c.append("        for (j = 0u; j < NGPNG_HISCORE_L; j = (u8)(j + 1u)) {\n")
+        c.append("            name_buf[j] = (char)g_hs_initials[i][j];\n")
+        c.append("        }\n")
+        c.append("        name_buf[NGPNG_HISCORE_L] = '\\0';\n")
+        c.append(f"        ngpc_text_print_num(GFX_SCR2, 1u, {_hs_rank_x}u, (u8)(4u + i), (u16)(i + 1u), 2u);\n")
+        c.append(f"        ngpc_text_print(GFX_SCR2, 1u, {_hs_dot_x}u, (u8)(4u + i), \".\");\n")
+        c.append(f"        ngpc_text_print(GFX_SCR2, 1u, {_hs_name_x}u, (u8)(4u + i), name_buf);\n")
+        c.append(f"        ngpc_text_print_num(GFX_SCR2, 1u, {_hs_score_x}u, (u8)(4u + i), ngpng_hiscore_entry_score(i), 5u);\n")
+        c.append("    }\n")
+        c.append("    ngpc_text_print(GFX_SCR2, 1u, 4u, 15u, \"A/B=RETURN\");\n")
+        c.append("}\n")
+        c.append("static void ngpng_hiscore_name_entry_draw(u16 score) {\n")
+        c.append("    u8 i;\n")
+        c.append("    char cbuf[2];\n")
+        c.append("    cbuf[1] = '\\0';\n")
+        c.append("    ngpc_text_print(GFX_SCR2, 1u, 4u, 3u, \"" + _gof_text_name.replace("\\", "\\\\").replace("\"", "\\\"") + "\");\n")
+        c.append("    ngpc_text_print(GFX_SCR2, 1u, 5u, 6u, \"SCORE\");\n")
+        c.append("    ngpc_text_print_num(GFX_SCR2, 1u, 11u, 6u, score, 5u);\n")
+        c.append("    for (i = 0u; i < NGPNG_HISCORE_L; i = (u8)(i + 1u)) {\n")
+        c.append("        cbuf[0] = (char)g_hs_name[i];\n")
+        c.append("        ngpc_text_print(GFX_SCR2, 1u, (u8)(6u + i * 2u), 10u, cbuf);\n")
+        c.append("        ngpc_text_print(GFX_SCR2, 1u, (u8)(5u + i * 2u), 10u, (g_hs_name_pos == i) ? \">\" : \" \");\n")
+        c.append("    }\n")
+        c.append("    ngpc_text_print(GFX_SCR2, 1u, (u8)(7u + NGPNG_HISCORE_L * 2u), 13u, \"OK\");\n")
+        c.append("    ngpc_text_print(GFX_SCR2, 1u, (u8)(5u + NGPNG_HISCORE_L * 2u), 13u, (g_hs_name_pos == NGPNG_HISCORE_L) ? \">\" : \" \");\n")
+        c.append("    ngpc_text_print(GFX_SCR2, 1u, 1u, 16u, \"UP/DOWN CHANGE\");\n")
+        c.append("    ngpc_text_print(GFX_SCR2, 1u, 1u, 17u, \"A=OK L/R=SEL\");\n")
+        c.append("}\n")
     if has_palfx:
         c.append('#include "fx/ngpc_palfx.h"\n')
     if has_waves and has_enemy:
@@ -4892,7 +5029,8 @@ def write_autorun_main_c(
         c.append("#define NGPNG_GOF_STATE_NONE      0u\n")
         c.append("#define NGPNG_GOF_STATE_CONTINUE  1u\n")
         c.append("#define NGPNG_GOF_STATE_FINAL     2u\n")
-        c.append("#define NGPNG_GOF_STATE_HIGHSCORE 3u\n")
+        if _has_hiscore:
+            c.append("#define NGPNG_GOF_STATE_NAMEENTRY 3u\n")
         c.append("static u8  g_gof_state;\n")
         c.append("static u16 g_gof_timer;\n")
         c.append("static u8  g_gof_cont_used;  /* per-session counter, resets at boot */\n")
@@ -5476,7 +5614,11 @@ def write_autorun_main_c(
         if _sc_level:     c.append("    player_level = s_save.saved_player_level;\n")
         if _sc_xp:        c.append("    experience = s_save.saved_experience;\n")
         if _sc_best_time: c.append("    best_time = s_save.saved_best_time;\n")
+    if _has_hiscore:
+        c.append("    ngpng_hiscore_init();\n")
     c.append("\n")
+    if has_save:
+        c.append("    g_game_over_saved = 0u;\n")
     if has_save:
         c.append("    if (s_save.resume_scene < (u8)NGP_SCENE_COUNT) {\n")
         c.append("        cur_scene = s_save.resume_scene;\n")
@@ -5862,6 +6004,8 @@ def write_autorun_main_c(
     else:
         c.append("                    /* QUIT — restart current scene from beginning */\n")
     c.append("                    game_over = 0u; stage_clear = 0u;\n")
+    if has_save:
+        c.append("                    g_game_over_saved = 0u;\n")
     c.append("                    timer = 0; timer_sec = 0u; timer_tick = 59u;\n")
     if has_dialogues:
         c.append("                    ngpng_dialog_abort(&dialog_runner, &dialog_scene);\n")
@@ -5961,12 +6105,18 @@ def write_autorun_main_c(
     c.append("        /* ----------------------------------------------------------------\n")
     c.append("         * UPDATE -- follow the validated shmup pattern:\n")
     c.append("         * all gameplay + sprite shadow writes happen here, then VBlank ISR flushes.\n")
-    c.append("         * Skipped when paused or full-screen dialog (shadow OAM empty → no sprites).\n")
+    c.append("         * Skipped when paused, when the hi-score board is modal, or with a full-screen dialog.\n")
     c.append("         * ---------------------------------------------------------------- */\n")
     if has_dialogues:
-        c.append("        if (!s_paused && !s_dlg_full_screen) {\n")
+        if _has_hiscore:
+            c.append("        if (!s_paused && !g_hs_screen_active && !s_dlg_full_screen) {\n")
+        else:
+            c.append("        if (!s_paused && !s_dlg_full_screen) {\n")
     else:
-        c.append("        if (!s_paused) {\n")
+        if _has_hiscore:
+            c.append("        if (!s_paused && !g_hs_screen_active) {\n")
+        else:
+            c.append("        if (!s_paused) {\n")
     c.append("        scene_changed = 0;\n")
     c.append("        requested_scene = 0xFFu;\n")
     c.append("        requested_spawn  = 0xFFu;\n")
@@ -6686,6 +6836,8 @@ def write_autorun_main_c(
         if has_shooting:
             c.append("                fire_cd = 0u;\n")
         c.append("                game_over = 0u;\n")
+        if has_save:
+            c.append("                g_game_over_saved = 0u;\n")
         c.append("                stage_clear = 0u;\n")
         c.append("                player_platform = 0xFFu;\n")
         if has_shooting:
@@ -6938,26 +7090,29 @@ def write_autorun_main_c(
             # on AND its auto_submit config is True.
             c.append("        /* MECH-13 enter-flow detection: first frame game_over goes 1 → enter screen state. */\n")
             c.append("        if (game_over && g_gof_state == NGPNG_GOF_STATE_NONE) {\n")
-            if _has_hiscore and _hs_save and _hs_auto:
-                c.append("            /* MECH-6 auto-submit: try inserting the current score with default initials. */\n")
-                c.append("            {\n")
-                c.append("                static const u8 _hs_default_auto_init[NGPNG_HISCORE_L] = {")
-                c.append(", ".join(f"(u8)'{c_}'" for c_ in _hs_def_init))
-                c.append("};\n")
-                c.append("                ngpng_hiscore_submit(score, _hs_default_auto_init);\n")
-                c.append("            }\n")
+            if _has_hiscore and _hs_auto:
+                c.append("            /* MECH-6 auto-submit path: queue a name-entry screen only if the score qualifies. */\n")
+                c.append("            g_hs_pending_entry = (ngpng_hiscore_qualifies(score) != 0xFFu) ? 1u : 0u;\n")
+                c.append("            if (g_hs_pending_entry) ngpng_hiscore_name_entry_reset();\n")
             if _gof_cont_en:
                 c.append(f"            if (g_gof_cont_used < {_gof_cont_max}u) {{\n")
                 c.append("                g_gof_state = NGPNG_GOF_STATE_CONTINUE;\n")
                 c.append(f"                g_gof_timer = (u16)({_gof_cd_sec}u * 60u);\n")
                 c.append("            } else {\n")
-                _entry_state = "NGPNG_GOF_STATE_FINAL" if _gof_fin_en else "NGPNG_GOF_STATE_NONE"
+                if _gof_fin_en:
+                    _entry_state = "NGPNG_GOF_STATE_FINAL"
+                elif _has_hiscore and _hs_auto:
+                    _entry_state = "g_hs_pending_entry ? NGPNG_GOF_STATE_NAMEENTRY : NGPNG_GOF_STATE_NONE"
+                else:
+                    _entry_state = "NGPNG_GOF_STATE_NONE"
                 c.append(f"                g_gof_state = {_entry_state};\n")
                 c.append(f"                g_gof_timer = (u16)({_gof_fin_min}u * 60u);\n")
                 c.append("            }\n")
             elif _gof_fin_en:
                 c.append("            g_gof_state = NGPNG_GOF_STATE_FINAL;\n")
                 c.append(f"            g_gof_timer = (u16)({_gof_fin_min}u * 60u);\n")
+            elif _has_hiscore and _hs_auto:
+                c.append("            g_gof_state = g_hs_pending_entry ? NGPNG_GOF_STATE_NAMEENTRY : NGPNG_GOF_STATE_NONE;\n")
             c.append("        }\n")
             # ─── State CONTINUE ───
             if _gof_cont_en:
@@ -6972,8 +7127,12 @@ def write_autorun_main_c(
                 c.append("                g_gof_cont_used = (u8)(g_gof_cont_used + 1u);\n")
                 c.append("                player_hp    = player_hp_max;\n")
                 c.append("                game_over    = 0u;\n")
+                if has_save:
+                    c.append("                g_game_over_saved = 0u;\n")
                 c.append("                respawn_timer = 0u;\n")
                 c.append("                g_gof_state  = NGPNG_GOF_STATE_NONE;\n")
+                if _has_hiscore:
+                    c.append("                g_hs_pending_entry = 0u;\n")
                 c.append("                /* clear the overlay text so it doesn't linger */\n")
                 c.append("                ngpc_text_print(GFX_SCR2, 1u, 4u, 7u, \"                \");\n")
                 c.append("                ngpc_text_print(GFX_SCR2, 1u, 6u, 10u, \"                \");\n")
@@ -6982,7 +7141,10 @@ def write_autorun_main_c(
                     c.append("                g_gof_state = NGPNG_GOF_STATE_FINAL;\n")
                     c.append(f"                g_gof_timer = (u16)({_gof_fin_min}u * 60u);\n")
                 else:
-                    c.append("                g_gof_state = NGPNG_GOF_STATE_NONE;\n")
+                    if _has_hiscore and _hs_auto:
+                        c.append("                g_gof_state = g_hs_pending_entry ? NGPNG_GOF_STATE_NAMEENTRY : NGPNG_GOF_STATE_NONE;\n")
+                    else:
+                        c.append("                g_gof_state = NGPNG_GOF_STATE_NONE;\n")
                 c.append("                ngpc_text_print(GFX_SCR2, 1u, 4u, 7u, \"                \");\n")
                 c.append("                ngpc_text_print(GFX_SCR2, 1u, 6u, 10u, \"                \");\n")
                 c.append("            }\n")
@@ -6995,13 +7157,45 @@ def write_autorun_main_c(
                 c.append("            if (g_gof_timer > 0u) {\n")
                 c.append("                g_gof_timer = (u16)(g_gof_timer - 1u);\n")
                 c.append("            } else if (ngpc_pad_pressed != 0u) {\n")
-                c.append("                /* Any-key exits the FINAL screen. State NONE persists until reset. */\n")
-                c.append("                g_gof_state = NGPNG_GOF_STATE_NONE;\n")
+                if _has_hiscore and _hs_auto:
+                    c.append("                if (g_hs_pending_entry) g_gof_state = NGPNG_GOF_STATE_NAMEENTRY;\n")
+                    c.append("                else g_gof_state = NGPNG_GOF_STATE_NONE;\n")
+                else:
+                    c.append("                /* Any-key exits the FINAL screen. State NONE persists until reset. */\n")
+                    c.append("                g_gof_state = NGPNG_GOF_STATE_NONE;\n")
                 c.append("                ngpc_text_print(GFX_SCR2, 1u, 5u, 9u, \"                \");\n")
                 c.append("            }\n")
                 c.append("        }\n")
+            if _has_hiscore and _hs_auto:
+                c.append("        if (g_gof_state == NGPNG_GOF_STATE_NAMEENTRY) {\n")
+                c.append("            ngpng_hiscore_name_entry_draw(score);\n")
+                c.append("            if ((ngpc_pad_pressed & PAD_LEFT) != 0u && g_hs_name_pos > 0u) {\n")
+                c.append("                g_hs_name_pos = (u8)(g_hs_name_pos - 1u);\n")
+                c.append("            } else if ((ngpc_pad_pressed & PAD_RIGHT) != 0u && g_hs_name_pos < NGPNG_HISCORE_L) {\n")
+                c.append("                g_hs_name_pos = (u8)(g_hs_name_pos + 1u);\n")
+                c.append("            } else if ((ngpc_pad_pressed & PAD_UP) != 0u && g_hs_name_pos < NGPNG_HISCORE_L) {\n")
+                c.append("                g_hs_name[g_hs_name_pos] = ngpng_hiscore_name_char_next(g_hs_name[g_hs_name_pos]);\n")
+                c.append("            } else if ((ngpc_pad_pressed & PAD_DOWN) != 0u && g_hs_name_pos < NGPNG_HISCORE_L) {\n")
+                c.append("                g_hs_name[g_hs_name_pos] = ngpng_hiscore_name_char_prev(g_hs_name[g_hs_name_pos]);\n")
+                c.append("            }\n")
+                c.append("            if ((ngpc_pad_pressed & PAD_A) != 0u) {\n")
+                c.append("                if (g_hs_name_pos < (u8)(NGPNG_HISCORE_L - 1u)) g_hs_name_pos = (u8)(g_hs_name_pos + 1u);\n")
+                c.append("                else if (g_hs_name_pos < NGPNG_HISCORE_L) g_hs_name_pos = NGPNG_HISCORE_L;\n")
+                c.append("                else {\n")
+                c.append("                    ngpng_hiscore_submit(score, g_hs_name);\n")
+                c.append("                    g_hs_pending_entry = 0u;\n")
+                c.append("                    g_gof_state = NGPNG_GOF_STATE_NONE;\n")
+                c.append("                    ngpng_hiscore_overlay_clear();\n")
+                c.append("                    g_hs_screen_active = 1u;\n")
+                c.append("                    g_hs_screen_just_opened = 1u;\n")
+                c.append("                }\n")
+                c.append("            }\n")
+                c.append("            if ((ngpc_pad_pressed & PAD_B) != 0u && g_hs_name_pos > 0u) {\n")
+                c.append("                g_hs_name_pos = (u8)(g_hs_name_pos - 1u);\n")
+                c.append("            }\n")
+                c.append("        }\n")
         if has_save:
-            c.append("        if (game_over) {\n")
+            c.append("        if (game_over && !g_game_over_saved) {\n")
             if _sc_score:
                 c.append("#if NGPNG_AUTORUN_SCORE_HUD\n")
                 c.append("            if (score > best_score) {\n")
@@ -7028,6 +7222,7 @@ def write_autorun_main_c(
             c.append("            ngpng_save_flush(\n")
             c.append("                (checkpoint_scene < (u8)NGP_SCENE_COUNT) ? checkpoint_scene : cur_scene,\n")
             c.append("                checkpoint_scene, checkpoint_region);\n")
+            c.append("            g_game_over_saved = 1u;\n")
             c.append("        }\n")
         c.append("        if (player_hp > 0u && !(player_invul > 0u && (player_invul & 2u))) {\n")
         c.append("            if (player_form_mode) {\n")
@@ -7384,7 +7579,7 @@ def write_autorun_main_c(
             c.append("                 * so the user can't spam dash-cancel-dash for infinite movement. */\n")
             c.append("                dash_timer = 0u;\n")
             c.append("            }\n")
-        if _has_hiscore and _hs_save:
+        if _has_hiscore:
             # MECH-6 trigger actions — wired against the actual API helpers.
             c.append("            if (t->action == TRIG_ACT_SUBMIT_SCORE) {\n")
             c.append("                /* MECH-6: submit current `score` with default initials. The user\n")
@@ -7397,18 +7592,12 @@ def write_autorun_main_c(
             c.append("            if (t->action == TRIG_ACT_CLEAR_HIGHSCORES) {\n")
             c.append("                ngpng_hiscore_clear();\n")
             c.append("            }\n")
-            # show_highscore — for v1, set a flag that the GOF state machine
-            # (or a future dedicated state) can consume. Without GOF, this
-            # is a no-op visible-only-via-API.
+            # show_highscore — display the hi-score overlay on SCR2.
             c.append("            if (t->action == TRIG_ACT_SHOW_HIGHSCORE) {\n")
-            c.append("                /* MECH-6: request displaying the hi-score table on the next\n")
-            c.append("                 * frame. The actual rendering screen is part of MECH-13 GOF\n")
-            c.append("                 * state machine; if MECH-13 is off, this only sets the flag. */\n")
-            if _has_gof:
-                c.append("                g_gof_state = NGPNG_GOF_STATE_HIGHSCORE;\n")
-                c.append("                g_gof_timer = 0u;\n")
-            else:
-                c.append("                /* MECH-13 not enabled — no screen to display. */\n")
+            c.append("                /* MECH-6: request displaying the hi-score overlay on SCR2.\n")
+            c.append("                 * This works independently from the Game Over flow. */\n")
+            c.append("                g_hs_screen_active = 1u;\n")
+            c.append("                g_hs_screen_just_opened = 1u;\n")
             c.append("            }\n")
         if _has_gof:
             # MECH-13 game_over trigger — same effect as natural game_over but
@@ -7641,6 +7830,8 @@ def write_autorun_main_c(
             if has_shooting:
                 c.append("                fire_cd = 0u;\n")
             c.append("                game_over = 0u;\n")
+            if has_save:
+                c.append("                g_game_over_saved = 0u;\n")
             c.append("                stage_clear = 0u;\n")
             c.append("                if (sc->start_lives > 0u && lives == 0u) lives = sc->start_lives;\n")
             c.append("                respawn_timer = 0u;\n")
@@ -7839,6 +8030,8 @@ def write_autorun_main_c(
             c.append("            s_player_input_locked = 0u;\n")
     c.append("            g_ngp_scenes[cur_scene].exit();\n")
     c.append("            cur_scene = requested_scene;\n")
+    if has_save:
+        c.append("            g_game_over_saved = 0u;\n")
     c.append("            timer = 0; timer_sec = 0u; timer_tick = 59u;\n")
     c.append("            sc = &g_ngp_scenes[cur_scene];\n")
     c.append("            g_ngp_scenes[cur_scene].enter();\n")
@@ -7966,6 +8159,17 @@ def write_autorun_main_c(
         c.append("        } /* !s_paused && !s_dlg_full_screen */\n")
     else:
         c.append("        } /* !s_paused */\n")
+    if _has_hiscore:
+        c.append("        if (g_hs_screen_active) {\n")
+        c.append("            ngpng_hiscore_overlay_draw();\n")
+        c.append("            if (g_hs_screen_just_opened) {\n")
+        c.append("                g_hs_screen_just_opened = 0u;\n")
+        c.append("            } else if ((ngpc_pad_pressed & (PAD_A | PAD_B)) != 0u) {\n")
+        c.append("                g_hs_screen_active = 0u;\n")
+        c.append("                g_hs_screen_just_opened = 0u;\n")
+        c.append("                ngpng_hiscore_overlay_clear();\n")
+        c.append("            }\n")
+        c.append("        }\n")
     c.append("        ngpc_sprite_frame_end();\n")
     c.append("    }\n")
     c.append("}\n")

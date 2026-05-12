@@ -4,8 +4,8 @@ ui/tabs/mechanics_tab.py — Mechanics enable/disable tab (project-level).
 Hosts the toggle list for every gameplay mechanic registered in
 core.mechanics.MECHANICS_REGISTRY. Disabling a mechanic:
   - hides its config UI in scene/entity panels
-  - NULLs its per-type pointer in the scene struct at export time
-    (runtime guards short-circuit when the pointer is NULL → no runtime cost)
+  - and, depending on the mechanic, either NULLs its exported pointer, emits
+    neutral defaults, or gates the related runtime/UI path.
 
 Each mechanic row shows:
   - checkbox + label
@@ -66,6 +66,18 @@ class _NoScrollComboBox(_QtComboBox):
 # factory helpers) picks up the guarded variant without code changes.
 QSpinBox = _NoScrollSpinBox
 QComboBox = _NoScrollComboBox
+
+
+def _clear_layout(layout) -> None:
+    """Recursively delete all widgets/layout items from a Qt layout."""
+    while layout.count():
+        item = layout.takeAt(0)
+        child = item.layout()
+        if child is not None:
+            _clear_layout(child)
+        widget = item.widget()
+        if widget is not None:
+            widget.deleteLater()
 
 
 # Shared row builder for inline config widgets — keeps inline factory code tight.
@@ -244,8 +256,8 @@ def _build_damage_popup_config(project_data: dict, on_change) -> QWidget:
 
 
 def _build_highscore_config(project_data: dict, on_change) -> QWidget:
-    """Inline config for MECH-6 highscore: num entries, initials length, magic,
-    save toggle, BG scene, default initials, auto-submit."""
+    """Inline config for MECH-6 highscore: the parameters actually consumed by
+    the current exporter/runtime path."""
     w = QWidget()
     lay = QVBoxLayout(w)
     lay.setContentsMargins(0, 4, 0, 0)
@@ -262,6 +274,16 @@ def _build_highscore_config(project_data: dict, on_change) -> QWidget:
     cb_save.setToolTip(tr("mech.hiscore.save_tt"))
     cb_save.toggled.connect(lambda v: _set("save_to_flash", bool(v)))
     lay.addWidget(cb_save)
+
+    note = QLabel(
+        "Flash save OFF keeps the hi-score table active at runtime, but only in RAM for the current session."
+    )
+    note.setWordWrap(True)
+    note.setStyleSheet(
+        "color:#d8a23a; font-size:10px; background:#3a2f10;"
+        " border:1px solid #5e4a18; border-radius:3px; padding:4px;"
+    )
+    lay.addWidget(note)
 
     # Auto-submit toggle
     cb_auto = QCheckBox(tr("mech.hiscore.auto_submit"))
@@ -286,15 +308,6 @@ def _build_highscore_config(project_data: dict, on_change) -> QWidget:
     sp_i.valueChanged.connect(lambda v: _set("initials_length", int(v)))
     _row(lay, tr("mech.hiscore.initials"), sp_i)
 
-    # Magic value (4 ASCII chars to id this project's slot in flash)
-    le_magic = QLineEdit()
-    le_magic.setMaxLength(4)
-    le_magic.setPlaceholderText("NgpH")
-    le_magic.setText(str(cfg.get("magic_value", "NgpH") or "NgpH")[:4])
-    le_magic.setToolTip(tr("mech.hiscore.magic_tt"))
-    le_magic.editingFinished.connect(lambda: _set("magic_value", le_magic.text()[:4]))
-    _row(lay, tr("mech.hiscore.magic"), le_magic)
-
     # Default initials displayed for empty entries (e.g. "AAA")
     le_def = QLineEdit()
     le_def.setMaxLength(5)
@@ -315,7 +328,8 @@ def _build_highscore_config(project_data: dict, on_change) -> QWidget:
 
 
 def _build_game_over_flow_config(project_data: dict, on_change) -> QWidget:
-    """Inline config for MECH-13 game_over_flow: 3 screens with BG/text/duration."""
+    """Inline config for MECH-13 game_over_flow: Continue / Final overlays and
+    the hi-score name-entry caption are consumed by the exporter."""
     w = QWidget()
     lay = QVBoxLayout(w)
     lay.setContentsMargins(0, 4, 0, 0)
@@ -333,6 +347,16 @@ def _build_game_over_flow_config(project_data: dict, on_change) -> QWidget:
     cb_cont.toggled.connect(lambda v: _set("enable_continue", bool(v)))
     lay.addWidget(cb_cont)
 
+    note = QLabel(
+        "Current exporter renders the Continue / Final overlays, the hi-score name-entry flow, and a modal hi-score board."
+    )
+    note.setWordWrap(True)
+    note.setStyleSheet(
+        "color:#d8a23a; font-size:10px; background:#3a2f10;"
+        " border:1px solid #5e4a18; border-radius:3px; padding:4px;"
+    )
+    lay.addWidget(note)
+
     sp_cd = QSpinBox()
     sp_cd.setRange(1, 60)
     sp_cd.setValue(int(cfg.get("continue_countdown_sec", 9) or 9))
@@ -347,13 +371,6 @@ def _build_game_over_flow_config(project_data: dict, on_change) -> QWidget:
     sp_uses.setToolTip(tr("mech.gof.max_uses_tt"))
     sp_uses.valueChanged.connect(lambda v: _set("continue_max_uses", int(v)))
     _row(lay, tr("mech.gof.max_uses"), sp_uses)
-
-    cb_bg_c = _scene_picker(
-        project_data, str(cfg.get("bg_scene_continue", "") or ""),
-        lambda _i: _set("bg_scene_continue", cb_bg_c.currentData() or ""),
-    )
-    cb_bg_c.setToolTip(tr("mech.gof.bg_continue_tt"))
-    _row(lay, tr("mech.gof.bg_continue"), cb_bg_c)
 
     le_prompt = QLineEdit()
     le_prompt.setMaxLength(16)
@@ -379,32 +396,15 @@ def _build_game_over_flow_config(project_data: dict, on_change) -> QWidget:
     sp_min.valueChanged.connect(lambda v: _set("final_min_duration_sec", int(v)))
     _row(lay, tr("mech.gof.final_min"), sp_min)
 
-    cb_bg_f = _scene_picker(
-        project_data, str(cfg.get("bg_scene_final", "") or ""),
-        lambda _i: _set("bg_scene_final", cb_bg_f.currentData() or ""),
-    )
-    _row(lay, tr("mech.gof.bg_final"), cb_bg_f)
-
     le_final = QLineEdit()
     le_final.setMaxLength(16)
     le_final.setText(str(cfg.get("text_final", "GAME OVER") or "GAME OVER"))
     le_final.editingFinished.connect(lambda: _set("text_final", le_final.text()[:16]))
     _row(lay, tr("mech.gof.text_final"), le_final)
 
-    # Separator
-    sep2 = QLabel("── Name entry (si highscore activé) ──")
-    sep2.setStyleSheet("color:#d8a23a; font-size:10px; font-weight:bold; margin-top:6px;")
-    lay.addWidget(sep2)
-
-    cb_bg_ne = _scene_picker(
-        project_data, str(cfg.get("bg_scene_name_entry", "") or ""),
-        lambda _i: _set("bg_scene_name_entry", cb_bg_ne.currentData() or ""),
-    )
-    _row(lay, tr("mech.gof.bg_name_entry"), cb_bg_ne)
-
     le_ne = QLineEdit()
     le_ne.setMaxLength(20)
-    le_ne.setText(str(cfg.get("text_name_entry", "NEW HIGH SCORE!") or "NEW HIGH SCORE!"))
+    le_ne.setText(str(cfg.get("text_name_entry", "ENTER NAME") or "ENTER NAME")[:20])
     le_ne.editingFinished.connect(lambda: _set("text_name_entry", le_ne.text()[:20]))
     _row(lay, tr("mech.gof.text_name_entry"), le_ne)
 
@@ -590,8 +590,7 @@ class MechanicsTab(QWidget):
         # under "mechanics_tab/cat_<id>" so adding a new category doesn't reset
         # the user's existing prefs.
         self._settings = QSettings("NGPCraft", "Engine")
-        self._build_ui()
-        self._populate_from_project()
+        self._rebuild_ui()
 
     # ------------------------------------------------------------------
     # Public API
@@ -601,14 +600,44 @@ class MechanicsTab(QWidget):
         """Swap the backing project (e.g. after Open Project). Re-populates the
         toggles from the new data."""
         self._project_data = project_data
+        self._rebuild_ui(preserve_search=True)
+
+    def refresh_dynamic_sources(self) -> None:
+        """Rebuild inline config widgets whose combos depend on project scenes
+        or sprite types. Safe to call after project structure edits."""
+        self._rebuild_ui(preserve_search=True)
+
+    def _rebuild_ui(self, *, preserve_search: bool = False) -> None:
+        search_text = ""
+        if preserve_search and hasattr(self, "_search") and self._search is not None:
+            search_text = self._search.text()
+
+        outer = self.layout()
+        if outer is not None:
+            _clear_layout(outer)
+
+        self._rows.clear()
+        self._cat_headers.clear()
+        self._cat_rows.clear()
+        self._cat_state.clear()
+        self._search_query = ""
+
+        self._build_ui()
         self._populate_from_project()
+
+        if preserve_search and search_text:
+            self._search.setText(search_text)
+        else:
+            self._on_search_changed("")
 
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        outer = QVBoxLayout(self)
+        outer = self.layout()
+        if outer is None:
+            outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(8)
 

@@ -46,6 +46,7 @@ from core.entity_types import (
     get_type_events,
 )
 from core.entity_types_gen import _enum_name, collect_used_type_ids  # reuse helpers
+from core.mechanics import is_mechanic_enabled
 
 _OUTPUT_FILENAME = "ngpc_entity_type_events.h"
 
@@ -131,6 +132,7 @@ def make_entity_type_events_h(*, project_data: dict) -> str:
     """Return the full content of ngpc_entity_type_events.h as a string."""
     used_ids = collect_used_type_ids(project_data)
     all_types = get_entity_types(project_data)
+    death_actions_enabled = is_mechanic_enabled(project_data, "death_actions")
 
     # Build ordered list of used types (same order as entity_types_gen.py)
     used_types = [t for t in all_types
@@ -160,6 +162,8 @@ def make_entity_type_events_h(*, project_data: dict) -> str:
         events = get_type_events(t)
         for ev_name, actions in events.items():
             if not isinstance(actions, list):
+                continue
+            if ev_name == "entity_death" and not death_actions_enabled:
                 continue
             ev_int = EVENT_IDS.index(ev_name) if ev_name in EVENT_IDS else None
             if ev_int is None:

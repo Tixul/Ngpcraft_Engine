@@ -962,6 +962,7 @@ def export_project(
         else:
             log("WARN  no_sysfont=true but custom_font_png is empty")
 
+    _procgen_on = False
     if export_dir_abs:
         try:
             sh, sc, skipped = write_scenes_autogen(project_data=data, export_dir=export_dir_abs)
@@ -1001,33 +1002,36 @@ def export_project(
             log(f"ItemTable: {it_h}")
         except Exception as e:
             log(f"WARN  cannot write item_table.h: {e}")
+        from core.mechanics import is_mechanic_enabled as _mech_on
+        _procgen_on = _mech_on(data, "procgen")
         try:
-            from core.procgen_config_gen import (
-                write_procgen_config_h,
-                write_cavegen_config_h,
-                write_dungeongen_config_h,
-            )
-            for sc in (data.get("scenes") or []):
-                if sc.get("rt_dfs_params"):
-                    dfs_h = write_procgen_config_h(scene=sc, export_dir=export_dir_abs)
-                    log(f"ProcgenDFS: {dfs_h}")
-                if sc.get("rt_cave_params"):
-                    cave_h = write_cavegen_config_h(scene=sc, export_dir=export_dir_abs, project_data=data)
-                    log(f"ProcgenCave: {cave_h}")
-                if sc.get("rt_dungeongen_params"):
-                    dgen_h = write_dungeongen_config_h(
-                        scene=sc,
-                        export_dir=export_dir_abs,
-                        project_data=data,
-                    )
-                    log(f"ProcgenDungeonGen: {dgen_h}")
+            if _procgen_on:
+                from core.procgen_config_gen import (
+                    write_procgen_config_h,
+                    write_cavegen_config_h,
+                    write_dungeongen_config_h,
+                )
+                for sc in (data.get("scenes") or []):
+                    if sc.get("rt_dfs_params"):
+                        dfs_h = write_procgen_config_h(scene=sc, export_dir=export_dir_abs)
+                        log(f"ProcgenDFS: {dfs_h}")
+                    if sc.get("rt_cave_params"):
+                        cave_h = write_cavegen_config_h(scene=sc, export_dir=export_dir_abs, project_data=data)
+                        log(f"ProcgenCave: {cave_h}")
+                    if sc.get("rt_dungeongen_params"):
+                        dgen_h = write_dungeongen_config_h(
+                            scene=sc,
+                            export_dir=export_dir_abs,
+                            project_data=data,
+                        )
+                        log(f"ProcgenDungeonGen: {dgen_h}")
         except Exception as e:
             log(f"WARN  cannot write procgen_config.h: {e}")
     # Optional: DungeonGen procgen assets (tiles + sprites)
     try:
         pa = (data.get("procgen_assets") or {}) if isinstance(data, dict) else {}
         dgen_pa = pa.get("dungeongen", {}) or {}
-        if dgen_pa and export_dir_abs:
+        if _procgen_on and dgen_pa and export_dir_abs:
             gen_dir = export_dir_abs
             png_rel = str(dgen_pa.get("tileset_png", "") or "").strip()
             tile_roles = dgen_pa.get("tile_roles", {}) or {}

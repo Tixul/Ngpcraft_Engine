@@ -93,9 +93,9 @@ One click on **Export (template-ready)** produces a project that compiles and ru
 
 **Mechanics tab — gameplay framework**
 - 19 toggleable mechanics (most mined from hardware-validated games) — flip each one ON/OFF at project level
-- Inline config per mechanic (fade transitions, damage popup plane/TTL, hi-score entries/save, game-over flow with continue countdown + per-screen BG, Gradius-style option drones with formations + destructible mode…)
+- Inline config per mechanic (fade transitions, damage popup plane/TTL, hi-score entries/save, current game-over continue/final overlays, Gradius-style option drones with formations + destructible mode…)
 - Per-scene overrides where it matters (wave trigger mode frame/scroll-based, option count + disable per scene)
-- Collapsible categories + live search; toggles gate UI in Sprite Setup / Scene panels and short-circuit runtime guards via NULL pointers — zero cost when disabled
+- Collapsible categories + live search; toggles gate UI in Sprite Setup / Scene panels and, depending on the mechanic, either emit NULL pointers, neutral defaults, or gate the relevant runtime path
 - New trigger actions wired in: `start_dash`, `stop_dash`, `submit_score`, `show_highscore`, `clear_highscores`, `game_over`, `fade_in`, `fade_out`, `spawn_option`, `despawn_option`, `set_option_count`
 - Backward compatible: retrofit mechanics default ON, new ones default OFF, old `.ngpcraft` files load unchanged
 

@@ -70,6 +70,7 @@ class MainWindow(QMainWindow):
         self._is_new = is_new
         self._is_free_mode = is_free_mode
         self._project_data: dict = {}
+        self._mechanics_dynamic_signature: tuple[tuple[str, ...], tuple[str, ...]] = ((), ())
 
         if is_free_mode:
             pass  # no project file, no data to load
@@ -85,6 +86,7 @@ class MainWindow(QMainWindow):
             self._load_project()
 
         self._build_ui()
+        self._mechanics_dynamic_signature = self._compute_mechanics_dynamic_signature()
         self._register_pipeline_tools()
         self._update_title()
         if not is_free_mode and project_path:
@@ -155,6 +157,35 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Error", f"Cannot save project:\n{exc}")
         if hasattr(self, "_navigator"):
             self._navigator.set_project_data(self._project_data)
+        if hasattr(self, "_mechanics_tab"):
+            sig = self._compute_mechanics_dynamic_signature()
+            if sig != self._mechanics_dynamic_signature:
+                self._mechanics_dynamic_signature = sig
+                self._mechanics_tab.refresh_dynamic_sources()
+
+    def _compute_mechanics_dynamic_signature(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Scene ids + sprite types referenced by Mechanics inline combos.
+
+        Used to refresh the Mechanics tab only when those dynamic sources
+        actually changed, instead of rebuilding the tab on every save.
+        """
+        scenes = self._project_data.get("scenes", []) if isinstance(self._project_data, dict) else []
+        scene_ids: list[str] = []
+        sprite_types: set[str] = set()
+        if isinstance(scenes, list):
+            for sc in scenes:
+                if not isinstance(sc, dict):
+                    continue
+                sid = str(sc.get("id") or "").strip()
+                if sid:
+                    scene_ids.append(sid)
+                for spr in (sc.get("sprites") or []):
+                    if not isinstance(spr, dict):
+                        continue
+                    stype = str(spr.get("type") or "").strip()
+                    if stype:
+                        sprite_types.add(stype)
+        return (tuple(sorted(scene_ids)), tuple(sorted(sprite_types)))
 
     # ------------------------------------------------------------------
     # UI

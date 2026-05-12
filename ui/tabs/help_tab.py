@@ -4307,7 +4307,7 @@ scenes[].rt_cave_params    ← Cave (wall_pct, iterations, tiers, multi-floor…
 <em>que si la case à cocher principale du sous-onglet est cochée</em>.
 Si vous décochez la case et sauvegardez, la clé est supprimée du <code>.ngpcraft</code>.
 Le pipeline d’export (<b>Export project</b> dans l’onglet Projet) ne génère <code>procgen_config.h</code> / <code>cavegen_config.h</code>
-que pour les scènes où le module est activé.</p>
+que pour les scènes où le module est activé, et seulement si la mécanique projet <b>procgen</b> est elle aussi activée dans l’onglet Mechanics.</p>
 <p>Changer de scène restaure automatiquement l’état de la case à cocher et les paramètres correspondants.
 La duplication de scène (bouton <b>⧉</b> dans l’onglet Projet) copie aussi ces paramètres et leur état d’activation.</p>
 
@@ -5339,7 +5339,7 @@ scenes[].rt_cave_params    ← Cave (wall_pct, iterations, tiers, multi-floor…
 <em>when the sub-tab's master checkbox is checked</em>.
 Unchecking and saving removes the key from the <code>.ngpcraft</code>.
 The project export pipeline (<b>Export project</b> in the Project tab) only generates
-<code>procgen_config.h</code> / <code>cavegen_config.h</code> for scenes where the module is enabled.</p>
+<code>procgen_config.h</code> / <code>cavegen_config.h</code> for scenes where the module is enabled, and only when the project-level <b>procgen</b> mechanic is also enabled in the Mechanics tab.</p>
 <p>Switching scenes automatically restores the checkbox state and matching parameters.
 The <b>⧉ Duplicate scene</b> button (Project tab) deep-copies all procgen parameters and their activation state.</p>
 
@@ -8866,9 +8866,9 @@ celles dont ton jeu a besoin ; les désactivées :</p>
 <ul>
   <li><b>Cachent</b> leur config dans les autres onglets (Scene / entité). Plus
       de panneaux remplis de réglages inutiles.</li>
-  <li><b>Mettent à NULL</b> leur pointeur dans la struct exportée
-      <code>NgpSceneDef</code>. Les checks <code>if (sc-&gt;type_X)</code> au
-      runtime court-circuitent → <b>zéro coût CPU</b> quand désactivé.</li>
+  <li><b>Neutralisent</b> ou <b>court-circuitent</b> leur chemin export/runtime
+      quand la mécanique le supporte. Selon le cas, cela masque seulement
+      l'UI, émet des valeurs neutres, ou coupe le code/runtime associé.</li>
 </ul>
 
 <h2>Où configurer chaque mécanique</h2>
@@ -8948,9 +8948,9 @@ game needs; the disabled ones:</p>
 <ul>
   <li><b>Hide</b> their config in other tabs (Scene / entity panel). No more
       panels cluttered with unused settings.</li>
-  <li><b>NULL out</b> their pointer in the exported <code>NgpSceneDef</code>
-      struct. Runtime checks <code>if (sc-&gt;type_X)</code> short-circuit
-      → <b>zero CPU cost</b> when disabled.</li>
+  <li><b>Neutralize</b> or <b>short-circuit</b> their export/runtime path when
+      the mechanic supports it. Depending on the feature, this may only hide
+      UI, emit neutral defaults, or gate the associated runtime code.</li>
 </ul>
 
 <h2>Where each mechanic is configured</h2>
