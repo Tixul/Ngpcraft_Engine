@@ -541,7 +541,8 @@ STRINGS_EN: dict[str, str] = {
     "proj.scene_preset_apply_tt": "Fill profile/layout/rules for the current scene and inject starter regions/triggers when useful.",
     "proj.scene_preset_hint": "Scene presets are small reusable starters: they keep existing sprites/tilemaps and only prefill gameplay/layout metadata.",
     "proj.scene_preset.platformer": "Platformer",
-    "proj.scene_preset.shmup":      "Vertical shmup",
+    "proj.scene_preset.shmup":            "Vertical shmup",
+    "proj.scene_preset.shmup_horizontal": "Horizontal shmup (StarGunner)",
     "proj.scene_preset.run_gun":    "Run & Gun",
     "proj.scene_preset.brawler":    "Brawler stage",
     "proj.scene_preset.fighting":   "Fighting 1v1",
@@ -1521,6 +1522,8 @@ STRINGS_EN: dict[str, str] = {
     "hitbox.bounce_max":       "Max bounces:",
     "hitbox.bounce_max_tt":    "Sprite despawns after this many bounces. \"0\" = unlimited (bounce forever until it leaves the screen).",
     "hitbox.bounce_max_unlimited": "0 (unlimited)",
+    "hitbox.pierce_solid":     "Pierce solid walls",
+    "hitbox.pierce_solid_tt":  "By default a bullet dies on solid tile contact (standard shmup/platformer behaviour). Tick to make it pass through — useful for lasers, magic, special projectiles. Ignored when H/V bounce is enabled.",
     "hitbox.jump_force":     "Jump force:",
     "hitbox.accel":          "Acceleration:",
     "hitbox.decel":          "Release decel:",
@@ -2341,6 +2344,9 @@ STRINGS_EN: dict[str, str] = {
     "level.rules_mirror_axis": "axis X:",
     "level.rules_apply_waves": "Also apply in wave mode",
     "level.rules_apply_waves_tt": "If enabled, rules also affect entities placed inside waves. If disabled, they only affect static scene entities.",
+    "level.rules_default_death_fx":      "Death FX sprite (scene):",
+    "level.rules_default_death_fx_tt":   "Sprite shown when an entity dies without its own Death FX sprite or 'death' animation. Leave on '(none)' to disable the fallback entirely — entities then simply vanish on death. Entities with their own death_fx_sprite ignore this value (per-type takes priority).",
+    "level.rules_default_death_fx_none": "(none)",
     "level.rules_hint": "Summary: some rules help editor placement, while others also drive exported runtime behavior for DAMAGE/FIRE/VOID/SPRING tiles and HUD.",
 
     # Layout / scrolling metadata

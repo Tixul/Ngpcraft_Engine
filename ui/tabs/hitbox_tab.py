@@ -1154,6 +1154,12 @@ class HitboxTab(QWidget):
         self._spin_bounce_max_st.valueChanged.connect(self._on_bounce_max_changed)
         _bnc_max_row.addWidget(self._spin_bounce_max_st, 1)
         gl_bnc.addLayout(_bnc_max_row)
+        # Pierce solid — bullets default to "killed on solid tile contact".
+        # Tick this to make them pass through (laser, magic projectiles, etc).
+        self._chk_pierce_solid_st = QCheckBox(tr("hitbox.pierce_solid"))
+        self._chk_pierce_solid_st.setToolTip(tr("hitbox.pierce_solid_tt"))
+        self._chk_pierce_solid_st.toggled.connect(self._on_pierce_solid_changed)
+        gl_bnc.addWidget(self._chk_pierce_solid_st)
 
         # Group 3 — Combat
         self._grp_combat, gl_cbt = _props_grp("hitbox.grp_combat", right)
@@ -2999,6 +3005,7 @@ class HitboxTab(QWidget):
             self._spin_bounce_max_st.setValue(max(0, min(255, int(raw_max or 0))))
         except (TypeError, ValueError):
             self._spin_bounce_max_st.setValue(0)
+        self._chk_pierce_solid_st.setChecked(bool(sprite_meta.get("pierce_solid", False)))
         self._updating_props = False
 
     def _on_bounce_flag_changed(self, bit: int, on: bool) -> None:
@@ -3034,6 +3041,15 @@ class HitboxTab(QWidget):
             self._sprite_meta.pop("bounce_max", None)
         else:
             self._sprite_meta["bounce_max"] = int(value) & 0xFF
+        self.hitboxes_changed.emit()
+
+    def _on_pierce_solid_changed(self, checked: bool) -> None:
+        if self._updating_props or self._sprite_meta is None:
+            return
+        if checked:
+            self._sprite_meta["pierce_solid"] = True
+        else:
+            self._sprite_meta.pop("pierce_solid", None)
         self.hitboxes_changed.emit()
 
     def _prop_effective_value(self, key: str) -> int:

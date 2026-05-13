@@ -789,6 +789,7 @@ def make_scene_level_h(
         bounce_flags_vals: list[str] = []
         bounce_sfx_vals: list[str] = []
         bounce_max_vals: list[str] = []
+        pierce_solid_vals: list[str] = []
         for t in seen_types:
             meta = sprite_meta.get(t) or {}
             role_name = str(entity_roles.get(t, "prop") or "prop").strip().lower()
@@ -946,6 +947,9 @@ def make_scene_level_h(
             except (TypeError, ValueError):
                 _bmax_n = 0
             bounce_max_vals.append(str(max(0, min(255, _bmax_n)) & 0xFF))
+            # pierce_solid — 1 = bullet passes through solid tiles (laser/magic),
+            # 0 (default) = killed on contact (standard behaviour).
+            pierce_solid_vals.append("1" if bool(meta.get("pierce_solid", False)) else "0")
         lines += [sep, "/* Runtime type tables                                                 */", sep]
         if not atk_flat_x_vals:
             atk_flat_x_vals = ["0"]
@@ -1033,6 +1037,7 @@ def make_scene_level_h(
         lines.append(f"static const u8 g_{sym_use}_type_bounce_flags[] = {{{', '.join(bounce_flags_vals)}}};")
         lines.append(f"static const u8 g_{sym_use}_type_bounce_sfx[] = {{{', '.join(bounce_sfx_vals)}}};")
         lines.append(f"static const u8 g_{sym_use}_type_bounce_max[] = {{{', '.join(bounce_max_vals)}}};")
+        lines.append(f"static const u8 g_{sym_use}_type_pierce_solid[] = {{{', '.join(pierce_solid_vals)}}};")
         lines.append(f"#define {sym_use.upper()}_HAS_MECH_PERTYPE_V1 1")
         lines.append("")
 
@@ -2519,6 +2524,10 @@ def make_scene_level_h(
     cam_y = int(cam.get("y", 0)) if isinstance(cam, dict) else 0
     sc = scene.get("level_scroll", {}) or {}
     sc = sc if isinstance(sc, dict) else {}
+    # Scene-level fallback death FX sprite (set by user via Rules UI).
+    # Empty/missing → 0xFF (no fallback). Resolution uses seen_types order
+    # because the runtime indexes type tables in that order.
+    _dflt_dfx_name = str(scene.get("default_death_fx_sprite") or "").strip()
 
     layout = scene.get("level_layout", {}) or {}
     layout = layout if isinstance(layout, dict) else {}
@@ -2880,6 +2889,10 @@ def make_scene_level_h(
         f"#define {sym_use.upper()}_SCROLL_X {1 if bool(sc.get('scroll_x', False)) else 0}",
         f"#define {sym_use.upper()}_SCROLL_Y {1 if bool(sc.get('scroll_y', False)) else 0}",
         f"#define {sym_use.upper()}_FORCED_SCROLL {1 if bool(sc.get('forced', False)) else 0}",
+        # Scene-level fallback death FX sprite. 0xFF = no fallback → entities
+        # without their own death_fx_sprite or death anim simply vanish on
+        # death. Replaces the legacy "first unused prop = explosion" auto-pick.
+        f"#define {sym_use.upper()}_DEFAULT_DEATH_FX_TYPE {(seen_types.index(_dflt_dfx_name) if (_dflt_dfx_name and _dflt_dfx_name in seen_types) else 0xFF)}",
         f"#define {sym_use.upper()}_SCROLL_SPEED_X {int(sc.get('speed_x', 0) or 0)}",
         f"#define {sym_use.upper()}_SCROLL_SPEED_Y {int(sc.get('speed_y', 0) or 0)}",
         # MECH-4: 0=frame-based, 1=scroll_x (cam_px), 2=scroll_y (cam_py).

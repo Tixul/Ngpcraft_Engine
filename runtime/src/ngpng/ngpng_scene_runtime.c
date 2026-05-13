@@ -11,25 +11,14 @@ static u8 ngpng_scene_runtime_continue_lives(const NgpSceneDef *sc)
     return sc->start_lives;
 }
 
+/* Legacy auto-pick helper kept for ABI compatibility but no longer called from
+ * refresh_player_meta. The old behaviour ("first unused prop = explosion FX")
+ * was an invisible side-effect: a user-defined prop sprite would silently be
+ * hijacked as a death-FX sprite, with no UI surface. Death FX must now be
+ * explicit (per-type spr["death_fx_sprite"] or scene-level default). */
 static u8 ngpng_scene_runtime_find_unused_prop_type(const NgpSceneDef *sc)
 {
-    u8 type_idx;
-    u8 ent_idx;
-    u8 used;
-    if (!sc || !sc->type_roles || sc->type_role_count == 0u) return 0xFFu;
-    for (type_idx = 0; type_idx < sc->type_role_count; ++type_idx) {
-        if (ngpng_entity_role(sc, type_idx) != NGPNG_ROLE_PROP) continue;
-        used = 0u;
-        if (sc->entities) {
-            for (ent_idx = 0; ent_idx < sc->entity_count; ++ent_idx) {
-                if (sc->entities[ent_idx].type == type_idx) {
-                    used = 1u;
-                    break;
-                }
-            }
-        }
-        if (!used) return type_idx;
-    }
+    (void)sc;
     return 0xFFu;
 }
 
@@ -62,7 +51,10 @@ static void ngpng_scene_runtime_refresh_player_meta(const NgpSceneDef *sc,
             1u);
     }
     if (rt->explosion_type) {
-        *rt->explosion_type = ngpng_scene_runtime_find_unused_prop_type(sc);
+        /* Scene-level explicit default (user-configured via UI). 0xFF = no
+         * fallback explosion → entities without their own death_fx_sprite or
+         * death anim simply vanish without visual FX. */
+        *rt->explosion_type = sc ? sc->default_death_fx_type : 0xFFu;
     }
 }
 

@@ -22,6 +22,7 @@ from pathlib import Path
 from core.audio_manifest import load_audio_manifest, load_sfx_count, parse_sfx_count_from_c
 from core.entity_roles import scene_role_map
 from core.save_detection import project_has_save_triggers
+from core.scene_level_gen import _collect_entity_types
 
 
 _RE_SAFE = re.compile(r"[^0-9a-zA-Z_]+")
@@ -3686,6 +3687,7 @@ def write_autorun_main_c(
         c.append("    u8 bounce_sfx;    /* MECH-3: SFX id on bounce; 0xFF=silent */\n")
         c.append("    u8 bounce_max;    /* MECH-3: hard cap on bounces; 0 = unlimited */\n")
         c.append("    u8 bounce_count;  /* MECH-3: bounces consumed so far */\n")
+        c.append("    u8 pierce_solid;  /* 1 = bullet passes through solid tiles (laser/magic), 0 = killed on contact */\n")
         c.append("} NgpngPlayerShot;\n\n")
     # --- Forward declarations (only for types that were emitted) ---
     if has_shooting:
@@ -3989,7 +3991,7 @@ def write_autorun_main_c(
         c.append('}\n')
         c.append('\n')
     if has_shooting:
-        c.append('static void ngpng_demo_fire_player(NgpngPlayerShot *shots, u8 *active_count, u8 *alloc_idx, u16 tile, u8 pal, u8 flags, s16 ox, s16 oy, s8 hb_x, s8 hb_y, u8 hb_w, u8 hb_h, u8 damage, s8 kb_x, s8 kb_y, s8 vx_in, s8 vy_in, u8 bounce_flags_in, u8 bounce_sfx_in, u8 bounce_max_in, s16 px, s16 py, s16 cam_px, s16 cam_py)\n')
+        c.append('static void ngpng_demo_fire_player(NgpngPlayerShot *shots, u8 *active_count, u8 *alloc_idx, u16 tile, u8 pal, u8 flags, s16 ox, s16 oy, s8 hb_x, s8 hb_y, u8 hb_w, u8 hb_h, u8 damage, s8 kb_x, s8 kb_y, s8 vx_in, s8 vy_in, u8 bounce_flags_in, u8 bounce_sfx_in, u8 bounce_max_in, u8 pierce_solid_in, s16 px, s16 py, s16 cam_px, s16 cam_py)\n')
         c.append('{\n')
         c.append('    u8 k;\n')
         c.append('    s16 world_x;\n')
@@ -4031,6 +4033,7 @@ def write_autorun_main_c(
         c.append('            shots[i].bounce_sfx   = bounce_sfx_in;\n')
         c.append('            shots[i].bounce_max   = bounce_max_in;\n')
         c.append('            shots[i].bounce_count = 0u;\n')
+        c.append('            shots[i].pierce_solid = pierce_solid_in;\n')
         c.append('            ngpc_sprite_set(slot, (u8)((u16)shots[i].last_sx & 0xFFu), (u8)((u16)shots[i].last_sy & 0xFFu), tile, pal, flags);\n')
         c.append('            *active_count = (u8)(*active_count + 1u);\n')
         c.append('            *alloc_idx = (u8)(i + 1u);\n')
@@ -4137,8 +4140,20 @@ def write_autorun_main_c(
         c.append('        if (!shots[i].active) continue;\n')
         c.append('        s = &shots[i];\n')
         c.append('        processed = (u8)(processed + 1u);\n')
+
         c.append('        s->world_x = (s16)(s->world_x + s->vx);\n')
         c.append('        s->world_y = (s16)(s->world_y + s->vy);\n')
+        c.append('        /* Kill-on-solid: bullets without bounce_flags die on solid tile\n')
+        c.append('         * contact (standard shmup/platformer behaviour). Opt-out via\n')
+        c.append('         * pierce_solid (laser/magic/etc). Bouncing bullets handle their\n')
+        c.append('         * own tilecol probes in the bounce blocks below. */\n')
+        c.append('        if (s->bounce_flags == 0u && !s->pierce_solid && sc->tilecol && sc->map_w > 0u && sc->map_h > 0u) {\n')
+        c.append('            _bn_t1 = ngpng_tilecol_world(sc, (s16)(s->world_x + s->hb_x + (s->hb_w >> 1)), (s16)(s->world_y + s->hb_y + (s->hb_h >> 1)), TILE_PASS);\n')
+        c.append('            if (_bn_t1 == TILE_SOLID || ngpng_tile_blocks_left(_bn_t1) || ngpng_tile_blocks_right(_bn_t1) || ngpng_tile_blocks_ceiling(_bn_t1) || ngpng_tile_has_floor(sc, _bn_t1)) {\n')
+        c.append('                ngpng_player_shot_kill(shots, active_count, i);\n')
+        c.append('                continue;\n')
+        c.append('            }\n')
+        c.append('        }\n')
         c.append('        /* MECH-3 bounce — camera edges + solid tiles (per-axis via hb_*). */\n')
         c.append('        if (s->bounce_flags & 1u) {\n')
         c.append('            _bn_hit = 0u;\n')
@@ -4292,8 +4307,20 @@ def write_autorun_main_c(
         c.append('        if (!shots[i].active) continue;\n')
         c.append('        s = &shots[i];\n')
         c.append('        processed = (u8)(processed + 1u);\n')
+
         c.append('        s->world_x = (s16)(s->world_x + s->vx);\n')
         c.append('        s->world_y = (s16)(s->world_y + s->vy);\n')
+        c.append('        /* Kill-on-solid: bullets without bounce_flags die on solid tile\n')
+        c.append('         * contact (standard shmup/platformer behaviour). Opt-out via\n')
+        c.append('         * pierce_solid (laser/magic/etc). Bouncing bullets handle their\n')
+        c.append('         * own tilecol probes in the bounce blocks below. */\n')
+        c.append('        if (s->bounce_flags == 0u && !s->pierce_solid && sc->tilecol && sc->map_w > 0u && sc->map_h > 0u) {\n')
+        c.append('            _bn_t1 = ngpng_tilecol_world(sc, (s16)(s->world_x + s->hb_x + (s->hb_w >> 1)), (s16)(s->world_y + s->hb_y + (s->hb_h >> 1)), TILE_PASS);\n')
+        c.append('            if (_bn_t1 == TILE_SOLID || ngpng_tile_blocks_left(_bn_t1) || ngpng_tile_blocks_right(_bn_t1) || ngpng_tile_blocks_ceiling(_bn_t1) || ngpng_tile_has_floor(sc, _bn_t1)) {\n')
+        c.append('                ngpng_player_shot_kill(shots, active_count, i);\n')
+        c.append('                continue;\n')
+        c.append('            }\n')
+        c.append('        }\n')
         c.append('        /* MECH-3 bounce — camera edges + solid tiles (per-axis via hb_*). */\n')
         c.append('        if (s->bounce_flags & 1u) {\n')
         c.append('            _bn_hit = 0u;\n')
@@ -5048,6 +5075,13 @@ def write_autorun_main_c(
         c.append("}\n\n")
 
     # ---- Per-scene player bullet type lookup (has_shooting only) ----
+    # Resolve the bullet sprite name to its `seen_types` INDEX — the same order
+    # used by scene_level_gen._collect_entity_types (entities → waves → sprite
+    # library). The runtime's per-type tables (tile_base, palette, hitbox, etc.)
+    # are indexed in that order; using `scene["sprites"]` order instead would
+    # silently mis-route the bullet to a different sprite (the actual bug seen
+    # when a project's entities are placed before the bullet sprite gets added
+    # to scene["sprites"]).
     if has_shooting and _bullet_spr_nm:
         _btype_vals: list[str] = []
         _sc_list = (project_data or {}).get("scenes") or []
@@ -5055,12 +5089,7 @@ def write_autorun_main_c(
             if not isinstance(_sc, dict):
                 _btype_vals.append("0xFFu")
                 continue
-            _seen = []
-            for _spr in (_sc.get("sprites") or []):
-                _rel = str(_spr.get("file") or "")
-                _nm = Path(_rel).stem if _rel else str(_spr.get("name") or "")
-                if _nm:
-                    _seen.append(_nm)
+            _seen = _collect_entity_types(_sc)
             _idx = _seen.index(_bullet_spr_nm) if _bullet_spr_nm in _seen else None
             _btype_vals.append(f"{_idx}u" if _idx is not None else "0xFFu")
         c.append(f"static const u8 s_ngpng_player_btype[NGP_SCENE_COUNT] = {{{', '.join(_btype_vals)}}};\n\n")
@@ -5089,12 +5118,9 @@ def write_autorun_main_c(
                 _opt_disabled_vals.append("0u")
                 _opt_count_override_vals.append("0xFFu")
                 continue
-            _seen_opt: list[str] = []
-            for _spr in (_sc.get("sprites") or []):
-                _rel = str(_spr.get("file") or "")
-                _nm = Path(_rel).stem if _rel else str(_spr.get("name") or "")
-                if _nm:
-                    _seen_opt.append(_nm)
+            # Use seen_types order (entities + waves + sprites) to match the
+            # runtime's per-type table indexing — same fix as s_ngpng_player_btype.
+            _seen_opt = _collect_entity_types(_sc)
             _opt_idx = _seen_opt.index(_opt_sprite_name) if (_opt_sprite_name and _opt_sprite_name in _seen_opt) else None
             _opt_btype_vals.append(f"{_opt_idx}u" if _opt_idx is not None else "0xFFu")
             _opt_b_idx = _seen_opt.index(_opt_bullet_name) if (_opt_bullet_name and _opt_bullet_name in _seen_opt) else None
@@ -6902,7 +6928,7 @@ def write_autorun_main_c(
         if has_shooting:
             c.append("            if (fire_cd > 0u) fire_cd = (u8)(fire_cd - 1u);\n")
             c.append(f"            if (player_bullet_ready && fire_cd == 0u && (ngpc_pad_held & {_fire_btn_expr})) {{\n")
-            c.append(f"                ngpng_demo_fire_player(shots, &player_shots_active, &player_shots_alloc, player_bullet_tile, player_bullet_pal, player_bullet_flags, player_bullet_ox, player_bullet_oy, player_bullet_hb_x, player_bullet_hb_y, player_bullet_hb_w, player_bullet_hb_h, player_bullet_damage, player_bullet_kb_x, player_bullet_kb_y, (s8){_player_bvx}, (s8){_player_bvy}, (u8)(sc->type_bounce_flags ? sc->type_bounce_flags[player_bullet_type] : 0u), (u8)(sc->type_bounce_sfx ? sc->type_bounce_sfx[player_bullet_type] : 0xFFu), (u8)(sc->type_bounce_max ? sc->type_bounce_max[player_bullet_type] : 0u), (s16)(cam_px + s_{players[0]['name']}.x), (s16)(cam_py + s_{players[0]['name']}.y), cam_px, cam_py);\n")
+            c.append(f"                ngpng_demo_fire_player(shots, &player_shots_active, &player_shots_alloc, player_bullet_tile, player_bullet_pal, player_bullet_flags, player_bullet_ox, player_bullet_oy, player_bullet_hb_x, player_bullet_hb_y, player_bullet_hb_w, player_bullet_hb_h, player_bullet_damage, player_bullet_kb_x, player_bullet_kb_y, (s8){_player_bvx}, (s8){_player_bvy}, (u8)(sc->type_bounce_flags ? sc->type_bounce_flags[player_bullet_type] : 0u), (u8)(sc->type_bounce_sfx ? sc->type_bounce_sfx[player_bullet_type] : 0xFFu), (u8)(sc->type_bounce_max ? sc->type_bounce_max[player_bullet_type] : 0u), (u8)(sc->type_pierce_solid ? sc->type_pierce_solid[player_bullet_type] : 0u), (s16)(cam_px + s_{players[0]['name']}.x), (s16)(cam_py + s_{players[0]['name']}.y), cam_px, cam_py);\n")
             c.append("                /* Optional SFX on player fire — 0xFF = silent. */\n")
             c.append("                if (sc->type_sfx_fire && player_type < sc->type_role_count && sc->type_sfx_fire[player_type] != 0xFFu) {\n")
             c.append("                    Sfx_Play(sc->type_sfx_fire[player_type]);\n")
@@ -6936,7 +6962,7 @@ def write_autorun_main_c(
                 c.append("#elif (NGPNG_OPT_FORMATION == NGPNG_OPT_FORM_PARALLEL)\n")
                 c.append("                        _ofs_wx = (s16)(_ofs_wx + (s16)((s8)((_ofs_i & 1u) ? 1 : -1) * (s8)(8 * ((_ofs_i >> 1) + 1u))));\n")
                 c.append("#endif\n")
-                c.append(f"                        ngpng_demo_fire_player(shots, &player_shots_active, &player_shots_alloc, _ofs_t, _ofs_p, _ofs_f, _ofs_ox, _ofs_oy, player_bullet_hb_x, player_bullet_hb_y, player_bullet_hb_w, player_bullet_hb_h, player_bullet_damage, player_bullet_kb_x, player_bullet_kb_y, (s8){_player_bvx}, (s8){_player_bvy}, (u8)(sc->type_bounce_flags ? sc->type_bounce_flags[player_bullet_type] : 0u), (u8)(sc->type_bounce_sfx ? sc->type_bounce_sfx[player_bullet_type] : 0xFFu), (u8)(sc->type_bounce_max ? sc->type_bounce_max[player_bullet_type] : 0u), _ofs_wx, _ofs_wy, cam_px, cam_py);\n")
+                c.append(f"                        ngpng_demo_fire_player(shots, &player_shots_active, &player_shots_alloc, _ofs_t, _ofs_p, _ofs_f, _ofs_ox, _ofs_oy, player_bullet_hb_x, player_bullet_hb_y, player_bullet_hb_w, player_bullet_hb_h, player_bullet_damage, player_bullet_kb_x, player_bullet_kb_y, (s8){_player_bvx}, (s8){_player_bvy}, (u8)(sc->type_bounce_flags ? sc->type_bounce_flags[player_bullet_type] : 0u), (u8)(sc->type_bounce_sfx ? sc->type_bounce_sfx[player_bullet_type] : 0xFFu), (u8)(sc->type_bounce_max ? sc->type_bounce_max[player_bullet_type] : 0u), (u8)(sc->type_pierce_solid ? sc->type_pierce_solid[player_bullet_type] : 0u), _ofs_wx, _ofs_wy, cam_px, cam_py);\n")
                 c.append("                    }\n")
                 c.append("                }\n")
                 c.append("#endif\n")
@@ -7902,7 +7928,7 @@ def write_autorun_main_c(
         if has_shooting and players:
             c.append("            if (t->action == TRIG_ACT_FIRE_PLAYER_SHOT) {\n")
             c.append("                if (!game_over && player_bullet_ready && fire_cd == 0u) {\n")
-            c.append(f"                    ngpng_demo_fire_player(shots, &player_shots_active, &player_shots_alloc, player_bullet_tile, player_bullet_pal, player_bullet_flags, player_bullet_ox, player_bullet_oy, player_bullet_hb_x, player_bullet_hb_y, player_bullet_hb_w, player_bullet_hb_h, player_bullet_damage, player_bullet_kb_x, player_bullet_kb_y, (s8){_player_bvx}, (s8){_player_bvy}, (u8)(sc->type_bounce_flags ? sc->type_bounce_flags[player_bullet_type] : 0u), (u8)(sc->type_bounce_sfx ? sc->type_bounce_sfx[player_bullet_type] : 0xFFu), (u8)(sc->type_bounce_max ? sc->type_bounce_max[player_bullet_type] : 0u), (s16)(cam_px + s_{players[0]['name']}.x), (s16)(cam_py + s_{players[0]['name']}.y), cam_px, cam_py);\n")
+            c.append(f"                    ngpng_demo_fire_player(shots, &player_shots_active, &player_shots_alloc, player_bullet_tile, player_bullet_pal, player_bullet_flags, player_bullet_ox, player_bullet_oy, player_bullet_hb_x, player_bullet_hb_y, player_bullet_hb_w, player_bullet_hb_h, player_bullet_damage, player_bullet_kb_x, player_bullet_kb_y, (s8){_player_bvx}, (s8){_player_bvy}, (u8)(sc->type_bounce_flags ? sc->type_bounce_flags[player_bullet_type] : 0u), (u8)(sc->type_bounce_sfx ? sc->type_bounce_sfx[player_bullet_type] : 0xFFu), (u8)(sc->type_bounce_max ? sc->type_bounce_max[player_bullet_type] : 0u), (u8)(sc->type_pierce_solid ? sc->type_pierce_solid[player_bullet_type] : 0u), (s16)(cam_px + s_{players[0]['name']}.x), (s16)(cam_py + s_{players[0]['name']}.y), cam_px, cam_py);\n")
             c.append("                    /* Optional SFX on player fire (trigger path) — 0xFF = silent. */\n")
             c.append("                    if (sc->type_sfx_fire && player_type < sc->type_role_count && sc->type_sfx_fire[player_type] != 0xFFu) {\n")
             c.append("                        Sfx_Play(sc->type_sfx_fire[player_type]);\n")

@@ -4348,6 +4348,19 @@ class LevelTab(QWidget):
         self._chk_rule_apply_waves.toggled.connect(self._on_rules_changed)
         rv.addWidget(self._chk_rule_apply_waves)
 
+        # Scene-level fallback death FX sprite — replaces the legacy implicit
+        # "first unused prop = explosion" auto-pick. Empty = no fallback FX.
+        # Per-entity death_fx_sprite has priority over this scene default.
+        _ddfx_row = QHBoxLayout()
+        _ddfx_lbl = QLabel(tr("level.rules_default_death_fx"))
+        _ddfx_lbl.setToolTip(tr("level.rules_default_death_fx_tt"))
+        _ddfx_row.addWidget(_ddfx_lbl)
+        self._combo_default_death_fx = QComboBox()
+        self._combo_default_death_fx.setToolTip(tr("level.rules_default_death_fx_tt"))
+        self._combo_default_death_fx.currentIndexChanged.connect(self._on_default_death_fx_changed)
+        _ddfx_row.addWidget(self._combo_default_death_fx, 1)
+        rv.addLayout(_ddfx_row)
+
         hazard_sep = QLabel(tr("level.rules_hazards_group"))
         hazard_sep.setStyleSheet("color: #8fa4b8; font-size: 11px;")
         rv.addWidget(hazard_sep)
@@ -8194,6 +8207,9 @@ class LevelTab(QWidget):
             self._chk_rule_mirror.setChecked(bool(self._level_rules.get("mirror_en", False)))
             self._spin_rule_mirror_axis.setValue(int(self._level_rules.get("mirror_axis_x", max(0, (gw - 1)//2))))
             self._chk_rule_apply_waves.setChecked(bool(self._level_rules.get("apply_to_waves", True)))
+            # Scene-level default death FX combo (separate from level_rules —
+            # stored at scene root as scene["default_death_fx_sprite"]).
+            self._refresh_default_death_fx_combo()
             self._spin_rule_hazard_damage.setValue(int(self._level_rules.get("hazard_damage", 1)))
             self._spin_rule_fire_damage.setValue(int(self._level_rules.get("fire_damage", 1)))
             self._chk_rule_void_instant.setChecked(bool(self._level_rules.get("void_instant", True)))
@@ -12204,6 +12220,39 @@ class LevelTab(QWidget):
                 if name:
                     cb.addItem(name, name)
         cb.blockSignals(False)
+
+    def _refresh_default_death_fx_combo(self) -> None:
+        """Populate the scene-level fallback death FX sprite combo + select
+        the current value from scene["default_death_fx_sprite"]. (aucun) = no
+        fallback (entities without their own death_fx_sprite or anim simply
+        vanish on death — no implicit explosion auto-pick anymore)."""
+        if not hasattr(self, "_combo_default_death_fx"):
+            return
+        cb = self._combo_default_death_fx
+        cb.blockSignals(True)
+        cb.clear()
+        cb.addItem(tr("level.rules_default_death_fx_none"), "")
+        if self._scene:
+            for spr in (self._scene.get("sprites") or []):
+                rel = str(spr.get("file") or "")
+                name = Path(rel).stem if rel else str(spr.get("name") or "")
+                if name:
+                    cb.addItem(name, name)
+        cur = str((self._scene or {}).get("default_death_fx_sprite") or "")
+        idx = cb.findData(cur)
+        cb.setCurrentIndex(max(0, idx))
+        cb.blockSignals(False)
+
+    def _on_default_death_fx_changed(self, _idx: int) -> None:
+        if self._updating_props or self._scene is None:
+            return
+        name = self._combo_default_death_fx.currentData() or ""
+        if name:
+            self._scene["default_death_fx_sprite"] = str(name)
+        else:
+            self._scene.pop("default_death_fx_sprite", None)
+        if self._on_save:
+            self._on_save()
 
     def _refresh_shooting_ui(self, role: str, spr: dict) -> None:
         """Show/hide and populate the shooting group based on role + the

@@ -13,9 +13,10 @@ import uuid
 
 
 SCENE_PRESETS: tuple[tuple[str, str], ...] = (
-    ("platformer_basic",   "proj.scene_preset.platformer"),
-    ("shmup_vertical",     "proj.scene_preset.shmup"),
-    ("run_gun_horizontal", "proj.scene_preset.run_gun"),
+    ("platformer_basic",     "proj.scene_preset.platformer"),
+    ("shmup_vertical",       "proj.scene_preset.shmup"),
+    ("shmup_horizontal",     "proj.scene_preset.shmup_horizontal"),
+    ("run_gun_horizontal",   "proj.scene_preset.run_gun"),
     ("brawler_stage",      "proj.scene_preset.brawler"),
     ("fighting_1v1",       "proj.scene_preset.fighting"),
     ("topdown_room",       "proj.scene_preset.topdown"),
@@ -51,6 +52,7 @@ def apply_scene_preset(scene: dict, preset_key: str) -> bool:
     dispatch = {
         "platformer_basic":   _apply_platformer_basic,
         "shmup_vertical":     _apply_shmup_vertical,
+        "shmup_horizontal":   _apply_shmup_horizontal,
         "run_gun_horizontal": _apply_run_gun_horizontal,
         "brawler_stage":      _apply_brawler_stage,
         "fighting_1v1":       _apply_fighting_1v1,
@@ -374,6 +376,93 @@ def _apply_shmup_vertical(scene: dict) -> bool:
         h = _map_h(scene, 96)
         scene["regions"] = [
             _reg("player_spawn", "spawn", 8, max(0, h - 4), 4, 3),
+        ]
+    return True
+
+
+# ---------------------------------------------------------------------------
+# 2b — Shmup horizontal (StarGunner / Gradius / R-Type style)
+# ---------------------------------------------------------------------------
+
+def _apply_shmup_horizontal(scene: dict) -> bool:
+    """Modern horizontal shmup preset (2026-05-13).
+
+    Reference: StarGunner — forced scroll, 1 stage = 128 tiles wide × 19 high,
+    scroll-based wave triggers, no gravity, no tilecol collision for ship,
+    bullets killed on solid contact (default since the engine kill-on-solid
+    fix), score+lives HUD, parallax SCR2 = slow starfield.
+
+    Sets scene-level fields only — project-level mechanics (shooting,
+    wave_spawning, wave_scroll_spawn, death_fx, option_satellite, bounce)
+    must be enabled separately in the Mechanics tab (auto-dependency on
+    wave_scroll_spawn will pull in wave_spawning automatically).
+    """
+    _ensure_scene_size(scene, 128, 19)
+    scene["level_profile"] = "shmup"
+    scene["map_mode"] = "shmup"
+
+    # Horizontal forced scroll — speed 2 = StarGunner reference (60fps cap).
+    # Increase to 3-4 for hectic R-Type pacing.
+    _ensure_scroll(scene).update({
+        "scroll_x": True, "scroll_y": False,
+        "forced": True, "speed_x": 2, "speed_y": 0,
+        "loop_x": False, "loop_y": False,
+    })
+    _ensure_layout(scene).update({
+        "cam_mode": "forced_scroll", "bounds_auto": True, "clamp": True,
+        "follow_deadzone_x": 16, "follow_deadzone_y": 12, "follow_drop_margin_y": 20,
+    })
+    # MECH-4 — scroll-based wave triggers (Nemesis-style). Waves spawn when
+    # cam_px reaches the wave's at_scroll value. Requires wave_scroll_spawn
+    # mechanic enabled at project level (which auto-enables wave_spawning).
+    scene["wave_trigger_mode"] = "scroll_x"
+    _apply_rule_defaults(
+        scene,
+        hud_enabled=True,
+        hud_show_hp=False,
+        hud_show_score=True,
+        hud_show_collect=False,
+        hud_show_timer=False,
+        hud_show_lives=True,
+        hud_pos="top",
+        hud_font_mode="system",
+        hud_text_color="white",
+        hud_style="text",
+        hud_band_color="blue",
+        hud_band_rows=2,
+        hud_digits_score=5,
+        hud_digits_lives=2,
+        start_lives=3,
+        start_continues=2,
+        continue_restore_lives=3,
+        goal_collectibles=0,
+        # No gravity for ship-style movement (handled by player sprite props,
+        # but ground band kept disabled here so default rules don't fight it).
+        ground_band_en=False,
+        lock_y_en=False,
+    )
+    layers = _ensure_layers(scene)
+    _set_layer_defaults(layers)
+    # SCR1 = main stage (forced scroll speed = 100% of cam).
+    layers["scr1_parallax_x"] = 100
+    layers["scr1_parallax_y"] = 100
+    # SCR2 = slow starfield / distant parallax (~40% scroll speed).
+    layers["scr2_parallax_x"] = 40
+    layers["scr2_parallax_y"] = 100
+
+    if _regions_empty(scene):
+        h = _map_h(scene, 19)
+        scene["regions"] = [
+            # Player spawn on the LEFT edge, vertical center.
+            _reg("player_spawn", "spawn", 1, max(0, (h // 2) - 1), 3, 3),
+        ]
+    if _triggers_empty(scene):
+        scene["triggers"] = [
+            # Player fires bullets with PAD_A (shooting mechanic must be ON,
+            # bullet sprite picked via Sprite Setup → player → Shooting group).
+            _trig("player_fire", "btn_a", "fire_player_shot", once=False),
+            # Death = respawn at the configured spawn region.
+            _trig("respawn_on_death", "on_death", "respawn_player", once=False),
         ]
     return True
 
