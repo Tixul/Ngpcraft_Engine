@@ -1471,12 +1471,18 @@ void ngpng_enemies_update(const NgpSceneDef *sc,
     (void)_tc;
     if (*enemy_active_count == 0u) return;
     for (i = 0; i < (u8)NGPNG_AUTORUN_MAX_ENEMIES; ++i) {
+        /* PERF: cache &enemies[i] in a local pointer — cc900 emits
+         * `enemies + i*sizeof(NgpngEnemy)` for every `enemies[i].field` access
+         * otherwise. Decl without initialiser at top of for-body, assign after
+         * the `active` guard (cc900 nested-decl-with-init bug). */
+        NgpngEnemy *e;
         if (!enemies[i].active) continue;
+        e = &enemies[i];
         processed = (u8)(processed + 1u);
-        enemies[i].anim = (u8)(enemies[i].anim + 1u);
+        e->anim = (u8)(e->anim + 1u);
         /* Hit flash countdown — decrements every frame, blink handled in draw. */
-        if (enemies[i].hit_flash > 0u) {
-            enemies[i].hit_flash = (u8)(enemies[i].hit_flash - 1u);
+        if (e->hit_flash > 0u) {
+            e->hit_flash = (u8)(e->hit_flash - 1u);
         }
         /* Off-screen guard: skip expensive tilecol physics for enemies far outside viewport.
          * PLATFORMER: only drift enemies behind the camera (esx < -96).
@@ -1485,161 +1491,161 @@ void ngpng_enemies_update(const NgpSceneDef *sc,
          * cull zone (≈1 screen beyond the drift margin) so random-wave spawns can
          * never accumulate into permanent occupants of the enemy pool. */
         {
-            s16 esx = (s16)(enemies[i].world_x - cam_px);
-            s16 esy = (s16)(enemies[i].world_y - cam_py);
+            s16 esx = (s16)(e->world_x - cam_px);
+            s16 esy = (s16)(e->world_y - cam_py);
             if (esx < -96 || esx > 256 || esy < -96 || esy > 248) {
-                if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CULL_OFFSCREEN) {
+                if (e->ent_flags & NGPNG_ENT_FLAG_CULL_OFFSCREEN) {
                     if (esx < -256 || esx > 416 || esy < -256 || esy > 408) {
                         ngpng_enemy_kill(enemies, enemy_active_count, i);
                         continue;
                     }
                 }
                 if (esx < -96) {
-                    enemies[i].world_x = (s16)(enemies[i].world_x + enemies[i].vx);
-                    enemies[i].world_y = (s16)(enemies[i].world_y + enemies[i].vy);
-                    if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_MAP)
-                        ngpng_clamp_world_rect(sc, &enemies[i].world_x, &enemies[i].world_y,
-                            enemies[i].body_w, enemies[i].body_h);
-                    if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_CAMERA)
-                        ngpng_clamp_camera_rect(&enemies[i].world_x, &enemies[i].world_y,
-                            cam_px, cam_py, enemies[i].body_w, enemies[i].body_h);
+                    e->world_x = (s16)(e->world_x + e->vx);
+                    e->world_y = (s16)(e->world_y + e->vy);
+                    if (e->ent_flags & NGPNG_ENT_FLAG_CLAMP_MAP)
+                        ngpng_clamp_world_rect(sc, &e->world_x, &e->world_y,
+                            e->body_w, e->body_h);
+                    if (e->ent_flags & NGPNG_ENT_FLAG_CLAMP_CAMERA)
+                        ngpng_clamp_camera_rect(&e->world_x, &e->world_y,
+                            cam_px, cam_py, e->body_w, e->body_h);
                 }
                 if (processed >= *enemy_active_count) break;
                 continue;
             }
         }
-        if (enemies[i].path_idx != 0xFFu && sc->path_points && sc->path_offsets && sc->path_lengths) {
-            u8 pi = enemies[i].path_idx;
+        if (e->path_idx != 0xFFu && sc->path_points && sc->path_offsets && sc->path_lengths) {
+            u8 pi = e->path_idx;
             u8 plen = sc->path_lengths[pi];
             if (pi < sc->path_count && plen > 0u) {
                 u16 off = sc->path_offsets[pi];
-                const NgpngPoint *pt = &sc->path_points[off + enemies[i].path_step];
+                const NgpngPoint *pt = &sc->path_points[off + e->path_step];
                 s16 dst_x = (s16)pt->x;
                 s16 dst_y = (s16)pt->y;
                 {
                     s8 espd = sc->path_speeds ? (s8)sc->path_speeds[pi] : 2;
-                    enemies[i].vx = ngpng_step_toward(enemies[i].world_x, dst_x, espd);
-                    enemies[i].vy = ngpng_step_toward(enemies[i].world_y, dst_y, espd);
+                    e->vx = ngpng_step_toward(e->world_x, dst_x, espd);
+                    e->vy = ngpng_step_toward(e->world_y, dst_y, espd);
                 }
-                enemies[i].world_x = (s16)(enemies[i].world_x + enemies[i].vx);
-                enemies[i].world_y = (s16)(enemies[i].world_y + enemies[i].vy);
-                if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_MAP)
-                    ngpng_clamp_world_rect(sc, &enemies[i].world_x, &enemies[i].world_y,
-                        enemies[i].body_w, enemies[i].body_h);
-                if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_CAMERA)
-                    ngpng_clamp_camera_rect(&enemies[i].world_x, &enemies[i].world_y,
-                        cam_px, cam_py, enemies[i].body_w, enemies[i].body_h);
-                if (enemies[i].vx == 0 && enemies[i].vy == 0) {
-                    enemies[i].path_step = (u8)(enemies[i].path_step + 1u);
-                    if (enemies[i].path_step >= plen) {
-                        if (sc->path_flags && sc->path_flags[pi]) enemies[i].path_step = 0u;
+                e->world_x = (s16)(e->world_x + e->vx);
+                e->world_y = (s16)(e->world_y + e->vy);
+                if (e->ent_flags & NGPNG_ENT_FLAG_CLAMP_MAP)
+                    ngpng_clamp_world_rect(sc, &e->world_x, &e->world_y,
+                        e->body_w, e->body_h);
+                if (e->ent_flags & NGPNG_ENT_FLAG_CLAMP_CAMERA)
+                    ngpng_clamp_camera_rect(&e->world_x, &e->world_y,
+                        cam_px, cam_py, e->body_w, e->body_h);
+                if (e->vx == 0 && e->vy == 0) {
+                    e->path_step = (u8)(e->path_step + 1u);
+                    if (e->path_step >= plen) {
+                        if (sc->path_flags && sc->path_flags[pi]) e->path_step = 0u;
                         else {
-                            enemies[i].path_idx = 0xFFu;
-                            enemies[i].path_step = 0u;
-                            enemies[i].vx = -2;
+                            e->path_idx = 0xFFu;
+                            e->path_step = 0u;
+                            e->vx = -2;
                         }
                     }
                 }
-                ngpng_enemy_update_draw_cache(sc, &enemies[i]);
+                ngpng_enemy_update_draw_cache(sc, e);
                 continue;
             }
         }
-        if (enemies[i].behavior != 0xFFu) {
-            if (enemies[i].gravity > 0u)
-                ngpng_enemy_apply_platformer_behavior(sc, &enemies[i], player_wx, i, frame_timer);
+        if (e->behavior != 0xFFu) {
+            if (e->gravity > 0u)
+                ngpng_enemy_apply_platformer_behavior(sc, e, player_wx, i, frame_timer);
             else
-                ngpng_enemy_apply_topdown_behavior(sc, &enemies[i], player_wx, player_wy, i);
+                ngpng_enemy_apply_topdown_behavior(sc, e, player_wx, player_wy, i);
         } else {
             /* data=4: zigzag -- flip vy every 16 frames. */
-            if (enemies[i].data == 4u && (enemies[i].anim & 0x1Fu) == 0x10u) {
-                enemies[i].vy = (s8)(-enemies[i].vy);
+            if (e->data == 4u && (e->anim & 0x1Fu) == 0x10u) {
+                e->vy = (s8)(-e->vy);
             }
             /* legacy movement branch only; gravity is applied below for all enemies */
             /* data=6/7: patrol -- flip vx every 48 frames. */
-            if ((enemies[i].data == 6u || enemies[i].data == 7u) &&
-                (enemies[i].anim % 48u) == 0u && enemies[i].anim != 0u) {
-                enemies[i].vx = (s8)(-enemies[i].vx);
+            if ((e->data == 6u || e->data == 7u) &&
+                (e->anim % 48u) == 0u && e->anim != 0u) {
+                e->vx = (s8)(-e->vx);
             }
             /* data=7: aggro radius = 5 tiles (40px). If player within range, chase. */
-            if (enemies[i].data == 7u) {
-                s16 dx = (s16)(player_wx - enemies[i].world_x);
-                s16 dy = (s16)(player_wy - enemies[i].world_y);
+            if (e->data == 7u) {
+                s16 dx = (s16)(player_wx - e->world_x);
+                s16 dy = (s16)(player_wy - e->world_y);
                 if (dx < 0) dx = (s16)(-dx);
                 if (dy < 0) dy = (s16)(-dy);
                 if (dx < 40 && dy < 40) {
-                    enemies[i].vx = (s8)((player_wx > enemies[i].world_x) ? 1 : -1);
-                    if (dy > 4) enemies[i].vy = (s8)((player_wy > enemies[i].world_y) ? 1 : -1);
-                    else enemies[i].vy = 0;
+                    e->vx = (s8)((player_wx > e->world_x) ? 1 : -1);
+                    if (dy > 4) e->vy = (s8)((player_wy > e->world_y) ? 1 : -1);
+                    else e->vy = 0;
                 }
             }
         }
         /* Gravity: apply per-type gravity to vy, cap at 6 (anti-tunneling). */
-        if (enemies[i].gravity > 0u) {
-            if (enemies[i].vy < 6) enemies[i].vy = (s8)(enemies[i].vy + (s8)enemies[i].gravity);
-            else enemies[i].vy = 6;
+        if (e->gravity > 0u) {
+            if (e->vy < 6) e->vy = (s8)(e->vy + (s8)e->gravity);
+            else e->vy = 6;
         }
-        enemies[i].world_x = (s16)(enemies[i].world_x + enemies[i].vx);
-        enemies[i].world_y = (s16)(enemies[i].world_y + enemies[i].vy);
-        if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_MAP)
-            ngpng_clamp_world_rect(sc, &enemies[i].world_x, &enemies[i].world_y,
-                enemies[i].body_w, enemies[i].body_h);
-        if (enemies[i].ent_flags & NGPNG_ENT_FLAG_CLAMP_CAMERA)
-            ngpng_clamp_camera_rect(&enemies[i].world_x, &enemies[i].world_y,
-                cam_px, cam_py, enemies[i].body_w, enemies[i].body_h);
-        if (enemies[i].gravity > 0u) {
+        e->world_x = (s16)(e->world_x + e->vx);
+        e->world_y = (s16)(e->world_y + e->vy);
+        if (e->ent_flags & NGPNG_ENT_FLAG_CLAMP_MAP)
+            ngpng_clamp_world_rect(sc, &e->world_x, &e->world_y,
+                e->body_w, e->body_h);
+        if (e->ent_flags & NGPNG_ENT_FLAG_CLAMP_CAMERA)
+            ngpng_clamp_camera_rect(&e->world_x, &e->world_y,
+                cam_px, cam_py, e->body_w, e->body_h);
+        if (e->gravity > 0u) {
             /* OPT-K: skip floor probe on odd frames when already on_ground.
              * Undo the gravity step so the enemy stays planted. */
-            if (enemies[i].on_ground && (frame_timer & 1u)) {
-                enemies[i].world_y = (s16)(enemies[i].world_y - enemies[i].vy);
-                enemies[i].vy = 0;
+            if (e->on_ground && (frame_timer & 1u)) {
+                e->world_y = (s16)(e->world_y - e->vy);
+                e->vy = 0;
             } else {
-            s16 efy = (s16)(enemies[i].world_y + enemies[i].body_y + enemies[i].body_h);
+            s16 efy = (s16)(e->world_y + e->body_y + e->body_h);
             s16 efloorL;
             s16 efloorR;
             s16 efloor;
             u8 ehasL = ngpng_floor_probe_world(sc,
-                (s16)(enemies[i].world_x + enemies[i].body_x + 1), efy, &efloorL);
+                (s16)(e->world_x + e->body_x + 1), efy, &efloorL);
             u8 ehasR = ngpng_floor_probe_world(sc,
-                (s16)(enemies[i].world_x + enemies[i].body_x +
-                    ((enemies[i].body_w > 1u) ? (enemies[i].body_w - 2u) : 0u)),
+                (s16)(e->world_x + e->body_x +
+                    ((e->body_w > 1u) ? (e->body_w - 2u) : 0u)),
                 efy, &efloorR);
-            if ((ehasL || ehasR) && enemies[i].vy >= 0) {
+            if ((ehasL || ehasR) && e->vy >= 0) {
                 efloor = ehasL ? efloorL : efloorR;
                 if (ehasR && efloorR < efloor) efloor = efloorR;
-                enemies[i].world_y = (s16)(efloor - enemies[i].body_y - enemies[i].body_h);
-                enemies[i].vy = 0;
-                enemies[i].on_ground = 1u;
+                e->world_y = (s16)(efloor - e->body_y - e->body_h);
+                e->vy = 0;
+                e->on_ground = 1u;
             } else {
-                enemies[i].on_ground = 0u;
+                e->on_ground = 0u;
             }
             }
-            if (enemies[i].vx != 0)
-                ngpng_enemy_resolve_horizontal_block(sc, &enemies[i]);
+            if (e->vx != 0)
+                ngpng_enemy_resolve_horizontal_block(sc, e);
 #if NGPNG_HAS_DEADLY_TILE
             if ((sc->scene_flags & SCENE_FLAG_HAS_DEADLY) &&
-                    ngpng_enemy_touches_deadly_tile(sc, &enemies[i])) {
+                    ngpng_enemy_touches_deadly_tile(sc, e)) {
                 ngpng_enemy_kill(enemies, enemy_active_count, i);
                 continue;
             }
 #endif
-        } else if (enemies[i].behavior != 0xFFu) {
-            ngpng_enemy_resolve_topdown_block(sc, &enemies[i], (u8)(i + frame_timer));
-        } else if (enemies[i].vy != 0) {
+        } else if (e->behavior != 0xFFu) {
+            ngpng_enemy_resolve_topdown_block(sc, e, (u8)(i + frame_timer));
+        } else if (e->vy != 0) {
             /* Shmup-style bounce (no gravity). */
-            if (enemies[i].world_y < 16) {
-                enemies[i].world_y = 16;
-                enemies[i].vy = (s8)(-enemies[i].vy);
-            } else if (enemies[i].world_y > 136) {
-                enemies[i].world_y = 136;
-                enemies[i].vy = (s8)(-enemies[i].vy);
+            if (e->world_y < 16) {
+                e->world_y = 16;
+                e->vy = (s8)(-e->vy);
+            } else if (e->world_y > 136) {
+                e->world_y = 136;
+                e->vy = (s8)(-e->vy);
             }
         }
-        if (enemies[i].world_x < -24 || enemies[i].world_x > (s16)(_mw * 8u + 24u) ||
-            enemies[i].world_y < -24 || enemies[i].world_y > (s16)(_mh * 8u + 24u)) {
+        if (e->world_x < -24 || e->world_x > (s16)(_mw * 8u + 24u) ||
+            e->world_y < -24 || e->world_y > (s16)(_mh * 8u + 24u)) {
             ngpng_enemy_kill(enemies, enemy_active_count, i);
             continue;
         }
-        ngpng_enemy_update_draw_cache(sc, &enemies[i]);
+        ngpng_enemy_update_draw_cache(sc, e);
         if (processed >= *enemy_active_count) break;
     }
 }
@@ -1962,11 +1968,14 @@ void ngpng_fx_update(const NgpSceneDef *sc, NgpngFx *fx, u8 *fx_active_count,
     u8 processed = 0u;
     if (*fx_active_count == 0u) return;
     for (i = 0; i < (u8)NGPNG_AUTORUN_MAX_FX; ++i) {
+        /* PERF: cache &fx[i] — see ngpng_enemies_update for rationale. */
+        NgpngFx *f;
         if (!fx[i].active) continue;
+        f = &fx[i];
         processed = (u8)(processed + 1u);
-        fx[i].anim = (u8)(fx[i].anim + 1u);
-        if ((fx[i].frame_count > 0u && fx[i].anim >= (u8)(fx[i].frame_count * 6u)) ||
-            (fx[i].frame_count == 0u && fx[i].anim > 18u)) {
+        f->anim = (u8)(f->anim + 1u);
+        if ((f->frame_count > 0u && f->anim >= (u8)(f->frame_count * 6u)) ||
+            (f->frame_count == 0u && f->anim > 18u)) {
             ngpng_fx_kill(fx, fx_active_count, i);
             continue;
         }
