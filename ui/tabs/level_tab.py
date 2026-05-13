@@ -4159,42 +4159,10 @@ class LevelTab(QWidget):
         self._grp_death_fx.setVisible(False)
         ev.addWidget(self._grp_death_fx)
 
-        # ---- Bounce group (MECH-3) ----
-        # Per-sprite-type bounce config. Mostly useful on sprites used as
-        # bullets (where the projectile reflects off the camera viewport
-        # instead of despawning at the edge). Visible for any selected entity
-        # — the user can pick any instance of the sprite to edit its type.
-        self._grp_bounce = QGroupBox(tr("level.grp_bounce"))
-        self._grp_bounce.setFlat(True)
-        bcv = QVBoxLayout(self._grp_bounce)
-        bcv.setSpacing(5)
-        bcv.setContentsMargins(6, 6, 6, 6)
-        _bc_help = QLabel(tr("level.bounce_help"))
-        _bc_help.setWordWrap(True)
-        _bc_help.setStyleSheet("color:#9aa3ad; font-size:10px;")
-        bcv.addWidget(_bc_help)
-        self._chk_bounce_h = QCheckBox(tr("level.bounce_h"))
-        self._chk_bounce_h.setToolTip(tr("level.bounce_h_tt"))
-        self._chk_bounce_h.toggled.connect(self._on_bounce_h_toggled)
-        bcv.addWidget(self._chk_bounce_h)
-        self._chk_bounce_v = QCheckBox(tr("level.bounce_v"))
-        self._chk_bounce_v.setToolTip(tr("level.bounce_v_tt"))
-        self._chk_bounce_v.toggled.connect(self._on_bounce_v_toggled)
-        bcv.addWidget(self._chk_bounce_v)
-        _bsfx_row = QHBoxLayout()
-        _bsfx_lbl = QLabel(tr("level.bounce_sfx"))
-        _bsfx_lbl.setFixedWidth(100)
-        _bsfx_row.addWidget(_bsfx_lbl)
-        self._spin_bounce_sfx = QSpinBox()
-        self._spin_bounce_sfx.setRange(-1, 254)
-        self._spin_bounce_sfx.setValue(-1)
-        self._spin_bounce_sfx.setSpecialValueText(tr("level.shoot_sfx_none"))
-        self._spin_bounce_sfx.setToolTip(tr("level.bounce_sfx_tt"))
-        self._spin_bounce_sfx.valueChanged.connect(self._on_bounce_sfx_changed)
-        _bsfx_row.addWidget(self._spin_bounce_sfx, 1)
-        bcv.addLayout(_bsfx_row)
-        self._grp_bounce.setVisible(False)
-        ev.addWidget(self._grp_bounce)
+        # MECH-3 Bounce: moved to Sprite Setup tab (per-sprite-type property,
+        # belongs with hitboxes/props, not the per-entity panel). Editing the
+        # bounce flags from here required placing an instance of the sprite in
+        # the scene — impossible for bullet sprites that only live in the pool.
 
         # ---- Dash group (MECH-9) ----
         # Configures the tunable params of the dash mechanic. The button itself
@@ -12042,8 +12010,6 @@ class LevelTab(QWidget):
                 self._grp_death_fx.setVisible(False)
             if hasattr(self, "_grp_hit_feedback"):
                 self._grp_hit_feedback.setVisible(False)
-            if hasattr(self, "_grp_bounce"):
-                self._grp_bounce.setVisible(False)
             if hasattr(self, "_grp_dash"):
                 self._grp_dash.setVisible(False)
             return
@@ -12083,8 +12049,7 @@ class LevelTab(QWidget):
         # ---- Death FX group visibility + population (enemies + player) ----
         self._refresh_death_fx_ui(role, spr)
 
-        # ---- Bounce group (MECH-3) — populated for every selected entity ----
-        self._refresh_bounce_ui(spr)
+        # MECH-3 Bounce: now lives in Sprite Setup → Bounce group.
 
         # ---- Dash group (MECH-9) — player role only ----
         self._refresh_dash_ui(role, spr)
@@ -12515,75 +12480,6 @@ class LevelTab(QWidget):
                 dash["sfx"] = int(value) & 0xFF
         else:
             dash[attr] = int(value)
-        self._update_diagnostics()
-
-    def _refresh_bounce_ui(self, spr: dict) -> None:
-        """Populate the bounce group from spr.bounce_flags + spr.bounce_sfx.
-        Gated by the 'bounce' mechanic toggle."""
-        if not hasattr(self, "_grp_bounce"):
-            return
-        if not self._mechanic_enabled("bounce"):
-            self._grp_bounce.setVisible(False)
-            return
-        self._grp_bounce.setVisible(True)
-        self._updating_props = True
-        try:
-            flags = int(spr.get("bounce_flags") or 0)
-        except (TypeError, ValueError):
-            flags = 0
-        self._chk_bounce_h.setChecked(bool(flags & 1))
-        self._chk_bounce_v.setChecked(bool(flags & 2))
-        _bsfx_raw = spr.get("bounce_sfx")
-        if _bsfx_raw is None or _bsfx_raw == "":
-            self._spin_bounce_sfx.setValue(-1)
-        else:
-            try:
-                _bsfx_val = int(_bsfx_raw)
-            except (TypeError, ValueError):
-                _bsfx_val = -1
-            self._spin_bounce_sfx.setValue(max(-1, min(254, _bsfx_val)))
-        self._updating_props = False
-
-    def _write_bounce_flag(self, bit: int, on: bool) -> None:
-        spr = self._shooting_spr()
-        if spr is None:
-            return
-        try:
-            flags = int(spr.get("bounce_flags") or 0)
-        except (TypeError, ValueError):
-            flags = 0
-        if on:
-            flags |= bit
-        else:
-            flags &= ~bit
-        if flags == 0:
-            if "bounce_flags" in spr:
-                del spr["bounce_flags"]
-        else:
-            spr["bounce_flags"] = flags & 0xFF
-        self._update_diagnostics()
-
-    def _on_bounce_h_toggled(self, checked: bool) -> None:
-        if self._updating_props:
-            return
-        self._write_bounce_flag(1, checked)
-
-    def _on_bounce_v_toggled(self, checked: bool) -> None:
-        if self._updating_props:
-            return
-        self._write_bounce_flag(2, checked)
-
-    def _on_bounce_sfx_changed(self, v: int) -> None:
-        if self._updating_props:
-            return
-        spr = self._shooting_spr()
-        if spr is None:
-            return
-        if v < 0:
-            if "bounce_sfx" in spr:
-                del spr["bounce_sfx"]
-        else:
-            spr["bounce_sfx"] = int(v) & 0xFF
         self._update_diagnostics()
 
     def _on_hit_flash_changed(self, v: int) -> None:
@@ -13124,14 +13020,14 @@ class LevelTab(QWidget):
                 self._on_save()
 
     def _on_wave_at_scroll_changed(self, value: int) -> None:
-        """Persist the per-wave scroll trigger position."""
+        """Persist the per-wave scroll trigger position. We always write the key
+        (including 0) — a missing key would make the export fall back to the
+        legacy `delay` field, causing a wave the user set to 0 (spawn at scroll
+        position 0) to silently inherit an old frame-based delay value."""
         if not (0 <= self._wave_selected < len(self._waves)):
             return
         w = self._waves[self._wave_selected]
-        if value <= 0:
-            w.pop("at_scroll", None)
-        else:
-            w["at_scroll"] = int(value)
+        w["at_scroll"] = max(0, int(value))
         if self._on_save:
             self._on_save()
 
@@ -21283,7 +21179,7 @@ def _make_scene_h(
     gmax = int(rules.get("ground_max_y", 0) or 0) & 0xFF
     mir_en = 1 if bool(rules.get("mirror_en", False)) else 0
     axis = int(rules.get("mirror_axis_x", 0) or 0) & 0xFF
-    apply_waves = 1 if bool(rules.get("apply_to_waves", True)) else 0
+    # B2: apply_to_waves is editor-only — no C define emitted.
     hazard_damage = int(rules.get("hazard_damage", 1) or 1) & 0xFF
     fire_damage = int(rules.get("fire_damage", 1) or 1) & 0xFF
     void_damage = int(rules.get("void_damage", 255) or 255) & 0xFF
@@ -21400,7 +21296,6 @@ def _make_scene_h(
         f"#define {sym.upper()}_RULE_GROUND_MAX_Y {gmax}",
         f"#define {sym.upper()}_RULE_MIRROR_EN {mir_en}",
         f"#define {sym.upper()}_RULE_MIRROR_AXIS_X {axis}",
-        f"#define {sym.upper()}_RULE_APPLY_TO_WAVES {apply_waves}",
         f"#define {sym.upper()}_RULE_HAZARD_DAMAGE {hazard_damage}",
         f"#define {sym.upper()}_RULE_FIRE_DAMAGE {fire_damage}",
         f"#define {sym.upper()}_RULE_VOID_DAMAGE {void_damage}",

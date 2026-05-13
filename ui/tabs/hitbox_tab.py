@@ -1115,6 +1115,46 @@ class HitboxTab(QWidget):
         _psb(gl_proj, "bullet_w",       "hitbox.bullet_w",       "hitbox.tt_bullet_w")
         _psb(gl_proj, "bullet_h",       "hitbox.bullet_h",       "hitbox.tt_bullet_h")
 
+        # Group 2b — Bounce / Ricochet (sprite-type scoped)
+        # bounce_flags + bounce_sfx live at the top of the sprite dict (not in
+        # props), so we drive direct widgets here and write to sprite_meta on
+        # change. Used by player bullets, enemy bullets, and any prop that
+        # bounces off camera edges + solid tiles (Pong, breakout, grenades).
+        self._grp_bounce_st, gl_bnc = _props_grp("hitbox.grp_bounce", right)
+        _bnc_help = QLabel(tr("hitbox.bounce_help"))
+        _bnc_help.setWordWrap(True)
+        _bnc_help.setStyleSheet("color:#9aa3ad; font-size:9px;")
+        gl_bnc.addWidget(_bnc_help)
+        self._chk_bounce_h_st = QCheckBox(tr("hitbox.bounce_h"))
+        self._chk_bounce_h_st.setToolTip(tr("hitbox.bounce_h_tt"))
+        self._chk_bounce_h_st.toggled.connect(lambda on: self._on_bounce_flag_changed(1, on))
+        gl_bnc.addWidget(self._chk_bounce_h_st)
+        self._chk_bounce_v_st = QCheckBox(tr("hitbox.bounce_v"))
+        self._chk_bounce_v_st.setToolTip(tr("hitbox.bounce_v_tt"))
+        self._chk_bounce_v_st.toggled.connect(lambda on: self._on_bounce_flag_changed(2, on))
+        gl_bnc.addWidget(self._chk_bounce_v_st)
+        _bnc_sfx_row = QHBoxLayout()
+        _bnc_sfx_row.addWidget(QLabel(tr("hitbox.bounce_sfx")))
+        self._spin_bounce_sfx_st = QSpinBox()
+        self._spin_bounce_sfx_st.setRange(-1, 254)
+        self._spin_bounce_sfx_st.setValue(-1)
+        self._spin_bounce_sfx_st.setSpecialValueText(tr("hitbox.bounce_sfx_none"))
+        self._spin_bounce_sfx_st.setToolTip(tr("hitbox.bounce_sfx_tt"))
+        self._spin_bounce_sfx_st.valueChanged.connect(self._on_bounce_sfx_changed)
+        _bnc_sfx_row.addWidget(self._spin_bounce_sfx_st, 1)
+        gl_bnc.addLayout(_bnc_sfx_row)
+        # Max bounces — 0 = unlimited (special value), else hard cap 1..255.
+        _bnc_max_row = QHBoxLayout()
+        _bnc_max_row.addWidget(QLabel(tr("hitbox.bounce_max")))
+        self._spin_bounce_max_st = QSpinBox()
+        self._spin_bounce_max_st.setRange(0, 255)
+        self._spin_bounce_max_st.setValue(0)
+        self._spin_bounce_max_st.setSpecialValueText(tr("hitbox.bounce_max_unlimited"))
+        self._spin_bounce_max_st.setToolTip(tr("hitbox.bounce_max_tt"))
+        self._spin_bounce_max_st.valueChanged.connect(self._on_bounce_max_changed)
+        _bnc_max_row.addWidget(self._spin_bounce_max_st, 1)
+        gl_bnc.addLayout(_bnc_max_row)
+
         # Group 3 — Combat
         self._grp_combat, gl_cbt = _props_grp("hitbox.grp_combat", right)
         _psb(gl_cbt, "hp",         "hitbox.hp",         "hitbox.tt_hp")
@@ -1863,6 +1903,9 @@ class HitboxTab(QWidget):
         self._props = {k: int(raw_props[k]) for k in raw_props if k in _PROPS_DEFAULTS}
         self._updating_props = False
         self._refresh_props_summary()
+
+        # Load bounce flags + sfx (top-level on sprite, not in props)
+        self._load_bounce_from_meta(sprite_meta)
 
         # Load ctrl config
         self._load_ctrl(sprite_meta.get("ctrl") or {})
@@ -2930,6 +2973,68 @@ class HitboxTab(QWidget):
         self._update_section_visibility()
         self._refresh_checklist()
         self._refresh_spd_hint()
+
+    # ------------------------------------------------------------------
+    # Bounce (top-level sprite property, not in props)
+    # ------------------------------------------------------------------
+
+    def _load_bounce_from_meta(self, sprite_meta: dict) -> None:
+        self._updating_props = True
+        try:
+            flags = int(sprite_meta.get("bounce_flags") or 0)
+        except (TypeError, ValueError):
+            flags = 0
+        self._chk_bounce_h_st.setChecked(bool(flags & 1))
+        self._chk_bounce_v_st.setChecked(bool(flags & 2))
+        raw_sfx = sprite_meta.get("bounce_sfx")
+        if raw_sfx is None or raw_sfx == "":
+            self._spin_bounce_sfx_st.setValue(-1)
+        else:
+            try:
+                self._spin_bounce_sfx_st.setValue(max(-1, min(254, int(raw_sfx))))
+            except (TypeError, ValueError):
+                self._spin_bounce_sfx_st.setValue(-1)
+        raw_max = sprite_meta.get("bounce_max")
+        try:
+            self._spin_bounce_max_st.setValue(max(0, min(255, int(raw_max or 0))))
+        except (TypeError, ValueError):
+            self._spin_bounce_max_st.setValue(0)
+        self._updating_props = False
+
+    def _on_bounce_flag_changed(self, bit: int, on: bool) -> None:
+        if self._updating_props or self._sprite_meta is None:
+            return
+        try:
+            flags = int(self._sprite_meta.get("bounce_flags") or 0)
+        except (TypeError, ValueError):
+            flags = 0
+        if on:
+            flags |= bit
+        else:
+            flags &= ~bit
+        if flags == 0:
+            self._sprite_meta.pop("bounce_flags", None)
+        else:
+            self._sprite_meta["bounce_flags"] = flags & 0xFF
+        self.hitboxes_changed.emit()
+
+    def _on_bounce_sfx_changed(self, value: int) -> None:
+        if self._updating_props or self._sprite_meta is None:
+            return
+        if value < 0:
+            self._sprite_meta.pop("bounce_sfx", None)
+        else:
+            self._sprite_meta["bounce_sfx"] = int(value) & 0xFF
+        self.hitboxes_changed.emit()
+
+    def _on_bounce_max_changed(self, value: int) -> None:
+        if self._updating_props or self._sprite_meta is None:
+            return
+        if value <= 0:
+            self._sprite_meta.pop("bounce_max", None)
+        else:
+            self._sprite_meta["bounce_max"] = int(value) & 0xFF
+        self.hitboxes_changed.emit()
 
     def _prop_effective_value(self, key: str) -> int:
         pair = self._prop_widgets.get(key)

@@ -63,6 +63,26 @@ def scene_role_map(scene: dict | None) -> dict[str, str]:
         name = str(type_name or "").strip()
         if name and name not in roles:
             roles[name] = normalize_gameplay_role(legacy_role)
+    # B4 fix: sprite-types referenced from `scene["waves"][].entities[]` get
+    # promoted to role=enemy ONLY when the role wasn't explicitly chosen by
+    # the user. Explicit player/enemy/npc/item are preserved — a user who
+    # placed an "item" sprite in a wave wants an item pickup spawn, not an
+    # enemy. We only override the empty/default-fallback case ("" or "prop"),
+    # which is what causes the silent-drop bug in the runtime gate
+    # `if (role != ENEMY) return;`.
+    _explicit_roles = {"player", "enemy", "npc", "item"}
+    for wave in scene.get("waves", []) or []:
+        if not isinstance(wave, dict):
+            continue
+        for ent in wave.get("entities", []) or []:
+            if not isinstance(ent, dict):
+                continue
+            name = str(ent.get("type") or "").strip()
+            if not name:
+                continue
+            existing = roles.get(name, "")
+            if existing not in _explicit_roles:
+                roles[name] = "enemy"
     return roles
 
 

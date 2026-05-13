@@ -93,7 +93,9 @@ u8 ngpng_trigger_cond_met(u8 cond, u8 region, u16 value,
     } else if (cond == TRIG_ON_JUMP) {
         fire = player_jump_started ? 1u : 0u;
     } else if (cond == TRIG_WAVE_CLEARED) {
-        fire = (((u16)next_wave > value) && (enemy_active_count == 0u)) ? 1u : 0u;
+        /* B5: aligned with TRIG_WAVE_GE. Both interpret `value` as
+         * "at least N waves triggered". CLEARED = GE + no enemy alive. */
+        fire = (((u16)next_wave >= value) && (enemy_active_count == 0u)) ? 1u : 0u;
     } else if (cond == TRIG_HEALTH_LE) {
         fire = (player_hp <= (u8)value) ? 1u : 0u;
     } else if (cond == TRIG_HEALTH_GE) {

@@ -891,8 +891,37 @@ class MechanicsTab(QWidget):
             cb.setChecked(state.get(mid, False))
             cb.blockSignals(False)
 
+    # Mechanic dependency map — { dependent_id: required_id }.
+    # When `dependent_id` is enabled, `required_id` is auto-enabled too
+    # (the dependent has no meaning without its base). When `required_id`
+    # is disabled, every dependent is auto-disabled (would become orphan).
+    _MECHANIC_DEPENDS_ON = {
+        "wave_scroll_spawn": "wave_spawning",
+    }
+
     def _on_toggled(self, mid: str, checked: bool) -> None:
         set_mechanic_enabled(self._project_data, mid, checked)
+        # Auto-apply dependencies so orphan combos can't exist.
+        propagated: list[str] = []
+        if checked:
+            req = self._MECHANIC_DEPENDS_ON.get(mid)
+            if req and not get_mechanics(self._project_data).get(req, False):
+                set_mechanic_enabled(self._project_data, req, True)
+                propagated.append(req)
+        else:
+            for dep_id, req_id in self._MECHANIC_DEPENDS_ON.items():
+                if req_id == mid and get_mechanics(self._project_data).get(dep_id, False):
+                    set_mechanic_enabled(self._project_data, dep_id, False)
+                    propagated.append(dep_id)
+        # Sync the affected checkboxes visually so the UI reflects the new state
+        # without waiting for a full reload.
+        for pid in propagated:
+            row = self._rows.get(pid)
+            if row is not None:
+                _row, cb = row
+                cb.blockSignals(True)
+                cb.setChecked(get_mechanics(self._project_data).get(pid, False))
+                cb.blockSignals(False)
         self.mechanics_changed.emit()
         if self._on_save:
             self._on_save()

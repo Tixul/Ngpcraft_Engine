@@ -788,6 +788,7 @@ def make_scene_level_h(
         hit_flash_vals: list[str] = []
         bounce_flags_vals: list[str] = []
         bounce_sfx_vals: list[str] = []
+        bounce_max_vals: list[str] = []
         for t in seen_types:
             meta = sprite_meta.get(t) or {}
             role_name = str(entity_roles.get(t, "prop") or "prop").strip().lower()
@@ -938,6 +939,13 @@ def make_scene_level_h(
                 except (TypeError, ValueError):
                     _bsfx_n = 0xFF
                 bounce_sfx_vals.append(str(max(0, min(255, _bsfx_n)) & 0xFF))
+            # MECH-3 Bounce max — 0 = unlimited, else hard cap on bounces.
+            _bmax_raw = meta.get("bounce_max")
+            try:
+                _bmax_n = int(_bmax_raw) if _bmax_raw is not None else 0
+            except (TypeError, ValueError):
+                _bmax_n = 0
+            bounce_max_vals.append(str(max(0, min(255, _bmax_n)) & 0xFF))
         lines += [sep, "/* Runtime type tables                                                 */", sep]
         if not atk_flat_x_vals:
             atk_flat_x_vals = ["0"]
@@ -1024,6 +1032,7 @@ def make_scene_level_h(
         lines.append(f"static const u8 g_{sym_use}_type_hit_flash[] = {{{', '.join(hit_flash_vals)}}};")
         lines.append(f"static const u8 g_{sym_use}_type_bounce_flags[] = {{{', '.join(bounce_flags_vals)}}};")
         lines.append(f"static const u8 g_{sym_use}_type_bounce_sfx[] = {{{', '.join(bounce_sfx_vals)}}};")
+        lines.append(f"static const u8 g_{sym_use}_type_bounce_max[] = {{{', '.join(bounce_max_vals)}}};")
         lines.append(f"#define {sym_use.upper()}_HAS_MECH_PERTYPE_V1 1")
         lines.append("")
 
@@ -1303,8 +1312,15 @@ def make_scene_level_h(
             if _wave_mode == "frame":
                 delay = int(wave.get("delay", 0) or 0)
             else:
-                # Scroll-based: use at_scroll; fallback to legacy delay if absent.
-                delay = int(wave.get("at_scroll", wave.get("delay", 0)) or 0)
+                # Scroll-based: use at_scroll. We do NOT fall back to legacy
+                # `delay` — that fallback used to fire here even when the user
+                # explicitly set at_scroll=0, because the old UI persistence
+                # dropped the key on falsy values. The UI now always writes
+                # at_scroll (B3), and absence here means "start of scene" = 0.
+                # Defense-in-depth clamp: hand-edited JSON could go past s16
+                # range; `(s16)delay` cast in the runtime would wrap to a
+                # negative number and burst-spawn at scene start.
+                delay = max(0, min(32767, int(wave.get("at_scroll", 0) or 0)))
             for ent in (wave.get("entities", []) or []):
                 if not isinstance(ent, dict):
                     continue
@@ -1350,6 +1366,16 @@ def make_scene_level_h(
                     flat_entries.append((c, x, y, d, delay))
         # Stable-sort scripted entries by delay (already sorted if waves list is).
         flat_entries.sort(key=lambda e: e[4])
+
+        # F3 fix: wave_table_n is a u8 in NgpSceneDef → values > 255 wrap and
+        # silently drop entries. Hard-fail at export so the user gets a clear
+        # error message instead of mysteriously missing late waves.
+        if len(flat_entries) > 255:
+            raise ValueError(
+                f"Scene '{sym_use}' has {len(flat_entries)} wave entries — the "
+                "engine caps wave_table_n at 255 (u8 field). Reduce the number "
+                "of entities across waves, or split the scene."
+            )
 
         U = sym_use.upper()
         if flat_entries:
@@ -2595,7 +2621,8 @@ def make_scene_level_h(
     gmax = int(rules.get("ground_max_y", 0) or 0) & 0xFF
     mir_en = 1 if bool(rules.get("mirror_en", False)) else 0
     axis = int(rules.get("mirror_axis_x", 0) or 0) & 0xFF
-    apply_waves = 1 if bool(rules.get("apply_to_waves", True)) else 0
+    # B2: apply_to_waves is editor-only (gates which constraints apply during
+    # wave-edit placement preview). Not consumed by runtime — no C define.
     hazard_damage = int(rules.get("hazard_damage", 1) or 1) & 0xFF
     fire_damage = int(rules.get("fire_damage", 1) or 1) & 0xFF
     void_damage = int(rules.get("void_damage", 255) or 255) & 0xFF
@@ -2814,7 +2841,6 @@ def make_scene_level_h(
         f"#define {sym_use.upper()}_RULE_GROUND_MAX_Y {gmax}",
         f"#define {sym_use.upper()}_RULE_MIRROR_EN {mir_en}",
         f"#define {sym_use.upper()}_RULE_MIRROR_AXIS_X {axis}",
-        f"#define {sym_use.upper()}_RULE_APPLY_TO_WAVES {apply_waves}",
         f"#define {sym_use.upper()}_RULE_HAZARD_DAMAGE {hazard_damage}",
         f"#define {sym_use.upper()}_RULE_FIRE_DAMAGE {fire_damage}",
         f"#define {sym_use.upper()}_RULE_VOID_DAMAGE {void_damage}",

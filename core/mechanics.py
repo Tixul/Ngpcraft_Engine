@@ -111,13 +111,13 @@ MECHANICS_REGISTRY: list[dict] = [
     # --- Physics ---
     {
         "id":              "bounce",
-        "label":           "Rebond projectile",
-        "description":     "Les projectiles rebondissent sur les bords de la caméra au lieu de despawn. Configurable par sprite-bullet : rebond horizontal (murs G/D), vertical (haut/bas), SFX optionnel. Idéal pour Pong, casse-brique, puzzle ricochet, grenades.",
+        "label":           "Rebond / Ricochet",
+        "description":     "Le sprite rebondit sur les bords de la caméra ET sur les tuiles solides (collision via hitbox). Configurable par sprite-type dans Sprite Setup : rebond horizontal (axe X), vertical (axe Y), SFX optionnel. Idéal balles ricochet, Pong, casse-brique, grenades, ennemis bondissants.",
         "default_enabled": False,  # niche — opt-in
         "category":        "physics",
         "config_locations": [
-            ("Scene → panneau droit (entité dont le sprite sert de projectile) → groupe « Rebond (projectile) »",
-             "Coche rebond H et/ou V ; assigne un SFX optionnel. La config est par sprite-type, donc applicable à tous les usages de ce sprite comme bullet."),
+            ("Sprite Setup → groupe « Rebond / Ricochet »",
+             "Coche les axes H et/ou V, assigne un SFX optionnel. Config per-sprite-type, accessible sans devoir placer le sprite en scène (utile pour les bullets pool-runtime)."),
         ],
         "keywords": ["bounce", "rebound", "reflect", "ricochet", "pong", "breakout", "physics"],
     },
