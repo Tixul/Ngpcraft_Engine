@@ -1582,7 +1582,9 @@ def _detect_features(project_data: dict) -> dict:
         for spr in (sc.get("sprites") or []):
             if not isinstance(spr, dict):
                 continue
-            _spr_role = str((spr.get("ctrl") or {}).get("role", "prop") or "prop").lower().strip()
+            _spr_role = str(spr.get("gameplay_role") or "").strip().lower()
+            if _spr_role != "player":
+                _spr_role = str((spr.get("ctrl") or {}).get("role") or "").strip().lower()
             _sh = spr.get("shooting") or {}
             if _spr_role == "player":
                 _btn = str(_sh.get("button", "none") or "none").strip()
@@ -4210,6 +4212,58 @@ def write_autorun_main_c(
         c.append('                }\n')
         c.append('            }\n')
         c.append('            break;\n')
+        c.append('        }\n')
+        c.append('        if (shots[i].active) ngpng_player_shot_sync(sc, shots, i, 0u, cam_px, cam_py);\n')
+        c.append('        if (processed >= *active_count) break;\n')
+        c.append('    }\n')
+        c.append('}\n')
+        c.append('\n')
+    elif has_shooting:
+        # No-enemy variant: movement + bounds + sprite re-sync only.
+        # Without enemies, NgpngEnemy/Fx types are not defined so the full
+        # update_and_collide signature would not compile. Same name, slimmer
+        # signature; the call site dispatches.
+        c.append('static void ngpng_player_shots_update_and_collide(\n')
+        c.append('    const NgpSceneDef *sc, NgpngPlayerShot *shots, u8 *active_count,\n')
+        c.append('    s16 cam_px, s16 cam_py)\n')
+        c.append('{\n')
+        c.append('    u8 i;\n')
+        c.append('    u8 processed = 0u;\n')
+        c.append('    if (*active_count == 0u) return;\n')
+        c.append('    for (i = 0; i < (u8)NGPNG_AUTORUN_MAX_PLAYER_SHOTS; ++i) {\n')
+        c.append('        s16 sx_chk;\n')
+        c.append('        s16 sy_chk;\n')
+        c.append('        if (!shots[i].active) continue;\n')
+        c.append('        processed = (u8)(processed + 1u);\n')
+        c.append('        shots[i].world_x = (s16)(shots[i].world_x + shots[i].vx);\n')
+        c.append('        shots[i].world_y = (s16)(shots[i].world_y + shots[i].vy);\n')
+        c.append('        if (shots[i].bounce_flags & 1u) {\n')
+        c.append('            if (shots[i].world_x < cam_px) {\n')
+        c.append('                shots[i].world_x = cam_px;\n')
+        c.append('                shots[i].vx = (s8)(-shots[i].vx);\n')
+        c.append('                if (shots[i].bounce_sfx != 0xFFu) Sfx_Play(shots[i].bounce_sfx);\n')
+        c.append('            } else if (shots[i].world_x > (s16)(cam_px + 152)) {\n')
+        c.append('                shots[i].world_x = (s16)(cam_px + 152);\n')
+        c.append('                shots[i].vx = (s8)(-shots[i].vx);\n')
+        c.append('                if (shots[i].bounce_sfx != 0xFFu) Sfx_Play(shots[i].bounce_sfx);\n')
+        c.append('            }\n')
+        c.append('        }\n')
+        c.append('        if (shots[i].bounce_flags & 2u) {\n')
+        c.append('            if (shots[i].world_y < cam_py) {\n')
+        c.append('                shots[i].world_y = cam_py;\n')
+        c.append('                shots[i].vy = (s8)(-shots[i].vy);\n')
+        c.append('                if (shots[i].bounce_sfx != 0xFFu) Sfx_Play(shots[i].bounce_sfx);\n')
+        c.append('            } else if (shots[i].world_y > (s16)(cam_py + 144)) {\n')
+        c.append('                shots[i].world_y = (s16)(cam_py + 144);\n')
+        c.append('                shots[i].vy = (s8)(-shots[i].vy);\n')
+        c.append('                if (shots[i].bounce_sfx != 0xFFu) Sfx_Play(shots[i].bounce_sfx);\n')
+        c.append('            }\n')
+        c.append('        }\n')
+        c.append('        sx_chk = (s16)(shots[i].world_x - cam_px);\n')
+        c.append('        sy_chk = (s16)(shots[i].world_y - cam_py);\n')
+        c.append('        if (shots[i].bounce_flags == 0u && (sx_chk < -24 || sx_chk > 184 || sy_chk < -24 || sy_chk > 184)) {\n')
+        c.append('            ngpng_player_shot_kill(shots, active_count, i);\n')
+        c.append('            continue;\n')
         c.append('        }\n')
         c.append('        if (shots[i].active) ngpng_player_shot_sync(sc, shots, i, 0u, cam_px, cam_py);\n')
         c.append('        if (processed >= *active_count) break;\n')
@@ -7003,6 +7057,8 @@ def write_autorun_main_c(
             c.append("#endif\n")
     if has_shooting and has_enemy:
         c.append("        ngpng_player_shots_update_and_collide(sc, shots, &player_shots_active, enemies, &enemy_active_count, &score, explosion_type, fx, &fx_active_count, &fx_alloc_idx, cam_px, cam_py);\n")
+    elif has_shooting:
+        c.append("        ngpng_player_shots_update_and_collide(sc, shots, &player_shots_active, cam_px, cam_py);\n")
     if has_fx:
         c.append("        ngpng_fx_update(sc, fx, &fx_active_count, cam_px, cam_py);\n")
     if _has_dmg_popup:

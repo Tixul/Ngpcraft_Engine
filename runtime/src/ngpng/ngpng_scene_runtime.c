@@ -71,7 +71,6 @@ static void ngpng_scene_runtime_refresh_player_projectile(const NgpSceneDef *sc,
 {
     u8 bullet_type;
     if (!rt) return;
-    if (rt->player_bullet_type) *rt->player_bullet_type = 0xFFu;
     if (rt->player_bullet_ready) *rt->player_bullet_ready = 0u;
     if (!sc ||
         !rt->player_bullet_type ||
