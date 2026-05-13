@@ -4734,7 +4734,7 @@ def write_autorun_main_c(
         # allocation tracks project-level changes to enemy/fx/prop counts.
         # Project-overridable via Makefile if a specific layout is needed.
         c.append("#ifndef NGPNG_AUTORUN_OPTION_SPR_BASE\n")
-        c.append("#define NGPNG_AUTORUN_OPTION_SPR_BASE ((u8)(NGPNG_AUTORUN_PROP_SPR_BASE + NGPNG_AUTORUN_PROP_SPR_COUNT))\n")
+        c.append("#define NGPNG_AUTORUN_OPTION_SPR_BASE (NGPNG_AUTORUN_PROP_SPR_BASE + NGPNG_AUTORUN_PROP_SPR_COUNT)\n")
         c.append("#endif\n")
         # Hard runtime sanity: 4 options after props must fit in the 64-slot OAM.
         c.append("#if (NGPNG_AUTORUN_OPTION_SPR_BASE + NGPNG_OPT_MAX) > 64\n")
@@ -6807,10 +6807,18 @@ def write_autorun_main_c(
         # the lagged slot). Storing world coordinates so options follow the
         # player through camera scrolls correctly.
         if _has_options:
+            # MECH-14 Gradius-style trail: only advance the write head when the
+            # player actually moved. Holding still freezes the buffer so the
+            # option stays at its trailing offset instead of catching up.
+            # Matches Star Gunner's option_update() pattern (shmup.c).
             c.append("        if (!g_opt_scene_disabled) {\n")
-            c.append("            g_opt_hist_head = (u8)((g_opt_hist_head + 1u) & NGPNG_OPT_HIST_MASK);\n")
-            c.append(f"            g_opt_hist_x[g_opt_hist_head] = (s16)(cam_px + s_{players[0]['name']}.x);\n")
-            c.append(f"            g_opt_hist_y[g_opt_hist_head] = (s16)(cam_py + s_{players[0]['name']}.y);\n")
+            c.append(f"            s16 _opt_px_now = (s16)(cam_px + s_{players[0]['name']}.x);\n")
+            c.append(f"            s16 _opt_py_now = (s16)(cam_py + s_{players[0]['name']}.y);\n")
+            c.append("            if (_opt_px_now != g_opt_hist_x[g_opt_hist_head] || _opt_py_now != g_opt_hist_y[g_opt_hist_head]) {\n")
+            c.append("                g_opt_hist_head = (u8)((g_opt_hist_head + 1u) & NGPNG_OPT_HIST_MASK);\n")
+            c.append("                g_opt_hist_x[g_opt_hist_head] = _opt_px_now;\n")
+            c.append("                g_opt_hist_y[g_opt_hist_head] = _opt_py_now;\n")
+            c.append("            }\n")
             c.append("        }\n")
         c.append("\n")
     c.append("        timer++;\n")
