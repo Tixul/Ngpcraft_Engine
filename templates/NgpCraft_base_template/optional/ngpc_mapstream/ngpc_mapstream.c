@@ -114,16 +114,36 @@ static void ms_put(volatile u16 *base, u8 vc, u8 vr, u16 tw)
     base[idx] = tw;
 }
 
-/* Read tileword from large map ROM.  Returns 0 (empty) if out of bounds.
+/* Read tileword from large map ROM. Returns 0 (empty) if out of bounds.
+ * When loop_x / loop_y is set, wraps the coordinate modulo map_w / map_h
+ * instead — used by scenes with level_scroll.loop_x or loop_y enabled.
  * map_tiles is passed by the caller — never stored (cc900 far ptr issue). */
+static u16 ms_get_wrapped(const u16 NGP_FAR *map_tiles, u16 map_w, u16 map_h,
+                          s16 wx, s16 wy, u8 loop_x, u8 loop_y)
+{
+    u16 idx;
+    if (loop_x && map_w > 0u) {
+        while (wx < 0)           wx = (s16)(wx + (s16)map_w);
+        while ((u16)wx >= map_w) wx = (s16)(wx - (s16)map_w);
+    } else if (wx < 0 || (u16)wx >= map_w) {
+        return 0u;
+    }
+    if (loop_y && map_h > 0u) {
+        while (wy < 0)           wy = (s16)(wy + (s16)map_h);
+        while ((u16)wy >= map_h) wy = (s16)(wy - (s16)map_h);
+    } else if (wy < 0 || (u16)wy >= map_h) {
+        return 0u;
+    }
+    idx = (u16)((u16)wy * map_w + (u16)wx);
+    return map_tiles[idx];
+}
+
+/* Legacy accessor for callers without an NgpcMapStream context. Behaves
+ * exactly like the original (no loop wrap). */
 static u16 ms_get(const u16 NGP_FAR *map_tiles, u16 map_w, u16 map_h,
                   s16 wx, s16 wy)
 {
-    u16 idx;
-    if (wx < 0 || (u16)wx >= map_w) return 0u;
-    if (wy < 0 || (u16)wy >= map_h) return 0u;
-    idx = (u16)((u16)wy * map_w + (u16)wx);
-    return map_tiles[idx];
+    return ms_get_wrapped(map_tiles, map_w, map_h, wx, wy, 0u, 0u);
 }
 
 /* Write world column wx to VRAM, for rows near cam_ty.
@@ -139,7 +159,8 @@ static void ms_stream_col(const NgpcMapStream *ms,
 
     for (wy = (s16)(cam_ty - 1); wy < wy_end; wy++) {
         u8 vr = (u8)((u16)wy & 0x1Fu);
-        ms_put(base, vc, vr, ms_get(map_tiles, ms->map_w, ms->map_h, wx, wy));
+        ms_put(base, vc, vr, ms_get_wrapped(map_tiles, ms->map_w, ms->map_h,
+                                             wx, wy, ms->loop_x, ms->loop_y));
     }
 }
 
@@ -156,7 +177,8 @@ static void ms_stream_row(const NgpcMapStream *ms,
 
     for (wx = (s16)(cam_tx - 1); wx < wx_end; wx++) {
         u8 vc = (u8)((u16)wx & 0x1Fu);
-        ms_put(base, vc, vr, ms_get(map_tiles, ms->map_w, ms->map_h, wx, wy));
+        ms_put(base, vc, vr, ms_get_wrapped(map_tiles, ms->map_w, ms->map_h,
+                                             wx, wy, ms->loop_x, ms->loop_y));
     }
 }
 
@@ -177,11 +199,17 @@ void ngpc_mapstream_init(NgpcMapStream *ms, u8 plane,
     ms->plane       = plane;
     ms->prev_cam_tx = tx;
     ms->prev_cam_ty = ty;
+    /* Default = non-looping. Caller (autorun codegen) overwrites these flags
+     * right after init when the scene has level_scroll.loop_x / loop_y. */
+    ms->loop_x      = 0u;
+    ms->loop_y      = 0u;
 
     base = ms_map_base(plane);
 
     /* Blit the visible viewport + 1-tile margin on each edge.
-     * 22 cols x 21 rows = 462 tile writes — call from scene init, not VBlank. */
+     * 22 cols x 21 rows = 462 tile writes — call from scene init, not VBlank.
+     * ms_get (non-loop) here is fine because loop_x/y aren't set yet at init;
+     * the codegen sets them right after this call and the next update wraps. */
     for (wy = (s16)(ty - 1); wy < (s16)(ty + 20); wy++) {
         for (wx = (s16)(tx - 1); wx < (s16)(tx + 21); wx++) {
             u8 vc = (u8)((u16)wx & 0x1Fu);
@@ -201,6 +229,25 @@ void ngpc_mapstream_update(NgpcMapStream *ms,
     s16 dx = (s16)(cam_tx - ms->prev_cam_tx);
     s16 dy = (s16)(cam_ty - ms->prev_cam_ty);
     s16 i;
+
+    /* Loop normalisation: when the scene loops on an axis and the camera
+     * has wrapped (cam_tx jumped from map_w-1 back to 0), the raw delta is
+     * huge (e.g. -39 for a 40-wide map). Rewrite it as the SHORTEST signed
+     * path through the looped world (here +1 instead of -39) so the column
+     * streaming below targets the right new-edge tiles instead of clamping
+     * to MAX_DELTA and leaving most of the viewport stale (= black gap). */
+    if (ms->loop_x && ms->map_w > 0u) {
+        s16 mw = (s16)ms->map_w;
+        s16 half = (s16)(mw >> 1);
+        if (dx >  half) dx = (s16)(dx - mw);
+        else if (dx < -half) dx = (s16)(dx + mw);
+    }
+    if (ms->loop_y && ms->map_h > 0u) {
+        s16 mh = (s16)ms->map_h;
+        s16 half = (s16)(mh >> 1);
+        if (dy >  half) dy = (s16)(dy - mh);
+        else if (dy < -half) dy = (s16)(dy + mh);
+    }
 
     /* Clamp: if camera jumps > MAX_DELTA tiles, stream what we can.
      * Call ngpc_mapstream_init() again after a scene teleport. */

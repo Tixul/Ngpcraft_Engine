@@ -67,6 +67,8 @@ typedef struct {
     s16 prev_cam_tx; /* last camera position, tiles X           */
     s16 prev_cam_ty; /* last camera position, tiles Y           */
     u8  plane;       /* GFX_SCR1 or GFX_SCR2                   */
+    u8  loop_x;      /* 1 = wrap horizontally (cam wraps modulo map_w) */
+    u8  loop_y;      /* 1 = wrap vertically                            */
 } NgpcMapStream;
 
 /* Initialise the stream and blit the initial viewport into VRAM.

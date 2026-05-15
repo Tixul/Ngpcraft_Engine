@@ -45,6 +45,10 @@
 #include "ngpc_hw.h"
 
 /* ── Wave entry (5 bytes ROM) ────────────────────────────────────────── */
+/* Shared guard with scenes_autogen.h so both headers can be included in the
+ * same translation unit without "Redeclaration of NgpcWaveEntry" errors. */
+#ifndef NGPC_WAVE_ENTRY_T
+#define NGPC_WAVE_ENTRY_T
 typedef struct {
     u8  type;     /* entity type to spawn              */
     u8  x;        /* X position in pixels (or tiles)   */
@@ -52,6 +56,7 @@ typedef struct {
     u8  data;     /* behavior / variant (game-defined) */
     u16 delay;    /* spawn frame from wave start       */
 } NgpcWaveEntry;
+#endif
 
 /* End-of-table sentinel */
 #define WAVE_END      0xFFFFu

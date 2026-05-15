@@ -1287,6 +1287,20 @@ def make_scene_level_h(
     if _wave_mode not in ("frame", "scroll_x", "scroll_y"):
         _wave_mode = "frame"
 
+    # MECH-4: wave_spawn_anchor controls how wave entry (x,y) is interpreted at
+    # spawn time. "world" keeps the legacy absolute-tile behaviour; the four
+    # screen_* values let designers express "spawn just off the right edge of
+    # the current camera viewport" without needing to know the camera position.
+    _wave_anchor = str((scene.get("wave_spawn_anchor") or "world")).strip().lower()
+    _wave_anchor_map = {
+        "world": 0,
+        "screen_right": 1,
+        "screen_left": 2,
+        "screen_top": 3,
+        "screen_bottom": 4,
+    }
+    _wave_anchor_int = _wave_anchor_map.get(_wave_anchor, 0)
+
     # ---- Enemy waves — split into scripted (NgpcWaveEntry) + random (NgpcRWaveCfg) ----
     if waves:
         lines += [
@@ -1317,15 +1331,21 @@ def make_scene_level_h(
             if _wave_mode == "frame":
                 delay = int(wave.get("delay", 0) or 0)
             else:
-                # Scroll-based: use at_scroll. We do NOT fall back to legacy
-                # `delay` — that fallback used to fire here even when the user
-                # explicitly set at_scroll=0, because the old UI persistence
-                # dropped the key on falsy values. The UI now always writes
-                # at_scroll (B3), and absence here means "start of scene" = 0.
+                # Scroll-based: use at_scroll if explicitly set (even to 0 —
+                # that's the B3 fix: 0 = spawn at cam_px=0, not "missing").
+                # If at_scroll key is TOTALLY ABSENT, fall back to the legacy
+                # `delay` field — typical case is waves created in frame mode
+                # and re-used after switching the scene to scroll-based. The
+                # delay value then doubles as cam_px (1 frame = 1 px @ scroll
+                # speed 1, close enough; tweak in the editor if needed).
+                if "at_scroll" in wave:
+                    raw = wave.get("at_scroll")
+                else:
+                    raw = wave.get("delay", 0)
                 # Defense-in-depth clamp: hand-edited JSON could go past s16
                 # range; `(s16)delay` cast in the runtime would wrap to a
                 # negative number and burst-spawn at scene start.
-                delay = max(0, min(32767, int(wave.get("at_scroll", 0) or 0)))
+                delay = max(0, min(32767, int(raw or 0)))
             for ent in (wave.get("entities", []) or []):
                 if not isinstance(ent, dict):
                     continue
@@ -2898,6 +2918,14 @@ def make_scene_level_h(
         # MECH-4: 0=frame-based, 1=scroll_x (cam_px), 2=scroll_y (cam_py).
         # Consumed by template_integration.py at the wave update site.
         f"#define {sym_use.upper()}_WAVE_TRIGGER_MODE {0 if _wave_mode == 'frame' else (1 if _wave_mode == 'scroll_x' else 2)}",
+        # MECH-4 wave_spawn_anchor: how wave entry (x,y) is interpreted at spawn.
+        # 0=world (tiles, absolute) — default, identical to legacy behaviour.
+        # 1=screen_right  : world_x = cam_px + 160 + x*8 (offscreen right edge)
+        # 2=screen_left   : world_x = cam_px - enemy_w - x*8 (offscreen left edge)
+        # 3=screen_top    : world_y = cam_py - enemy_h - y*8 (offscreen top edge)
+        # 4=screen_bottom : world_y = cam_py + 152 + y*8 (offscreen bottom edge)
+        # For 1/2 the y is cam_py + y*8; for 3/4 the x is cam_px + x*8.
+        f"#define {sym_use.upper()}_WAVE_SPAWN_ANCHOR {_wave_anchor_int}",
         f"#define {sym_use.upper()}_LOOP_X {1 if bool(sc.get('loop_x', False)) else 0}",
         f"#define {sym_use.upper()}_LOOP_Y {1 if bool(sc.get('loop_y', False)) else 0}",
         f"#define {sym_use.upper()}_BGM_COUNT {len(bgm_tracks)}",

@@ -49,21 +49,18 @@ const NgpcWaveEntry *ngpc_wave_update(NgpcWaveSeq *seq)
 
     if (!(seq->flags & WAVE_FLAG_ACTIVE)) return 0;
 
-    /* Avancer le timer UNE fois par frame (premier appel de la boucle)
-     * On distingue : si next == 0 ET timer == 0, c'est le premier frame,
-     * on ne fait pas d'incrément avant le premier poll. */
-    if (seq->next > 0 || seq->timer > 0) {
-        if (seq->timer < 0xFFFFu) seq->timer++;
-    }
-
+    /* Poll d'abord avec le timer courant : supporte delay=0 qui doit fire
+     * dès la première frame (timer=0). Puis incrémente une fois par appel
+     * d'update (= une fois par frame). Le poll dans la boucle d'appel
+     * (ngpc_wave_poll) lit ce timer sans le ré-incrémenter, donc tous les
+     * entries simultanés à un même delay firent dans la même frame.
+     *
+     * Ancien gating "if (next>0 || timer>0) inc" était cassé : timer et
+     * next restaient bloqués à 0, donc timer ne montait jamais et aucune
+     * wave de delay>0 ne firait jamais. */
     e = _wave_poll_internal(seq);
-    if (e) return e;
-
-    /* Premier frame (timer=0, next=0) : vérifier quand même */
-    if (seq->timer == 0 && seq->next == 0)
-        return _wave_poll_internal(seq);
-
-    return 0;
+    if (seq->timer < 0xFFFFu) seq->timer++;
+    return e;
 }
 
 void ngpc_wave_tick(NgpcWaveSeq *seq)

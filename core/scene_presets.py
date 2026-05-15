@@ -388,14 +388,20 @@ def _apply_shmup_horizontal(scene: dict) -> bool:
     """Modern horizontal shmup preset (2026-05-13).
 
     Reference: StarGunner — forced scroll, 1 stage = 128 tiles wide × 19 high,
-    scroll-based wave triggers, no gravity, no tilecol collision for ship,
-    bullets killed on solid contact (default since the engine kill-on-solid
-    fix), score+lives HUD, parallax SCR2 = slow starfield.
+    no gravity, no tilecol collision for ship, bullets killed on solid contact
+    (default since the engine kill-on-solid fix), score+lives HUD, parallax
+    SCR2 = slow starfield.
 
-    Sets scene-level fields only — project-level mechanics (shooting,
-    wave_spawning, wave_scroll_spawn, death_fx, option_satellite, bounce)
-    must be enabled separately in the Mechanics tab (auto-dependency on
-    wave_scroll_spawn will pull in wave_spawning automatically).
+    Sets scene-level structure only (size / scroll / camera / HUD / parallax /
+    spawn region). Does NOT touch the wave system — wave_trigger_mode and
+    wave_spawn_anchor are mechanic-level decisions that belong to the user :
+    they require the matching project mechanic (wave_spawning,
+    wave_scroll_spawn) to be enabled, otherwise the UI combos are hidden and
+    the field becomes silently editable only via raw JSON. Cleaner to let the
+    designer pick these explicitly via the Mechanics tab + Level tab combos.
+
+    Other project-level mechanics (shooting, death_fx, option_satellite,
+    bounce) likewise must be enabled separately in the Mechanics tab.
     """
     _ensure_scene_size(scene, 128, 19)
     scene["level_profile"] = "shmup"
@@ -412,10 +418,6 @@ def _apply_shmup_horizontal(scene: dict) -> bool:
         "cam_mode": "forced_scroll", "bounds_auto": True, "clamp": True,
         "follow_deadzone_x": 16, "follow_deadzone_y": 12, "follow_drop_margin_y": 20,
     })
-    # MECH-4 — scroll-based wave triggers (Nemesis-style). Waves spawn when
-    # cam_px reaches the wave's at_scroll value. Requires wave_scroll_spawn
-    # mechanic enabled at project level (which auto-enables wave_spawning).
-    scene["wave_trigger_mode"] = "scroll_x"
     _apply_rule_defaults(
         scene,
         hud_enabled=True,

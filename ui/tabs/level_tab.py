@@ -4883,6 +4883,26 @@ class LevelTab(QWidget):
         _wm_lay.addWidget(self._combo_wave_mode, 1)
         wtv.addWidget(self._row_wave_mode)
 
+        # MECH-4: wave_spawn_anchor — where wave entry (x,y) is interpreted.
+        # "world" = absolute tile coords (legacy). The four screen_* values
+        # anchor the (x,y) offsets to the current camera viewport edges, so a
+        # shmup designer can write x=0..3 and get enemies sliding in from the
+        # right edge without having to know the camera position.
+        self._row_wave_anchor = QWidget()
+        _wa_lay = QHBoxLayout(self._row_wave_anchor)
+        _wa_lay.setContentsMargins(0, 0, 0, 0)
+        _wa_lay.addWidget(QLabel(tr("level.wave_anchor")))
+        self._combo_wave_anchor = QComboBox()
+        self._combo_wave_anchor.addItem(tr("level.wave_anchor_world"),         "world")
+        self._combo_wave_anchor.addItem(tr("level.wave_anchor_screen_right"),  "screen_right")
+        self._combo_wave_anchor.addItem(tr("level.wave_anchor_screen_left"),   "screen_left")
+        self._combo_wave_anchor.addItem(tr("level.wave_anchor_screen_top"),    "screen_top")
+        self._combo_wave_anchor.addItem(tr("level.wave_anchor_screen_bottom"), "screen_bottom")
+        self._combo_wave_anchor.setToolTip(tr("level.wave_anchor_tt"))
+        self._combo_wave_anchor.currentIndexChanged.connect(self._on_wave_anchor_changed)
+        _wa_lay.addWidget(self._combo_wave_anchor, 1)
+        wtv.addWidget(self._row_wave_anchor)
+
         wave_ctrl = QHBoxLayout()
         self._btn_wave_add = QPushButton(tr("level.wave_add"))
         self._btn_wave_add.clicked.connect(self._add_wave)
@@ -12949,6 +12969,7 @@ class LevelTab(QWidget):
         self._refresh_wave_entities()
         self._refresh_wave_ent_rand_panel()
         self._refresh_wave_mode_ui()
+        self._refresh_wave_anchor_ui()
         self._canvas.update()
 
     def _refresh_wave_mode_ui(self) -> None:
@@ -12985,6 +13006,34 @@ class LevelTab(QWidget):
         else:
             self._scene["wave_trigger_mode"] = mode
         self._refresh_wave_mode_ui()
+        if self._on_save:
+            self._on_save()
+
+    def _refresh_wave_anchor_ui(self) -> None:
+        """MECH-4: keep the anchor combo in sync with the scene state.
+        Visible whenever the wave system is enabled (so designers can pick
+        screen_right even on frame-based scenes)."""
+        mech_on = self._mechanic_enabled("wave_spawning") or self._mechanic_enabled("wave_scroll_spawn")
+        if hasattr(self, "_row_wave_anchor"):
+            self._row_wave_anchor.setVisible(mech_on)
+        if not mech_on or self._scene is None:
+            return
+        anchor = str(self._scene.get("wave_spawn_anchor", "world") or "world")
+        if hasattr(self, "_combo_wave_anchor"):
+            self._combo_wave_anchor.blockSignals(True)
+            idx = self._combo_wave_anchor.findData(anchor)
+            self._combo_wave_anchor.setCurrentIndex(max(0, idx))
+            self._combo_wave_anchor.blockSignals(False)
+
+    def _on_wave_anchor_changed(self, _idx: int) -> None:
+        """Persist the per-scene wave_spawn_anchor."""
+        if self._scene is None:
+            return
+        anchor = self._combo_wave_anchor.currentData() or "world"
+        if anchor == "world":
+            self._scene.pop("wave_spawn_anchor", None)
+        else:
+            self._scene["wave_spawn_anchor"] = anchor
         if self._on_save:
             self._on_save()
 

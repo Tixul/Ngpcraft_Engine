@@ -1628,6 +1628,13 @@ STRINGS_FR: dict[str, str] = {
     "level.wave_mode_scroll_x":            "Scroll horizontal (cam_px)",
     "level.wave_mode_scroll_y":            "Scroll vertical (cam_py)",
     "level.wave_mode_tt":                  "Frame-based : timer-driven, chaque wave a un delay en frames. Scroll-based : positions index sur cam_px ou cam_py — l'ennemi spawn quand la caméra atteint cette position, frame-rate independent.",
+    "level.wave_anchor":                   "Ancrage spawn :",
+    "level.wave_anchor_world":             "Monde (tiles absolues)",
+    "level.wave_anchor_screen_right":      "Bord droit écran",
+    "level.wave_anchor_screen_left":       "Bord gauche écran",
+    "level.wave_anchor_screen_top":        "Bord haut écran",
+    "level.wave_anchor_screen_bottom":     "Bord bas écran",
+    "level.wave_anchor_tt":                "Comment les coordonnées (x,y) d'une wave entry sont interprétées au spawn.\n• Monde : tiles absolues sur la carte (comportement par défaut).\n• Bord droit : x devient un offset en tiles depuis le bord droit de l'écran (x=0 = juste hors-champ droit). Idéal shmup horizontal.\n• Bord gauche / haut / bas : symétrique pour les autres directions.",
     "level.wave_at_scroll":                "Position scroll :",
     "level.wave_at_scroll_tt":             "Position de scroll (px) à laquelle la wave se déclenche en mode scroll-based. Remplace le delay frame-based.",
     # MECH-14 per-scene Option Satellite override

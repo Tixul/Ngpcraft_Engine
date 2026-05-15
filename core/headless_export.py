@@ -34,6 +34,7 @@ from typing import Callable
 from core.hitbox_export import make_anims_h, make_ctrl_h, make_hitbox_h, make_props_h
 from core.collision_boxes import sprite_hurtboxes
 from core.assets_autogen_mk import write_assets_autogen_mk
+from core.gen_manifest import GenManifest
 from core.audio_autogen_mk import (
     project_uses_template_managed_audio,
     write_audio_autogen_mk,
@@ -92,11 +93,28 @@ class ExportResult:
     ok: int = 0
     skipped: int = 0
     errors: list[str] = field(default_factory=list)
+    # Paths of generated files (.c/.h/.mk) produced by this run. Used by the
+    # GenManifest in export_project() to detect and remove orphan files left
+    # over from deleted/renamed sprites, tilemaps, or scenes.
+    generated: list[Path] = field(default_factory=list)
 
     @property
     def success(self) -> bool:
         """Return True when the export completed without recorded errors."""
         return not self.errors
+
+    def track(self, path: "Path | str | None") -> None:
+        """Record a generated file path. ``None`` is silently ignored so
+        callers can pass returns from writers that may bail out (e.g.
+        ``write_scene_dialogs_h`` returns ``None`` when no dialogues exist).
+        """
+        if path is None:
+            return
+        self.generated.append(Path(path))
+
+    def track_many(self, paths) -> None:
+        for p in paths or ():
+            self.track(p)
 
     def print_summary(self) -> None:
         """Print a compact terminal summary of the export result."""
@@ -375,12 +393,21 @@ def _write_hitbox_props(
     fc: int,
     out_dir: Path,
     errs: list[str],
-) -> None:
+) -> list[Path]:
+    """Write hitbox/props/anims headers for a sprite.
+
+    Returns the list of files actually written, so the caller can record
+    them in the gen manifest. Files we *chose not to write* (no hitboxes,
+    no props, etc.) are not returned.
+    """
+    written: list[Path] = []
     hitboxes = sprite_hurtboxes(spr, fw, fh)
     if hitboxes:
         try:
             text = make_hitbox_h(name, name, fw, fh, fc, hitboxes)
-            (out_dir / f"{name}_hitbox.h").write_text(text, encoding="utf-8")
+            p = out_dir / f"{name}_hitbox.h"
+            p.write_text(text, encoding="utf-8")
+            written.append(p)
         except Exception as e:
             errs.append(f"{name}_hitbox.h: {e}")
     props = spr.get("props") or {}
@@ -388,7 +415,9 @@ def _write_hitbox_props(
         try:
             text = make_props_h(name, name, fw, fh, fc, props)
             if text:
-                (out_dir / f"{name}_props.h").write_text(text, encoding="utf-8")
+                p = out_dir / f"{name}_props.h"
+                p.write_text(text, encoding="utf-8")
+                written.append(p)
         except Exception as e:
             errs.append(f"{name}_props.h: {e}")
     anims = spr.get("anims") or {}
@@ -396,9 +425,12 @@ def _write_hitbox_props(
         try:
             text = make_anims_h(name, name, anims)
             if text:
-                (out_dir / f"{name}_anims.h").write_text(text, encoding="utf-8")
+                p = out_dir / f"{name}_anims.h"
+                p.write_text(text, encoding="utf-8")
+                written.append(p)
         except Exception as e:
             errs.append(f"{name}_anims.h: {e}")
+    return written
 
 
 def _write_ctrl_header(
@@ -406,18 +438,24 @@ def _write_ctrl_header(
     name: str,
     out_dir: Path,
     errs: list[str],
-) -> None:
+) -> "Path | None":
+    """Write ``<name>_ctrl.h`` for player sprites. Returns the path written,
+    or ``None`` if the sprite is not a player or the body is empty.
+    """
     ctrl = spr.get("ctrl") or {}
     role = sprite_gameplay_role(spr)
     if role != "player":
-        return
+        return None
     props = spr.get("props") or {}
     try:
         text = make_ctrl_h(name, name, ctrl, props, role=role)
         if text:
-            (out_dir / f"{name}_ctrl.h").write_text(text, encoding="utf-8")
+            p = out_dir / f"{name}_ctrl.h"
+            p.write_text(text, encoding="utf-8")
+            return p
     except Exception as e:
         errs.append(f"{name}_ctrl.h: {e}")
+    return None
 
 
 def _export_sprite(
@@ -451,7 +489,7 @@ def _export_sprite(
         out_dir.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
-    _write_ctrl_header(spr, name, out_dir, result.errors)
+    result.track(_write_ctrl_header(spr, name, out_dir, result.errors))
 
     if not path.exists():
         tiles = sprite_tile_estimate(spr)
@@ -460,6 +498,7 @@ def _export_sprite(
         return int(tiles), 1
 
     try:
+        out_c = out_dir / f"{name}_mspr.c"
         run = export_sprite_pipeline(
             script=Path(script),
             source_path=path,
@@ -472,7 +511,7 @@ def _export_sprite(
             tile_base=int(t_cursor),
             pal_base=int(pal_base),
             fixed_palette=fixed or None,
-            output_c=(out_dir / f"{name}_mspr.c"),
+            output_c=out_c,
             timeout_s=30,
         )
         if run.ok:
@@ -483,7 +522,13 @@ def _export_sprite(
                 f"  pal={pal_base}"
             )
             result.ok += 1
-            _write_hitbox_props(spr, name, fw, fh, fc, out_dir, result.errors)
+            # Track the sprite C body and its sibling header (the sprite
+            # export tool always emits both when output_c is set).
+            result.track(out_c)
+            result.track(out_c.with_suffix(".h"))
+            result.track_many(
+                _write_hitbox_props(spr, name, fw, fh, fc, out_dir, result.errors)
+            )
         else:
             result.errors.append(f"{name}: {run.detail}")
             log(f"  ERR   {name}: {run.detail}")
@@ -585,6 +630,12 @@ def _export_tilemap(
                 if out_c.resolve() != existing_c.resolve():
                     log(f"  OK    {label}  (reuse existing: {existing_c.name})")
                     result.ok += 1
+                    # Track the reused files. ``result.track`` just records
+                    # paths; the gen manifest will silently ignore any that
+                    # fall outside gen_dir (the usual case — existing
+                    # assets live next to their source PNG).
+                    result.track(existing_c)
+                    result.track(existing_h)
                     return
         except Exception:
             # If resolve fails for any reason, fall back to normal export.
@@ -607,6 +658,9 @@ def _export_tilemap(
         if res.returncode == 0:
             log(f"  OK    {label}")
             result.ok += 1
+            # ``--header`` makes ngpc_tilemap.py emit both .c and matching .h.
+            result.track(out_c)
+            result.track(out_c.with_suffix(".h"))
         else:
             lines = (res.stderr or res.stdout or "").strip().splitlines()
             detail = lines[0] if lines else f"code {res.returncode}"
@@ -712,8 +766,10 @@ def export_scene(
         log(f"  WARN  sprite tile_base bumped {t_cursor} -> {tm_end} (avoid tilemap overlap)")
         t_cursor = int(tm_end)
 
-    # NOTE: stale *_mspr.* purge is done once in export_project() before the
-    # scene loop so that multi-scene projects don't erase each other's sprites.
+    # Orphan cleanup is handled by GenManifest in export_project(): every
+    # generated file is recorded in <gen_dir>/.ngpcraft_gen_manifest.json on
+    # success, and the next run removes files that were previously listed
+    # but are no longer produced.
 
     sprites = [spr for spr in (scene_export.get("sprites") or []) if _export_enabled(spr)]
     if sprite_script:
@@ -753,12 +809,14 @@ def export_scene(
                 project_dir=base_dir,
             )
             log(f"  OUT   {lvl_h.name}")
+            result.track(lvl_h)
             dlg_h = write_scene_dialogs_h(
                 scene=scene_export,
                 export_dir=export_dir_abs,
             )
             if dlg_h is not None:
                 log(f"  OUT   {dlg_h.name}")
+                result.track(dlg_h)
         except Exception as e:
             level_ok = False
             label = str(scene.get("label") or scene.get("id") or "scene")
@@ -776,6 +834,8 @@ def export_scene(
             if col_paths is not None:
                 log(f"  OUT   {col_paths[0].name}")
                 log(f"  OUT   {col_paths[1].name}")
+                result.track(col_paths[0])
+                result.track(col_paths[1])
         except Exception as e:
             label = str(scene.get("label") or scene.get("id") or "scene")
             msg = f"{label}: col_cells: {e}"
@@ -814,6 +874,7 @@ def export_scene(
                     warnings_out=loader_warns,
                 )
                 log(f"  OUT   {out_h.name}")
+                result.track(out_h)
                 for msg in loader_warns:
                     result.errors.append(msg)
                     log(f"  WARN  {msg}")
@@ -917,15 +978,19 @@ def export_project(
         log("(no scenes to export)")
         return 0
 
-    # Purge stale *_mspr.* files once before exporting any scene so that
-    # renamed sprites don't leave orphan files, and so that scene_2's export
-    # doesn't erase scene_1's freshly generated sprites.
-    if export_dir_abs and export_dir_abs.is_dir():
-        for _stale in list(export_dir_abs.glob("*_mspr.c")) + list(export_dir_abs.glob("*_mspr.h")):
-            try:
-                _stale.unlink()
-            except Exception:
-                pass
+    # ----- Gen manifest (orphan tracking) ---------------------------------
+    # Replaces the old "glob *_mspr.* and unlink" purge, which:
+    #   * only covered sprites — tilemaps, scene_* headers, col_cells etc.
+    #     left orphan files that assets_autogen.mk would still link in;
+    #   * ran *before* the export, so a crash mid-export would wipe the
+    #     last working set of sprite exports.
+    #
+    # The manifest records the exact set of files this run produces and,
+    # only after the whole run succeeds, removes files that *were* in the
+    # previous manifest but are absent from the new one. Defence in depth
+    # is inside GenManifest (suffix allow-list, gen_dir containment check,
+    # never touches the manifest file itself).
+    gen_manifest = GenManifest(export_dir_abs)
 
     total = ExportResult()
     for scene in scenes:
@@ -935,6 +1000,7 @@ def export_project(
         total.ok      += r.ok
         total.skipped += r.skipped
         total.errors  += r.errors
+        total.generated.extend(r.generated)
         log("")
 
     log("=" * 50)
@@ -955,6 +1021,9 @@ def export_project(
                 )
                 if _fr.returncode == 0:
                     log(f"CustomFont: {_font_out}.c + .h")
+                    # ngpc_font_export.py writes <_font_out>.c and <_font_out>.h
+                    gen_manifest.add(Path(_font_out + ".c"))
+                    gen_manifest.add(Path(_font_out + ".h"))
                 else:
                     log(f"WARN  custom font export failed: {_fr.stderr.strip()}")
             else:
@@ -968,6 +1037,8 @@ def export_project(
             sh, sc, skipped = write_scenes_autogen(project_data=data, export_dir=export_dir_abs)
             if sh and sc:
                 log(f"Scenes   : {sh} + {sc}")
+                gen_manifest.add(sh)
+                gen_manifest.add(sc)
                 if skipped:
                     log(f"Scenes   : skipped {len(skipped)} (not exported yet)")
         except Exception as e:
@@ -976,30 +1047,35 @@ def export_project(
             _has_save = project_has_save_triggers(data)
             mk_path = write_assets_autogen_mk(base_dir, export_dir_abs, has_save=_has_save, no_sysfont=_no_sysfont)
             log(f"Makefile : {mk_path}")
+            gen_manifest.add(mk_path)
         except Exception as e:
             log(f"WARN  cannot write assets_autogen.mk: {e}")
         try:
             sfx_h = write_sfx_map_h(project_data=data, export_dir=export_dir_abs)
             if sfx_h:
                 log(f"SFX map  : {sfx_h}")
+                gen_manifest.add(sfx_h)
         except Exception as e:
             log(f"WARN  cannot write ngpc_project_sfx_map.h: {e}")
         try:
             from core.entity_type_events_gen import write_entity_type_events_h
             ev_h = write_entity_type_events_h(project_data=data, export_dir=export_dir_abs)
             log(f"TypeEvts : {ev_h}")
+            gen_manifest.add(ev_h)
         except Exception as e:
             log(f"WARN  cannot write ngpc_entity_type_events.h: {e}")
         try:
             from core.custom_events_gen import write_custom_events_h
             cev_h = write_custom_events_h(project_data=data, export_dir=export_dir_abs)
             log(f"CustEvts : {cev_h}")
+            gen_manifest.add(cev_h)
         except Exception as e:
             log(f"WARN  cannot write ngpc_custom_events.h: {e}")
         try:
             from core.item_table_gen import write_item_table_h
             it_h = write_item_table_h(project_data=data, export_dir=export_dir_abs)
             log(f"ItemTable: {it_h}")
+            gen_manifest.add(it_h)
         except Exception as e:
             log(f"WARN  cannot write item_table.h: {e}")
         from core.mechanics import is_mechanic_enabled as _mech_on
@@ -1015,9 +1091,11 @@ def export_project(
                     if sc.get("rt_dfs_params"):
                         dfs_h = write_procgen_config_h(scene=sc, export_dir=export_dir_abs)
                         log(f"ProcgenDFS: {dfs_h}")
+                        gen_manifest.add(dfs_h)
                     if sc.get("rt_cave_params"):
                         cave_h = write_cavegen_config_h(scene=sc, export_dir=export_dir_abs, project_data=data)
                         log(f"ProcgenCave: {cave_h}")
+                        gen_manifest.add(cave_h)
                     if sc.get("rt_dungeongen_params"):
                         dgen_h = write_dungeongen_config_h(
                             scene=sc,
@@ -1025,6 +1103,7 @@ def export_project(
                             project_data=data,
                         )
                         log(f"ProcgenDungeonGen: {dgen_h}")
+                        gen_manifest.add(dgen_h)
         except Exception as e:
             log(f"WARN  cannot write procgen_config.h: {e}")
     # Optional: DungeonGen procgen assets (tiles + sprites)
@@ -1088,6 +1167,8 @@ def export_project(
                             compact_mode=(_tileset_mode == "compact"),
                         )
                         log(f"DungeonTiles: {tc}, {th}")
+                        gen_manifest.add(tc)
+                        gen_manifest.add(th)
             enemy_pool = dgen_pa.get("enemy_pool", []) or []
             item_pool  = dgen_pa.get("item_pool",  []) or []
             if not enemy_pool and not item_pool:
@@ -1116,6 +1197,8 @@ def export_project(
                 out_dir=gen_dir,
             )
             log(f"DungeonSprites: {_sc2}, {_sh2}")
+            gen_manifest.add(_sc2)
+            gen_manifest.add(_sh2)
     except Exception as e:
         log(f"WARN  cannot write dungeongen procgen assets: {e}")
     # Optional: write Sound Creator exports Makefile include (AUD-4)
@@ -1129,8 +1212,10 @@ def export_project(
                 try:
                     rows = audio.get("sfx_map", None) if isinstance(audio, dict) else None
                     if isinstance(rows, list) and rows and export_dir_abs:
-                        write_sfx_map_h(project_data=data, export_dir=export_dir_abs, extra_dirs=[man_abs.parent])
-                        write_sfx_play_autogen_c(exports_dir=man_abs.parent)
+                        _sfx_h2 = write_sfx_map_h(project_data=data, export_dir=export_dir_abs, extra_dirs=[man_abs.parent])
+                        gen_manifest.add(_sfx_h2)
+                        _sfx_c2 = write_sfx_play_autogen_c(exports_dir=man_abs.parent)
+                        gen_manifest.add(_sfx_c2)
                 except Exception:
                     pass
                 out_dir = export_dir_abs if export_dir_abs else man_abs.parent
@@ -1144,6 +1229,7 @@ def export_project(
                         reason="template-managed hybrid audio is aggregated by sound/sound_data.c",
                     )
                     log(f"Audio MK : {amk} (standalone audio objects disabled)")
+                    gen_manifest.add(amk)
                 elif not _template_audio_managed:
                     amk = write_audio_autogen_mk(
                         base_dir,
@@ -1152,6 +1238,7 @@ def export_project(
                         manifest=load_audio_manifest(man_abs),
                     )
                     log(f"Audio MK : {amk}")
+                    gen_manifest.add(amk)
                 else:
                     log("Audio MK : skipped (template-managed audio in sound/new/)")
     except Exception as e:
@@ -1176,4 +1263,66 @@ def export_project(
                 log(f"WARN  cannot regenerate autorun_main: {_msg or f'code {regen.returncode}'}")
     except Exception as e:
         log(f"WARN  cannot regenerate autorun_main: {e}")
+
+    # ----- Gen manifest finalize -----------------------------------------
+    # Push every path the scene loop produced into the manifest.
+    gen_manifest.add_many(total.generated)
+    # Only sweep orphans when the whole run succeeded — a mid-export crash
+    # would otherwise wipe files the user still needs. The previous manifest
+    # is left intact in that case, so the next successful run still catches
+    # them.
+    if total.success:
+        removed = gen_manifest.remove_orphans()
+        if removed:
+            log("")
+            log(f"Cleanup  : removed {len(removed)} orphan generated file(s):")
+            for p in removed:
+                try:
+                    rel = p.relative_to(export_dir_abs) if export_dir_abs else p
+                except ValueError:
+                    rel = p
+                log(f"  - {rel}")
+                # Also drop the matching compiled object under build/obj/ so
+                # make does not relink stale .rel files. Best-effort: if the
+                # path is outside export_dir or the .rel does not exist, skip.
+                if (
+                    base_dir
+                    and export_dir_rel
+                    and isinstance(rel, Path)
+                    and rel.suffix.lower() in (".c", ".asm")
+                ):
+                    obj_rel = rel.with_suffix(".rel")
+                    obj_path = base_dir / "build" / "obj" / Path(export_dir_rel) / obj_rel
+                    try:
+                        if obj_path.is_file():
+                            obj_path.unlink()
+                            log(f"  - build/obj/{Path(export_dir_rel).as_posix()}/{obj_rel.as_posix()}")
+                    except OSError:
+                        pass
+            # assets_autogen.mk was generated earlier in this function by
+            # globbing *.c under export_dir; that glob has now shrunk, so we
+            # must regenerate the include so make stops trying to link the
+            # removed objects. Only the .mk is affected — other top-level
+            # writers (sfx_map, entity_events, ...) do not glob the gen dir.
+            if export_dir_abs:
+                try:
+                    _has_save = project_has_save_triggers(data)
+                    mk_path = write_assets_autogen_mk(
+                        base_dir, export_dir_abs,
+                        has_save=_has_save, no_sysfont=_no_sysfont,
+                    )
+                    log(f"Makefile : {mk_path} (refreshed after orphan purge)")
+                    gen_manifest.add(mk_path)
+                except Exception as e:
+                    log(f"WARN  cannot refresh assets_autogen.mk after purge: {e}")
+    else:
+        log("")
+        log("Cleanup  : skipped (export had errors — orphan files left in place)")
+    # Persist the new manifest whether or not the run succeeded, so the
+    # *set of files we actually emitted* is recorded. On a partial run this
+    # is a no-op union with the previous manifest from the next run's POV.
+    mp = gen_manifest.write()
+    if mp is not None:
+        log(f"Manifest : {mp}")
+
     return 0 if total.success else 1

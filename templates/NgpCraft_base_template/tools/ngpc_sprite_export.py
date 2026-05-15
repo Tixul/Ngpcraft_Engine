@@ -201,16 +201,42 @@ def read_frame_tiles(
 ) -> tuple[int, int, list[tuple[int, ...]], list[frozenset[int]], list[dict[str, int]]]:
     img = Image.open(img_path).convert("RGBA")
     w, h = img.size
-    if (frame_w % 8) or (frame_h % 8):
-        raise ValueError("Frame size must be multiple of 8.")
     if frame_w <= 0 or frame_h <= 0:
         raise ValueError("Frame size must be > 0.")
+    # Auto-round frame_w/h up to the next multiple of 8 (NGPC tile = 8x8).
+    # Lets users save odd dimensions in the editor (e.g. 6x2 bullet) without
+    # having to pre-resize. Combined with the auto-pad below, dropping any
+    # PNG into the editor just works.
+    if (frame_w % 8) or (frame_h % 8):
+        orig_fw, orig_fh = frame_w, frame_h
+        frame_w = ((frame_w + 7) // 8) * 8
+        frame_h = ((frame_h + 7) // 8) * 8
+        print(
+            f"  WARN  {img_path}: frame size {orig_fw}x{orig_fh} not a multiple "
+            f"of 8 — auto-rounded up to {frame_w}x{frame_h} (NGPC tile = 8x8).",
+            file=sys.stderr,
+        )
     if frame_w > MSPR_MAX_OFFSET_DIM or frame_h > MSPR_MAX_OFFSET_DIM:
         raise ValueError(
             "Frame size must be <= %d px (MsprPart offsets are s8)." % MSPR_MAX_OFFSET_DIM
         )
+    # Auto-pad PNGs whose dimensions aren't a multiple of the frame size, by
+    # extending the canvas with transparent pixels (top-left anchored). Lets
+    # users drop in any placeholder image (e.g. a 6x2 mock bullet) without
+    # hand-resizing — pixel art stays intact, just gets transparent padding.
     if (w % frame_w) or (h % frame_h):
-        raise ValueError("Image size %dx%d must be multiple of frame size %dx%d." % (w, h, frame_w, frame_h))
+        pw = ((w + frame_w - 1) // frame_w) * frame_w
+        ph = ((h + frame_h - 1) // frame_h) * frame_h
+        print(
+            f"  WARN  {img_path}: size {w}x{h} not a multiple of frame "
+            f"{frame_w}x{frame_h} — auto-padding to {pw}x{ph} with transparent "
+            "pixels (top-left anchored).",
+            file=sys.stderr,
+        )
+        padded = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
+        padded.paste(img, (0, 0))
+        img = padded
+        w, h = pw, ph
 
     px = img.load()
     frames_x = w // frame_w
