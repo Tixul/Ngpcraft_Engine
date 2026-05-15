@@ -55,10 +55,10 @@ if "%FlashSave%"=="1" (
 if "%ResizeRom%"=="1" (
     if exist "%~dp0utils\NGPRomResize.exe" (
         echo [NgpCraft_base_template] Resizing ROM to 2MB...
-        MOVE "%~dp0%BinPath%\%romName%.%romExt%" "%~dp0%BinPath%\_%romName%.%romExt%" >/dev/null 2>&1
+        MOVE "%~dp0%BinPath%\%romName%.%romExt%" "%~dp0%BinPath%\_%romName%.%romExt%" >nul 2>&1
         "%~dp0utils\NGPRomResize.exe" "%~dp0%BinPath%\_%romName%.%romExt%"
-        MOVE "%~dp0%BinPath%\_%romName%.%romExt%" "%~dp0%BinPath%\%romName%.%romExt%" >/dev/null 2>&1
-        DEL "%~dp0%BinPath%MB__%romName%.%romExt%" >/dev/null 2>&1
+        MOVE "%~dp0%BinPath%\_%romName%.%romExt%" "%~dp0%BinPath%\%romName%.%romExt%" >nul 2>&1
+        DEL "%~dp0%BinPath%MB__%romName%.%romExt%" >nul 2>&1
     ) else (
         echo [NgpCraft_base_template] Skip resize: utils\NGPRomResize.exe not found.
     )
