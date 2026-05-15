@@ -1265,6 +1265,17 @@ def export_project(
         log(f"WARN  cannot regenerate autorun_main: {e}")
 
     # ----- Gen manifest finalize -----------------------------------------
+    # Partial runs (scene_filter set) only produce files for one scene plus
+    # the global writers. Their "produced" set is intentionally incomplete,
+    # so doing the orphan diff would falsely flag every *other* scene's
+    # outputs as orphans and delete them. Skip the whole reconcile in that
+    # case — the manifest from the last full export stays the source of
+    # truth, and the next unfiltered run will reconcile properly.
+    if scene_filter:
+        log("")
+        log(f"Cleanup  : skipped (partial run — scene_filter={scene_filter!r})")
+        return 0 if total.success else 1
+
     # Push every path the scene loop produced into the manifest.
     gen_manifest.add_many(total.generated)
     # Only sweep orphans when the whole run succeeded — a mid-export crash
@@ -1318,11 +1329,14 @@ def export_project(
     else:
         log("")
         log("Cleanup  : skipped (export had errors — orphan files left in place)")
-    # Persist the new manifest whether or not the run succeeded, so the
-    # *set of files we actually emitted* is recorded. On a partial run this
-    # is a no-op union with the previous manifest from the next run's POV.
-    mp = gen_manifest.write()
-    if mp is not None:
-        log(f"Manifest : {mp}")
+
+    # Only persist the manifest on a successful run. On failure the
+    # previous manifest stays intact so the next successful run can still
+    # detect orphans against the last known-good baseline — overwriting
+    # it with this run's incomplete produced set would lose that.
+    if total.success:
+        mp = gen_manifest.write()
+        if mp is not None:
+            log(f"Manifest : {mp}")
 
     return 0 if total.success else 1

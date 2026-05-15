@@ -57,6 +57,7 @@ from core.project_model import (
 from core.hitbox_export import make_hitbox_h, make_props_h, make_ctrl_h, make_anims_h
 from core.collision_boxes import active_hurtboxes, box_enabled, first_bodybox, first_hurtbox, sprite_hurtboxes
 from core.assets_autogen_mk import write_assets_autogen_mk
+from core.gen_manifest import GenManifest
 from core.audio_manifest import AudioManifest
 from core.rgb444 import OPAQUE_BLACK, to_word
 from core.report_html import build_report_html
@@ -355,13 +356,20 @@ def _write_hitbox_props(
     fc: int,
     out_dir: Path,
     errs: list,
-) -> None:
-    """Write _hitbox.h and/or _props.h next to the sprite file if data is present."""
+) -> list[Path]:
+    """Write _hitbox.h and/or _props.h next to the sprite file if data is present.
+
+    Returns the list of paths actually written, so the caller can record
+    them in the gen manifest.
+    """
+    written: list[Path] = []
     hitboxes = sprite_hurtboxes(spr, fw, fh)
     if hitboxes:
         try:
             text = make_hitbox_h(name, name, fw, fh, fc, hitboxes)
-            (out_dir / f"{name}_hitbox.h").write_text(text, encoding="utf-8")
+            p = out_dir / f"{name}_hitbox.h"
+            p.write_text(text, encoding="utf-8")
+            written.append(p)
         except Exception as e:
             errs.append(f"{name}_hitbox.h: {e}")
 
@@ -370,9 +378,12 @@ def _write_hitbox_props(
         try:
             text = make_props_h(name, name, fw, fh, fc, props)
             if text:
-                (out_dir / f"{name}_props.h").write_text(text, encoding="utf-8")
+                p = out_dir / f"{name}_props.h"
+                p.write_text(text, encoding="utf-8")
+                written.append(p)
         except Exception as e:
             errs.append(f"{name}_props.h: {e}")
+    return written
 
 
 def _write_ctrl_header(
@@ -380,19 +391,26 @@ def _write_ctrl_header(
     name: str,
     out_dir: Path,
     errs: list,
-) -> None:
-    """Write _ctrl.h if role is set (independent of PNG export)."""
+) -> "Path | None":
+    """Write _ctrl.h if role is set (independent of PNG export).
+
+    Returns the path written, or None when no file was produced (non-player
+    role, or empty body).
+    """
     ctrl = spr.get("ctrl") or {}
     role = sprite_gameplay_role(spr)
     if role != "player":
-        return
+        return None
     props = spr.get("props") or {}
     try:
         text = make_ctrl_h(name, name, ctrl, props, role=role)
         if text:
-            (out_dir / f"{name}_ctrl.h").write_text(text, encoding="utf-8")
+            p = out_dir / f"{name}_ctrl.h"
+            p.write_text(text, encoding="utf-8")
+            return p
     except Exception as e:
         errs.append(f"{name}_ctrl.h: {e}")
+    return None
 
 
 def _write_anims_header(
@@ -400,17 +418,23 @@ def _write_anims_header(
     name: str,
     out_dir: Path,
     errs: list,
-) -> None:
-    """Auto-generate _anims.h when the sprite has animation states defined."""
+) -> "Path | None":
+    """Auto-generate _anims.h when the sprite has animation states defined.
+
+    Returns the path written, or None when no file was produced.
+    """
     anims = spr.get("anims") or {}
     if not anims:
-        return
+        return None
     try:
         text = make_anims_h(name, name, anims)
         if text:
-            (out_dir / f"{name}_anims.h").write_text(text, encoding="utf-8")
+            p = out_dir / f"{name}_anims.h"
+            p.write_text(text, encoding="utf-8")
+            return p
     except Exception as e:
         errs.append(f"{name}_anims.h: {e}")
+    return None
 
 # ---------------------------------------------------------------------------
 # FontPreviewWidget
@@ -1133,6 +1157,98 @@ class ProjectTab(ProjectPathMixin, QWidget):
         """Append globals consistency warnings (C1/C2) to errs."""
         if isinstance(self._data, dict):
             validate_globals_consistency(project_data=self._data, errs=errs)
+
+    def _reconcile_gen_manifest(
+        self,
+        export_dir: "Path | None",
+        produced: "list[Path]",
+        errs: list[str],
+    ) -> "list[Path]":
+        """Reconcile the gen manifest at the end of a *full* project export.
+
+        - Records every path in ``produced`` as generated this run.
+        - If ``errs`` is empty (i.e. the run succeeded), diffs against the
+          previous manifest and removes any orphan files that were left
+          behind by deleted/renamed sprites, tilemaps, scenes, etc.
+        - Drops the matching ``.rel`` under ``build/obj/<export_dir>/`` for
+          each purged ``.c`` so ``make`` does not relink stale objects.
+        - Re-runs ``write_assets_autogen_mk`` so the makefile OBJS list
+          matches the post-purge state of the gen dir (it was generated
+          *before* the purge by globbing ``*.c`` and would still reference
+          the deleted files otherwise).
+        - Persists the new manifest unconditionally so the next run has a
+          fresh baseline.
+
+        **Never call this from a single-scene export** — that run only
+        produces a partial set, and the orphan diff would falsely flag
+        every other scene's outputs as removable.
+
+        Returns the list of paths actually purged (for the caller's status
+        message), never raises.
+        """
+        if not export_dir:
+            return []
+        manifest = GenManifest(export_dir)
+        manifest.add_many(produced)
+        removed: list[Path] = []
+        if not errs:
+            try:
+                removed = manifest.remove_orphans()
+            except Exception as exc:
+                errs.append(f"manifest reconcile: {exc}")
+                removed = []
+            # Drop matching compiled .rel under build/obj/.
+            project_dir = self._project_dir
+            if removed and project_dir:
+                try:
+                    export_rel = export_dir.relative_to(project_dir)
+                except ValueError:
+                    export_rel = None
+                if export_rel is not None:
+                    obj_root = project_dir / "build" / "obj" / export_rel
+                    for p in removed:
+                        if p.suffix.lower() not in (".c", ".asm"):
+                            continue
+                        try:
+                            sub_rel = p.relative_to(export_dir)
+                        except ValueError:
+                            continue
+                        obj_path = obj_root / sub_rel.with_suffix(".rel")
+                        try:
+                            if obj_path.is_file():
+                                obj_path.unlink()
+                        except OSError:
+                            pass
+            # Refresh assets_autogen.mk so it stops listing the removed .c
+            # files (it was emitted earlier by globbing the gen dir).
+            if removed and project_dir is not None:
+                try:
+                    _data = self._data or {}
+                    _has_save = project_has_save_triggers(_data)
+                    _no_sysfont = bool(_data.get("no_sysfont")) and bool(
+                        str(_data.get("custom_font_png") or "").strip()
+                    )
+                    refreshed_mk = write_assets_autogen_mk(
+                        project_dir,
+                        export_dir,
+                        has_save=_has_save,
+                        no_sysfont=_no_sysfont,
+                    )
+                    manifest.add(refreshed_mk)
+                except Exception as exc:
+                    errs.append(f"assets_autogen.mk refresh after purge: {exc}")
+        # Only persist the manifest when the run actually succeeded.
+        # On failure the previous manifest stays intact so the next
+        # successful full export can still detect orphans against the
+        # last known-good baseline — overwriting it with this run's
+        # incomplete set would lose that information.
+        if not errs:
+            try:
+                manifest.write()
+            except Exception:
+                # Best-effort: failure to persist is non-fatal.
+                pass
+        return removed
 
     # ------------------------------------------------------------------
     # UI construction
@@ -4538,6 +4654,10 @@ class ProjectTab(ProjectPathMixin, QWidget):
             remember_script_path("export_script_path", script)
         from core.sprite_export_pipeline import export_sprite_pipeline
 
+        # Track every generated file so the manifest reconcile at the end
+        # can detect orphans (deleted/renamed assets) and remove them.
+        produced: list[Path] = []
+
         n, errs = 0, []
         for spr, path in self._all_sprites():
             out_dir = self._export_out_dir_for_asset(path)
@@ -4549,13 +4669,19 @@ class ProjectTab(ProjectPathMixin, QWidget):
             fw = int(spr.get("frame_w", 8) or 8)
             fh = int(spr.get("frame_h", 8) or 8)
             fc = int(spr.get("frame_count", 1) or 1)
-            _write_ctrl_header(spr, spr_name, out_dir, errs)
-            _write_anims_header(spr, spr_name, out_dir, errs)
+            p_ctrl = _write_ctrl_header(spr, spr_name, out_dir, errs)
+            if p_ctrl is not None:
+                produced.append(p_ctrl)
+            p_anims = _write_anims_header(spr, spr_name, out_dir, errs)
+            if p_anims is not None:
+                produced.append(p_anims)
             if not path.exists():
                 errs.append(f"? {path.name}")
                 continue
             try:
                 fp = str(spr.get("fixed_palette") or "").strip() or None
+                _safe = re.sub(r'[^a-zA-Z0-9_]+', '_', spr_name).strip('_') or 'sprite'
+                _out_c = out_dir / f"{_safe}_mspr.c"
                 run = export_sprite_pipeline(
                     script=script,
                     source_path=path,
@@ -4566,12 +4692,16 @@ class ProjectTab(ProjectPathMixin, QWidget):
                     frame_count=fc,
                     project_dir=self._project_dir,
                     fixed_palette=fp,
-                    output_c=(out_dir / f"{re.sub(r'[^a-zA-Z0-9_]+', '_', spr_name).strip('_') or 'sprite'}_mspr.c"),
+                    output_c=_out_c,
                     timeout_s=30,
                 )
                 if run.ok:
                     n += 1
-                    _write_hitbox_props(spr, spr_name, fw, fh, fc, out_dir, errs)
+                    produced.append(_out_c)
+                    produced.append(_out_c.with_suffix(".h"))
+                    produced.extend(
+                        _write_hitbox_props(spr, spr_name, fw, fh, fc, out_dir, errs)
+                    )
                 else:
                     errs.append(f"{path.name}: {run.detail}")
             except Exception as e:
@@ -4609,30 +4739,46 @@ class ProjectTab(ProjectPathMixin, QWidget):
                     )
                     if res.returncode == 0:
                         n_tm += 1
+                        produced.append(out_c)
+                        produced.append(out_c.with_suffix(".h"))
                     else:
                         errs.append(f"{path.name}: code {res.returncode}")
                 except Exception as e:
                     errs.append(f"{path.name}: {e}")
 
         sfx_map_h, sfx_play_c = self._maybe_write_sfx_autogen(exp_dir, errs)
+        if sfx_map_h: produced.append(sfx_map_h)
+        if sfx_play_c: produced.append(sfx_play_c)
         audio_mk = self._maybe_write_audio_autogen_mk(exp_dir, errs)
+        if audio_mk: produced.append(audio_mk)
         scenes_h = None
         scenes_c = None
         skipped_scenes: list[str] = []
         if exp_dir:
             try:
                 scenes_h, scenes_c, skipped_scenes = write_scenes_autogen(project_data=self._data, export_dir=exp_dir)
+                if scenes_h: produced.append(scenes_h)
+                if scenes_c: produced.append(scenes_c)
             except Exception as e:
                 errs.append(f"scenes autogen: {e}")
         dgen_assets = self._maybe_write_dungeongen_procgen_assets(exp_dir, errs)
+        produced.extend(dgen_assets or [])
         mk_path = self._maybe_write_assets_autogen_mk(exp_dir, errs)
+        if mk_path: produced.append(mk_path)
         constants_h = self._maybe_write_constants_h(exp_dir, errs)
+        if constants_h: produced.append(constants_h)
         game_vars_h = self._maybe_write_game_vars_h(exp_dir, errs)
+        if game_vars_h: produced.append(game_vars_h)
         entity_types_h = self._maybe_write_entity_types_h(exp_dir, errs)
-        self._maybe_write_entity_type_events_h(exp_dir, errs)
-        self._maybe_write_custom_events_h(exp_dir, errs)
-        self._maybe_write_item_table_h(exp_dir, errs)
+        if entity_types_h: produced.append(entity_types_h)
+        ev_h = self._maybe_write_entity_type_events_h(exp_dir, errs)
+        if ev_h: produced.append(ev_h)
+        cev_h = self._maybe_write_custom_events_h(exp_dir, errs)
+        if cev_h: produced.append(cev_h)
+        it_h = self._maybe_write_item_table_h(exp_dir, errs)
+        if it_h: produced.append(it_h)
         procgen_hs = self._maybe_write_procgen_configs(exp_dir, errs)
+        produced.extend(procgen_hs or [])
         self._run_globals_validation(errs)
 
         msg = tr("proj.export_done", n=n)
@@ -4656,6 +4802,17 @@ class ProjectTab(ProjectPathMixin, QWidget):
             msg += "\n" + tr("proj.gamevars_written", path=self._rel(game_vars_h))
         if dgen_assets:
             msg += "\n" + " ".join(p.name for p in dgen_assets) + " written"
+
+        # Reconcile gen manifest (full project export — safe to purge
+        # orphans). See ``_reconcile_gen_manifest`` for the safety model.
+        removed = self._reconcile_gen_manifest(exp_dir, produced, errs)
+        if removed:
+            msg += f"\nCleanup: removed {len(removed)} orphan file(s)"
+            for p in removed[:6]:
+                msg += f"\n  - {p.name}"
+            if len(removed) > 6:
+                msg += f"\n  - ... +{len(removed) - 6} more"
+
         if errs:
             msg += "\n" + "\n".join(errs[:6])
         QMessageBox.information(self, tr("proj.export_all_c"), msg)
@@ -4703,15 +4860,12 @@ class ProjectTab(ProjectPathMixin, QWidget):
         do_autogen_mk = bool(opts.export_autogen_mk)
         from core.sprite_export_pipeline import export_sprite_pipeline
 
-        # Purge stale *_mspr.* files before regenerating so renamed sprites
-        # (e.g. "car_01-Sheet" → "car_01_Sheet") don't leave orphan files that
-        # the Makefile would pick up and cause duplicate symbol linker errors.
-        if do_sprites and exp_dir and exp_dir.is_dir():
-            for _stale in list(exp_dir.glob("*_mspr.c")) + list(exp_dir.glob("*_mspr.h")):
-                try:
-                    _stale.unlink()
-                except Exception:
-                    pass
+        # Track every generated file so the manifest reconcile at the end
+        # of this method can detect orphans (deleted/renamed sprites,
+        # tilemaps, scenes) and remove them safely. Replaces the old fragile
+        # "glob *_mspr.* and unlink before export" purge — which only
+        # covered sprites and could wipe the last working set on a crash.
+        produced: list[Path] = []
 
         for scene in scenes:
             if not isinstance(scene, dict):
@@ -4744,8 +4898,12 @@ class ProjectTab(ProjectPathMixin, QWidget):
                     except Exception:
                         pass
                     if do_hitbox:
-                        _write_ctrl_header(spr, spr_name_exp, out_dir, errs)
-                        _write_anims_header(spr, spr_name_exp, out_dir, errs)
+                        p_ctrl = _write_ctrl_header(spr, spr_name_exp, out_dir, errs)
+                        if p_ctrl is not None:
+                            produced.append(p_ctrl)
+                        p_anims = _write_anims_header(spr, spr_name_exp, out_dir, errs)
+                        if p_anims is not None:
+                            produced.append(p_anims)
 
                     if not path.exists():
                         tiles, pal_n = sprite_tile_estimate(spr), 1
@@ -4789,8 +4947,15 @@ class ProjectTab(ProjectPathMixin, QWidget):
                         )
                         if run.ok:
                             n += 1
+                            # Track the sprite C body + its sibling header
+                            # (the sprite export tool emits both when
+                            # output_c is set).
+                            produced.append(out_dir / f"{spr_name_exp}_mspr.c")
+                            produced.append(out_dir / f"{spr_name_exp}_mspr.h")
                             if do_hitbox:
-                                _write_hitbox_props(spr, spr_name_exp, fw, fh, fc, out_dir, errs)
+                                produced.extend(
+                                    _write_hitbox_props(spr, spr_name_exp, fw, fh, fc, out_dir, errs)
+                                )
                         else:
                             errs.append(f"{path.name}: {run.detail}")
 
@@ -4834,6 +4999,9 @@ class ProjectTab(ProjectPathMixin, QWidget):
                         )
                         if res.returncode == 0:
                             n_tm += 1
+                            # ``--header`` makes ngpc_tilemap.py emit both .c and .h
+                            produced.append(out_c)
+                            produced.append(out_c.with_suffix(".h"))
                         else:
                             errs.append(f"{path.name}: code {res.returncode}")
                     except Exception as e:
@@ -4844,16 +5012,19 @@ class ProjectTab(ProjectPathMixin, QWidget):
                 level_ok = True
                 if do_level:
                     try:
-                        from core.scene_level_gen import write_scene_level_h
-                        write_scene_level_h(project_data=self._data, scene=scene_export, export_dir=exp_dir, project_dir=self._project_dir)
+                        from core.scene_level_gen import write_scene_level_h, write_scene_dialogs_h
+                        lvl_h = write_scene_level_h(project_data=self._data, scene=scene_export, export_dir=exp_dir, project_dir=self._project_dir)
+                        if lvl_h is not None:
+                            produced.append(lvl_h)
                     except Exception as e:
                         level_ok = False
                         label = str(scene.get("label") or scene.get("id") or "scene")
                         errs.append(f"[{label}] scene level: {e}")
                     # Dialogue bank export (optional — no-op if no dialogues)
                     try:
-                        from core.scene_level_gen import write_scene_dialogs_h
-                        write_scene_dialogs_h(scene=scene_export, export_dir=exp_dir)
+                        dlg_h = write_scene_dialogs_h(scene=scene_export, export_dir=exp_dir)
+                        if dlg_h is not None:
+                            produced.append(dlg_h)
                     except Exception as e:
                         label = str(scene.get("label") or scene.get("id") or "scene")
                         errs.append(f"[{label}] scene dialogs: {e}")
@@ -4865,7 +5036,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
                         try:
                             from core.scene_loader_gen import write_scene_loader_h
                             loader_warns: list[str] = []
-                            write_scene_loader_h(
+                            loader_h = write_scene_loader_h(
                                 project_data=self._data,
                                 scene=scene_export,
                                 project_dir=self._project_dir,
@@ -4875,6 +5046,8 @@ class ProjectTab(ProjectPathMixin, QWidget):
                                 include_disabled=include_disabled,
                                 warnings_out=loader_warns,
                             )
+                            if loader_h is not None:
+                                produced.append(loader_h)
                             errs.extend(loader_warns)
                         except Exception as e:
                             label = str(scene.get("label") or scene.get("id") or "scene")
@@ -4884,7 +5057,10 @@ class ProjectTab(ProjectPathMixin, QWidget):
             total_tm += int(n_tm)
 
         sfx_map_h, sfx_play_c = self._maybe_write_sfx_autogen(exp_dir, errs) if do_autogen_mk else (None, None)
+        if sfx_map_h: produced.append(sfx_map_h)
+        if sfx_play_c: produced.append(sfx_play_c)
         audio_mk = self._maybe_write_audio_autogen_mk(exp_dir, errs) if do_autogen_mk else None
+        if audio_mk: produced.append(audio_mk)
 
         msg = tr("proj.export_done", n=total_spr)
         if total_tm:
@@ -4900,32 +5076,65 @@ class ProjectTab(ProjectPathMixin, QWidget):
                 scenes_h, scenes_c, skipped_scenes = write_scenes_autogen(project_data=self._data, export_dir=exp_dir)
                 if scenes_h and scenes_c:
                     msg += "\n" + tr("proj.scenes_autogen_written", h=self._rel(scenes_h), c=self._rel(scenes_c))
+                    produced.append(scenes_h)
+                    produced.append(scenes_c)
                     if skipped_scenes:
                         msg += "\n" + tr("proj.scenes_autogen_skipped", names=", ".join(skipped_scenes[:8]))
             except Exception as e:
                 errs.append(f"scenes autogen: {e}")
         dgen_assets = self._maybe_write_dungeongen_procgen_assets(exp_dir, errs)
+        produced.extend(dgen_assets or [])
         mk_path = self._maybe_write_assets_autogen_mk(exp_dir, errs) if do_autogen_mk else None
         if mk_path:
             msg += "\n" + tr("proj.autogen_mk_written", path=self._rel(mk_path))
+            produced.append(mk_path)
         constants_h = self._maybe_write_constants_h(exp_dir, errs) if do_autogen_mk else None
+        if constants_h: produced.append(constants_h)
         if constants_h:
             msg += "\n" + tr("proj.constants_written", path=self._rel(constants_h))
         game_vars_h = self._maybe_write_game_vars_h(exp_dir, errs) if do_autogen_mk else None
         if game_vars_h:
             msg += "\n" + tr("proj.gamevars_written", path=self._rel(game_vars_h))
+            produced.append(game_vars_h)
         entity_types_h = self._maybe_write_entity_types_h(exp_dir, errs) if do_autogen_mk else None
         if entity_types_h:
             msg += "\n" + tr("proj.entity_types_written", path=self._rel(entity_types_h))
-        self._maybe_write_entity_type_events_h(exp_dir, errs)
-        self._maybe_write_custom_events_h(exp_dir, errs)
-        self._maybe_write_item_table_h(exp_dir, errs)
+            produced.append(entity_types_h)
+        ev_h = self._maybe_write_entity_type_events_h(exp_dir, errs)
+        if ev_h: produced.append(ev_h)
+        cev_h = self._maybe_write_custom_events_h(exp_dir, errs)
+        if cev_h: produced.append(cev_h)
+        it_h = self._maybe_write_item_table_h(exp_dir, errs)
+        if it_h: produced.append(it_h)
         procgen_hs = self._maybe_write_procgen_configs(exp_dir, errs)
+        produced.extend(procgen_hs or [])
         if procgen_hs:
             msg += "\n" + " ".join(p.name for p in procgen_hs) + " written"
         if dgen_assets:
             msg += "\n" + " ".join(p.name for p in dgen_assets) + " written"
         self._run_globals_validation(errs)
+
+        # Reconcile the gen manifest only when the run is genuinely a
+        # full export of every asset class. If the user unchecked any
+        # category in the export dialog, the produced set is incomplete
+        # and the orphan diff would falsely flag the skipped categories
+        # for deletion. ``include_disabled`` is irrelevant here — disabled
+        # assets *should* be classified as orphans (the user toggled their
+        # export off), and re-enabling them simply regenerates the file
+        # on the next run.
+        is_full_export = (
+            do_sprites and do_tilemaps and do_hitbox and do_level
+            and do_scene_loader and do_scenes_autogen and do_autogen_mk
+        )
+        if is_full_export:
+            removed = self._reconcile_gen_manifest(exp_dir, produced, errs)
+            if removed:
+                msg += f"\nCleanup: removed {len(removed)} orphan file(s)"
+                for p in removed[:6]:
+                    msg += f"\n  - {p.name}"
+                if len(removed) > 6:
+                    msg += f"\n  - ... +{len(removed) - 6} more"
+
         if errs:
             msg += "\n" + "\n".join(errs[:6])
         QMessageBox.information(self, tr("proj.export_all_scenes_c"), msg)
@@ -4944,6 +5153,13 @@ class ProjectTab(ProjectPathMixin, QWidget):
         scene = self._current_scene()
         if not scene:
             return
+        # NOTE: single-scene export deliberately does NOT call
+        # ``_reconcile_gen_manifest`` — it only produces files for one
+        # scene, so the orphan diff would falsely flag every other
+        # scene's outputs as removable. The manifest from the last full
+        # ``_export_all_scenes_c`` / ``_export_all_c`` run remains the
+        # source of truth; a future full export will catch any orphans
+        # this partial run leaves behind.
         script = self._find_script() 
         if script is None: 
             start = script_dialog_start_dir("export_script_path", fallback=self._project_dir)
