@@ -910,11 +910,27 @@ def export_project(
     sprite_script: Path | None = None,
     tilemap_script: Path | None = None,
     log: Callable[[str], None] = print,
+    on_bg_mismatch: "object" = None,
 ) -> int:
     """
     Full headless export.
     Returns 0 on success, 1 if any error occurred (suitable for sys.exit).
+
+    ``on_bg_mismatch`` (``core.bg_size_check.MismatchResolution`` or None)
+    controls what happens when a scene's ``level_size`` exceeds the
+    dimensions of its background PNG — a state that causes scrolling-bg
+    corruption at runtime. The default (None) acts like ``CANCEL`` for
+    safety, matching the CLI default.
     """
+    from core.bg_size_check import (
+        MismatchResolution,
+        detect_scene_bg_mismatches,
+        apply_clamp_to_project,
+        rewrite_bg_map_to_size,
+    )
+    if on_bg_mismatch is None:
+        on_bg_mismatch = MismatchResolution.CANCEL
+
     project_path = Path(project_path).resolve()
     if not project_path.exists():
         print(f"ERROR: project file not found: {project_path}", file=sys.stderr)
@@ -929,6 +945,47 @@ def export_project(
     base_dir = project_path.parent
     export_dir_rel = str(data.get("export_dir") or "").strip()
     export_dir_abs = (base_dir / export_dir_rel) if export_dir_rel else None
+
+    # ----- BG PNG / level_size mismatch check ----------------------------
+    # Must happen *before* sprite/tilemap export, because the CLAMP
+    # strategy mutates the project (and we may persist it), and CROP_FILL
+    # needs to know which scenes to post-process after their bg_map.c is
+    # generated.
+    mismatches = detect_scene_bg_mismatches(data, base_dir)
+    if mismatches:
+        log("[BG size check]")
+        for m in mismatches:
+            log(f"  WARN  {m.describe()}")
+        if on_bg_mismatch == MismatchResolution.CANCEL:
+            log("  ABORT (--on-bg-mismatch=cancel)")
+            print(
+                "ERROR: scene level_size exceeds its BG PNG; re-run with "
+                "--on-bg-mismatch=clamp or --on-bg-mismatch=crop_fill to "
+                "auto-resolve.",
+                file=sys.stderr,
+            )
+            return 1
+        if on_bg_mismatch == MismatchResolution.CLAMP:
+            applied = apply_clamp_to_project(data, mismatches)
+            for m in applied:
+                log(
+                    f"  CLAMP {m.scene_label}: level_size "
+                    f"{m.level_w}x{m.level_h} -> "
+                    f"{min(m.level_w, m.png_tiles_w)}x"
+                    f"{min(m.level_h, m.png_tiles_h)}"
+                )
+            try:
+                project_path.write_text(
+                    json.dumps(data, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                log(f"  Project file updated: {project_path}")
+            except Exception as exc:
+                log(f"  WARN  could not persist clamp to project file: {exc}")
+        # CROP_FILL: defer the bg_map.c rewrite until *after* the tilemap
+        # export has produced the file. We need to remember which scenes
+        # to post-process and at what target size.
+        log("")
 
     try:
         _sync_validated_sprite_runtime(base_dir)
@@ -1266,6 +1323,31 @@ def export_project(
                 log(f"WARN  cannot regenerate autorun_main: {_msg or f'code {regen.returncode}'}")
     except Exception as e:
         log(f"WARN  cannot regenerate autorun_main: {e}")
+
+    # ----- CROP_FILL post-process ----------------------------------------
+    # When the user picked CROP_FILL, the tilemap export step has already
+    # written each bg_map.c using the PNG's native dimensions. Reshape
+    # those arrays now so they match the configured ``level_size`` — the
+    # runtime indexing math (``bg_map[y * level_w + x]``) requires it.
+    if mismatches and on_bg_mismatch == MismatchResolution.CROP_FILL and export_dir_abs:
+        from core.scene_level_gen import _safe_ident as _sl_safe
+        for m in mismatches:
+            sym = _sl_safe(m.scene_label or "scene")
+            bg_c = export_dir_abs / f"scene_{sym}_bg_map.c"
+            if not bg_c.is_file():
+                log(f"  WARN  CROP_FILL: missing {bg_c.name}, skipped")
+                continue
+            ok = rewrite_bg_map_to_size(bg_c, m.level_w, m.level_h, fill_tile=0)
+            if ok:
+                log(f"  CROP_FILL {m.scene_label}: {bg_c.name} -> {m.level_w}x{m.level_h}")
+            else:
+                msg = (
+                    f"CROP_FILL: could not reshape {bg_c.name} to "
+                    f"{m.level_w}x{m.level_h} (unexpected file format)"
+                )
+                total.errors.append(msg)
+                log(f"  ERR   {msg}")
+        log("")
 
     # ----- Gen manifest finalize -----------------------------------------
     # Partial runs (scene_filter set) only produce files for one scene plus

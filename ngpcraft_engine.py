@@ -30,11 +30,15 @@ from pathlib import Path
 def _run_headless(args: list[str]) -> int:
     """Parse --export sub-arguments and run headless export (no QApplication)."""
     from core.headless_export import export_project
+    from core.bg_size_check import MismatchResolution
 
     project_path:   Path | None = None
     scene_filter:   str  | None = None
     sprite_script:  Path | None = None
     tilemap_script: Path | None = None
+    # Default: abort on a runtime-unsafe level_size/PNG mismatch. The user
+    # can opt into auto-clamp or crop_fill via --on-bg-mismatch.
+    on_bg_mismatch: MismatchResolution = MismatchResolution.CANCEL
 
     i = 0
     while i < len(args):
@@ -48,6 +52,18 @@ def _run_headless(args: list[str]) -> int:
         elif a == "--tilemap-tool" and i + 1 < len(args):
             tilemap_script = Path(args[i + 1])
             i += 2
+        elif a == "--on-bg-mismatch" and i + 1 < len(args):
+            value = args[i + 1].strip().lower()
+            try:
+                on_bg_mismatch = MismatchResolution(value)
+            except ValueError:
+                print(
+                    f"ERROR: --on-bg-mismatch must be one of "
+                    f"{[m.value for m in MismatchResolution]}, got {value!r}",
+                    file=sys.stderr,
+                )
+                return 1
+            i += 2
         elif not a.startswith("--"):
             project_path = Path(a)
             i += 1
@@ -59,12 +75,19 @@ def _run_headless(args: list[str]) -> int:
             "Usage: ngpcraft_engine.py --export project.ngpcraft"
             " [--scene NAME]"
             " [--sprite-tool PATH]"
-            " [--tilemap-tool PATH]",
+            " [--tilemap-tool PATH]"
+            " [--on-bg-mismatch cancel|clamp|crop_fill|ignore]",
             file=sys.stderr,
         )
         return 1
 
-    return export_project(project_path, scene_filter, sprite_script, tilemap_script)
+    return export_project(
+        project_path,
+        scene_filter,
+        sprite_script,
+        tilemap_script,
+        on_bg_mismatch=on_bg_mismatch,
+    )
 
 
 def _run_validation_suite(args: list[str]) -> int:

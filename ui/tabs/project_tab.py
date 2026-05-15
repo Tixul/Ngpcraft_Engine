@@ -58,6 +58,12 @@ from core.hitbox_export import make_hitbox_h, make_props_h, make_ctrl_h, make_an
 from core.collision_boxes import active_hurtboxes, box_enabled, first_bodybox, first_hurtbox, sprite_hurtboxes
 from core.assets_autogen_mk import write_assets_autogen_mk
 from core.gen_manifest import GenManifest
+from core.bg_size_check import (
+    MismatchResolution,
+    detect_scene_bg_mismatches,
+    apply_clamp_to_project,
+    rewrite_bg_map_to_size,
+)
 from core.audio_manifest import AudioManifest
 from core.rgb444 import OPAQUE_BLACK, to_word
 from core.report_html import build_report_html
@@ -1157,6 +1163,126 @@ class ProjectTab(ProjectPathMixin, QWidget):
         """Append globals consistency warnings (C1/C2) to errs."""
         if isinstance(self._data, dict):
             validate_globals_consistency(project_data=self._data, errs=errs)
+
+    def _check_bg_size_mismatches(self) -> "list":
+        """Detect runtime-unsafe BG-size mismatches across all scenes.
+
+        Returns the list of :class:`SceneBgMismatch` (empty if none).
+        """
+        if not isinstance(self._data, dict) or not self._project_dir:
+            return []
+        try:
+            return detect_scene_bg_mismatches(self._data, self._project_dir)
+        except Exception:
+            return []
+
+    def _resolve_bg_mismatches(self, mismatches: list) -> "MismatchResolution":
+        """Prompt the user for a resolution strategy.
+
+        Three choices, mapping 1:1 to :class:`MismatchResolution`:
+
+        - **Cancel**:    abort the export entirely.
+        - **Auto-clamp**: shrink ``level_size`` to match the PNG (mutates
+                          and saves the project file).
+        - **Crop/fill**:  keep ``level_size`` as configured; after the
+                          tilemap export, reshape each ``bg_map.c`` to the
+                          configured size (padding with tile 0).
+        """
+        # Build a compact summary listing every scene with a mismatch.
+        lines = [
+            f"- {m.scene_label}: level_size={m.level_w}x{m.level_h}, "
+            f"PNG={m.png_tiles_w}x{m.png_tiles_h} tiles"
+            for m in mismatches
+        ]
+        body = (
+            "Some scenes have a level_size larger than their BG PNG.\n"
+            "Exporting as-is will produce scrolling-bg corruption at runtime\n"
+            "(the renderer reads past the real end of each row).\n\n"
+            + "\n".join(lines)
+            + "\n\nHow do you want to fix it?\n\n"
+            "  • Auto-clamp: shrink level_size to match the PNG (saves the project file).\n"
+            "  • Crop/fill: keep level_size; pad bg_map with empty tiles where the PNG\n"
+            "               does not cover (no project change).\n"
+            "  • Cancel:    abort and let me fix it by hand."
+        )
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("BG size / level_size mismatch")
+        box.setText(body)
+        btn_clamp = box.addButton("Auto-clamp", QMessageBox.ButtonRole.AcceptRole)
+        btn_crop  = box.addButton("Crop / fill", QMessageBox.ButtonRole.AcceptRole)
+        btn_cancel = box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(btn_cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is btn_clamp:
+            return MismatchResolution.CLAMP
+        if clicked is btn_crop:
+            return MismatchResolution.CROP_FILL
+        return MismatchResolution.CANCEL
+
+    def _apply_bg_clamp_and_save(self, mismatches: list, errs: list[str]) -> None:
+        """Mutate ``self._data`` to clamp every mismatch, then persist the
+        project file. Errors are appended to ``errs`` rather than raised.
+        """
+        if not isinstance(self._data, dict) or not self._project_path:
+            return
+        try:
+            applied = apply_clamp_to_project(self._data, mismatches)
+        except Exception as exc:
+            errs.append(f"BG clamp: {exc}")
+            return
+        if not applied:
+            return
+        try:
+            import json as _json
+            Path(self._project_path).write_text(
+                _json.dumps(self._data, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            errs.append(f"BG clamp save: {exc}")
+        if self._on_save:
+            try:
+                self._on_save()
+            except Exception:
+                pass
+
+    def _crop_fill_bg_maps(
+        self,
+        export_dir: "Path | None",
+        mismatches: list,
+        errs: list[str],
+    ) -> None:
+        """Post-process: reshape each scene's ``bg_map.c`` to match the
+        configured ``level_size``. Must be called *after* the tilemap
+        export step has emitted the file.
+        """
+        if not export_dir or not mismatches:
+            return
+        try:
+            from core.scene_level_gen import _safe_ident as _sl_safe
+        except Exception as exc:
+            errs.append(f"CROP_FILL: {exc}")
+            return
+        for m in mismatches:
+            sym = _sl_safe(m.scene_label or "scene")
+            bg_c = export_dir / f"scene_{sym}_bg_map.c"
+            if not bg_c.is_file():
+                errs.append(
+                    f"CROP_FILL [{m.scene_label}]: missing {bg_c.name}"
+                )
+                continue
+            try:
+                ok = rewrite_bg_map_to_size(bg_c, m.level_w, m.level_h, fill_tile=0)
+            except Exception as exc:
+                errs.append(f"CROP_FILL [{m.scene_label}]: {exc}")
+                continue
+            if not ok:
+                errs.append(
+                    f"CROP_FILL [{m.scene_label}]: could not reshape "
+                    f"{bg_c.name} to {m.level_w}x{m.level_h}"
+                )
 
     def _reconcile_gen_manifest(
         self,
@@ -4643,8 +4769,8 @@ class ProjectTab(ProjectPathMixin, QWidget):
             msg += "\n" + "\n".join(errs[:6]) 
         QMessageBox.information(self, tr("proj.export_scene_png"), msg) 
 
-    def _export_all_c(self) -> None: 
-        script = self._find_script() 
+    def _export_all_c(self) -> None:
+        script = self._find_script()
         if script is None:
             start = script_dialog_start_dir("export_script_path", fallback=self._project_dir)
             p, _ = QFileDialog.getOpenFileName(self, tr("export.find_script"), start, "Python (*.py)")
@@ -4654,11 +4780,28 @@ class ProjectTab(ProjectPathMixin, QWidget):
             remember_script_path("export_script_path", script)
         from core.sprite_export_pipeline import export_sprite_pipeline
 
+        # BG / level_size sanity gate. Must run BEFORE any tilemap export
+        # — CLAMP needs to mutate the project, CROP_FILL needs a list of
+        # which scenes to post-process. CANCEL aborts cleanly here.
+        errs: list[str] = []
+        bg_mismatches = self._check_bg_size_mismatches()
+        bg_resolution = MismatchResolution.IGNORE
+        if bg_mismatches:
+            bg_resolution = self._resolve_bg_mismatches(bg_mismatches)
+            if bg_resolution == MismatchResolution.CANCEL:
+                QMessageBox.information(
+                    self, tr("proj.export_all_c"),
+                    "Export cancelled — BG / level_size mismatch unresolved.",
+                )
+                return
+            if bg_resolution == MismatchResolution.CLAMP:
+                self._apply_bg_clamp_and_save(bg_mismatches, errs)
+
         # Track every generated file so the manifest reconcile at the end
         # can detect orphans (deleted/renamed assets) and remove them.
         produced: list[Path] = []
 
-        n, errs = 0, []
+        n = 0
         for spr, path in self._all_sprites():
             out_dir = self._export_out_dir_for_asset(path)
             try:
@@ -4803,6 +4946,12 @@ class ProjectTab(ProjectPathMixin, QWidget):
         if dgen_assets:
             msg += "\n" + " ".join(p.name for p in dgen_assets) + " written"
 
+        # CROP_FILL post-process: reshape each bg_map.c to the configured
+        # level_size now that the tilemap export step has emitted it.
+        if bg_resolution == MismatchResolution.CROP_FILL and bg_mismatches:
+            self._crop_fill_bg_maps(exp_dir, bg_mismatches, errs)
+            msg += f"\nBG crop/fill: reshaped {len(bg_mismatches)} bg_map(s)"
+
         # Reconcile gen manifest (full project export — safe to purge
         # orphans). See ``_reconcile_gen_manifest`` for the safety model.
         removed = self._reconcile_gen_manifest(exp_dir, produced, errs)
@@ -4859,6 +5008,25 @@ class ProjectTab(ProjectPathMixin, QWidget):
         do_scenes_autogen = bool(opts.export_scenes_autogen)
         do_autogen_mk = bool(opts.export_autogen_mk)
         from core.sprite_export_pipeline import export_sprite_pipeline
+
+        # BG / level_size sanity gate. Same flow as _export_all_c — must
+        # run before tilemap export so CLAMP can mutate the project and
+        # CROP_FILL knows which scenes to post-process.
+        bg_mismatches = self._check_bg_size_mismatches() if do_tilemaps else []
+        bg_resolution = MismatchResolution.IGNORE
+        if bg_mismatches:
+            bg_resolution = self._resolve_bg_mismatches(bg_mismatches)
+            if bg_resolution == MismatchResolution.CANCEL:
+                QMessageBox.information(
+                    self, tr("proj.export_all_scenes_c"),
+                    "Export cancelled — BG / level_size mismatch unresolved.",
+                )
+                return
+            if bg_resolution == MismatchResolution.CLAMP:
+                self._apply_bg_clamp_and_save(bg_mismatches, errs)
+                # The scenes list was bound *before* the mutation, but
+                # since CLAMP edits dicts in place the loop below already
+                # sees the new level_size values.
 
         # Track every generated file so the manifest reconcile at the end
         # of this method can detect orphans (deleted/renamed sprites,
@@ -5116,6 +5284,13 @@ class ProjectTab(ProjectPathMixin, QWidget):
         if dgen_assets:
             msg += "\n" + " ".join(p.name for p in dgen_assets) + " written"
         self._run_globals_validation(errs)
+
+        # CROP_FILL post-process: each scene's bg_map.c was emitted by
+        # the tilemap step at PNG-native dimensions; reshape to the
+        # configured level_size so the runtime indexing math stays safe.
+        if bg_resolution == MismatchResolution.CROP_FILL and bg_mismatches:
+            self._crop_fill_bg_maps(exp_dir, bg_mismatches, errs)
+            msg += f"\nBG crop/fill: reshaped {len(bg_mismatches)} bg_map(s)"
 
         # Reconcile the gen manifest only when the run is genuinely a
         # full export of every asset class. If the user unchecked any
