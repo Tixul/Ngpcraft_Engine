@@ -4782,7 +4782,8 @@ class ProjectTab(ProjectPathMixin, QWidget):
                         try:
                             from core.scene_loader_gen import write_scene_loader_h
                             loader_warns: list[str] = []
-                            write_scene_loader_h(
+                            loader_generated: list[Path] = []
+                            loader_h = write_scene_loader_h(
                                 project_data=self._data,
                                 scene=scene_export,
                                 project_dir=self._project_dir,
@@ -4791,7 +4792,11 @@ class ProjectTab(ProjectPathMixin, QWidget):
                                 include_level=do_level,
                                 include_disabled=include_disabled,
                                 warnings_out=loader_warns,
+                                generated_paths_out=loader_generated,
                             )
+                            if loader_h is not None:
+                                produced.append(loader_h)
+                            produced.extend(loader_generated)
                             errs.extend(loader_warns)
                         except Exception as e:
                             label = str(scene.get("label") or scene.get("id") or "scene")
@@ -5040,6 +5045,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
                     try:
                         from core.scene_loader_gen import write_scene_loader_h
                         loader_warns: list[str] = []
+                        loader_generated: list[Path] = []
                         scene_h = write_scene_loader_h(
                             project_data=self._data,
                             scene=scene_export,
@@ -5049,6 +5055,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
                             include_level=do_level,
                             include_disabled=include_disabled,
                             warnings_out=loader_warns,
+                            generated_paths_out=loader_generated,
                         )
                         errs.extend(loader_warns)
                     except Exception as e:

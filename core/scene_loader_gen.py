@@ -376,6 +376,7 @@ def write_scene_loader_h(
     include_level: bool = True,
     include_disabled: bool = False,
     warnings_out: list[str] | None = None,
+    generated_paths_out: list[Path] | None = None,
 ) -> Path:
     """
     Write:
@@ -861,6 +862,8 @@ def write_scene_loader_h(
                 _out, _scr1_cam_map_w, _scr1_cam_map_h = _assemble_chunk_bg_map_c(
                     safe, _chunk_infos_grid, export_dir
                 )
+                if generated_paths_out is not None:
+                    generated_paths_out.append(_out)
         else:
             # Single large map (existing path).
             for _inf in tilemap_infos:
@@ -875,7 +878,9 @@ def write_scene_loader_h(
                     _scr1_cam_map_w = _mw
                     _scr1_cam_map_h = _mh
                     if _ct and _mw > 0 and _mh > 0:
-                        _write_scene_bg_map_c(safe, _scr1_sym, _tb, _ct, export_dir, _mw, _mh)
+                        _out = _write_scene_bg_map_c(safe, _scr1_sym, _tb, _ct, export_dir, _mw, _mh)
+                        if generated_paths_out is not None:
+                            generated_paths_out.append(_out)
                     break
     elif ms_plane == "scr2":
         # Large tilemap lives on SCR2 → write bg_map.c from the SCR2 layer.
@@ -893,7 +898,9 @@ def write_scene_loader_h(
                 _scr1_cam_map_w = _mw  # variable names kept for downstream use
                 _scr1_cam_map_h = _mh
                 if _ct and _mw > 0 and _mh > 0:
-                    _write_scene_bg_map_c(safe, _scr2_sym, _tb, _ct, export_dir, _mw, _mh, plane_label="SCR2")
+                    _out = _write_scene_bg_map_c(safe, _scr2_sym, _tb, _ct, export_dir, _mw, _mh, plane_label="SCR2")
+                    if generated_paths_out is not None:
+                        generated_paths_out.append(_out)
                 break
 
     # Publish the mapstream plane (0=none, 1=SCR1, 2=SCR2) so the autorun

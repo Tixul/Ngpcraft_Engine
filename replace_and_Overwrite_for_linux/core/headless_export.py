@@ -806,6 +806,7 @@ def export_scene(
             try:
                 from core.scene_loader_gen import write_scene_loader_h
                 loader_warns: list[str] = []
+                loader_generated: list[Path] = []
                 out_h = write_scene_loader_h(
                     project_data=project_data,
                     scene=scene_export,
@@ -813,8 +814,11 @@ def export_scene(
                     export_dir=export_dir_abs,
                     base_dir=base_dir,
                     warnings_out=loader_warns,
+                    generated_paths_out=loader_generated,
                 )
                 log(f"  OUT   {out_h.name}")
+                result.track(out_h)
+                result.track_many(loader_generated)
                 for msg in loader_warns:
                     result.errors.append(msg)
                     log(f"  WARN  {msg}")
