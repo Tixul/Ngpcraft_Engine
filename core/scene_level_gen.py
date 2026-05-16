@@ -542,7 +542,7 @@ def collect_scene_level_issues(*, project_data: dict, scene: dict) -> list[str]:
                 if ec_rid and ec_rid not in region_ids:
                     issues.append(f"trigger '{_name(i, trig)}' or_group[{j}][{k}]: region_id '{ec_rid}' not found")
 
-        if act in ("goto_scene", "warp_to"):
+        if act in ("goto_scene", "warp_to", "goto_scene_preserve"):
             sid = str(trig.get("scene_to") or "").strip()
             if sid and sid not in scene_ids:
                 issues.append(f"{nm}: target scene '{sid}' not found")
@@ -1900,6 +1900,14 @@ def make_scene_level_h(
             "clear_highscores":   91,
             # MECH-13 game-over flow
             "game_over":          92,
+            # PAUSE-1 modal sub-scene transition (session 1 — scene triggers surface).
+            # ``goto_scene_preserve`` snapshots cam + player and switches to the target
+            # scene without resetting entity slots; ``return_to_caller`` restores the
+            # snapshot. Same IDs are reserved across custom_events_gen.py and
+            # entity_type_events_gen.py so the action means the same thing on every
+            # trigger surface.
+            "goto_scene_preserve": 96,
+            "return_to_caller":    97,
         }
 
         lines += [sep, "/* Triggers (conditions -> actions)                                    */", sep]
@@ -2080,6 +2088,8 @@ def make_scene_level_h(
             "#define TRIG_ACT_SPAWN_OPTION       93",
             "#define TRIG_ACT_DESPAWN_OPTION     94",
             "#define TRIG_ACT_SET_OPTION_COUNT   95",
+            "#define TRIG_ACT_GOTO_SCENE_PRESERVE 96",
+            "#define TRIG_ACT_RETURN_TO_CALLER    97",
             "#endif",
             "",
             "#ifndef NGPNG_TRIGGER_T",
@@ -2233,9 +2243,9 @@ def make_scene_level_h(
                 # Back-compat: old projects had only event/param (emit_event).
                 act = "emit_event"
             aid = int(act_to_id.get(act, 0))
-            # goto_scene / warp_to: prefer stable scene id mapping when present.
+            # goto_scene / warp_to / goto_scene_preserve: prefer stable scene id mapping when present.
             try:
-                if act in ("goto_scene", "warp_to"):
+                if act in ("goto_scene", "warp_to", "goto_scene_preserve"):
                     sid = str(t.get("scene_to", "") or "").strip()
                     if sid and sid in scene_id_to_idx:
                         a0 = int(scene_id_to_idx[sid]) & 0xFF

@@ -3101,6 +3101,7 @@ class LevelTab(QWidget):
             "water_damage": 0,
             "zone_force": 2,
             "ladder_top_solid": False,
+            "pause_menu_enabled": True,
             "hud_enabled": False,
             "hud_show_hp": False,
             "hud_show_score": False,
@@ -4565,6 +4566,17 @@ class LevelTab(QWidget):
         self._chk_rule_hud_enabled.toggled.connect(self._on_rules_changed)
         self._chk_rule_hud_enabled.toggled.connect(self._on_hud_enabled_toggled)
         ghv.addWidget(self._chk_rule_hud_enabled)
+
+        # PAUSE-1 S4: per-scene "menu pause actif" — when unchecked the autorun
+        # ignores PAD_OPTION on this scene (free for intros, main menus,
+        # cutscenes, modal scenes that own their own OPTION binding).
+        self._chk_rule_pause_menu_enabled = QCheckBox("Menu pause actif sur cette scène")
+        self._chk_rule_pause_menu_enabled.setToolTip(
+            "Décocher pour libérer OPTION sur cette scène (intro, menu principal,\n"
+            "cutscene, écran modal target d'un goto_scene_preserve)."
+        )
+        self._chk_rule_pause_menu_enabled.toggled.connect(self._on_rules_changed)
+        ghv.addWidget(self._chk_rule_pause_menu_enabled)
 
         row_hud = QHBoxLayout()
         self._chk_rule_hud_hp = QCheckBox(tr("level.rules_hud_hp"))
@@ -8248,6 +8260,10 @@ class LevelTab(QWidget):
             self._chk_rule_ladder_side_move.setChecked(bool(self._level_rules.get("ladder_side_move", False)))
             hud_en = bool(self._level_rules.get("hud_enabled", False))
             self._chk_rule_hud_enabled.setChecked(hud_en)
+            # PAUSE-1 S4: per-scene pause_menu_enabled (default True for back-compat).
+            self._chk_rule_pause_menu_enabled.setChecked(
+                bool(self._level_rules.get("pause_menu_enabled", True))
+            )
             self._on_hud_enabled_toggled(hud_en)
             self._chk_rule_hud_hp.setChecked(bool(self._level_rules.get("hud_show_hp", False)))
             self._chk_rule_hud_score.setChecked(bool(self._level_rules.get("hud_show_score", False)))
@@ -9511,6 +9527,9 @@ class LevelTab(QWidget):
         ladder_top_exit = bool(self._chk_rule_ladder_top_exit.isChecked())
         ladder_side_move = bool(self._chk_rule_ladder_side_move.isChecked())
         hud_enabled = bool(self._chk_rule_hud_enabled.isChecked())
+        # PAUSE-1 S4 per-scene flag — written to level_rules.pause_menu_enabled.
+        pause_menu_enabled = bool(self._chk_rule_pause_menu_enabled.isChecked())
+        self._level_rules["pause_menu_enabled"] = pause_menu_enabled
         hud_show_hp = bool(self._chk_rule_hud_hp.isChecked())
         hud_show_score = bool(self._chk_rule_hud_score.isChecked())
         hud_show_collect = bool(self._chk_rule_hud_collect.isChecked())

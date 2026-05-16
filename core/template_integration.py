@@ -186,15 +186,25 @@ def _sync_optional_module(project_root: Path, module_rel: str) -> None:
 
 def _sync_validated_sprite_runtime(project_root: Path) -> None:
     """
-    Copy the validated sprite-shadow runtime (bundled in runtime/) into the
-    exported project. The tool is self-contained — no external dependency.
-    Called on every export, so projects work regardless of their origin (wizard
-    or blank).
+    Copy the validated runtime files into the exported project. Source
+    priority: ``runtime/`` first (master copy for engine-owned runtime),
+    then ``templates/NgpCraft_base_template/`` as a fallback for files that
+    only live in the template (e.g. ngpc_metasprite.h whose struct evolves
+    with sprite_export — must be kept in lockstep across projects).
+
+    Called on every export so projects stay in sync with engine changes.
     """
-    src_root = Path(__file__).parent.parent / "runtime"
+    engine_root   = Path(__file__).parent.parent
+    runtime_root  = engine_root / "runtime"
+    template_root = engine_root / "templates" / "NgpCraft_base_template"
     files = [
         ("src/gfx/ngpc_sprite.h",          "src/gfx/ngpc_sprite.h"),
         ("src/gfx/ngpc_sprite.c",          "src/gfx/ngpc_sprite.c"),
+        # ngpc_metasprite.h lives in template/ only — synced here because the
+        # struct layout (vram_tile_base/pal_base pointer fields) must match
+        # the sprite_export tool's output exactly; a desync compile-errors
+        # every *_mspr.c with cc900 THC1-Error-233 (illegal initialization).
+        ("src/gfx/ngpc_metasprite.h",      "src/gfx/ngpc_metasprite.h"),
         ("src/core/ngpc_sys.c",            "src/core/ngpc_sys.c"),
         ("src/core/ngpc_timing.c",         "src/core/ngpc_timing.c"),
         ("src/core/ngpc_config.h",         "src/core/ngpc_config.h"),
@@ -218,10 +228,13 @@ def _sync_validated_sprite_runtime(project_root: Path) -> None:
         ("src/ngpng/ngpng_scene_runtime.c", "src/ngpng/ngpng_scene_runtime.c"),
     ]
     for src_rel, dst_rel in files:
-        src = src_root / src_rel
-        dst = project_root / dst_rel
+        # Look in runtime/ first, then fall back to templates/.
+        src = runtime_root / src_rel
+        if not src.exists():
+            src = template_root / src_rel
         if not src.exists():
             continue
+        dst = project_root / dst_rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
 
@@ -2170,6 +2183,45 @@ def write_autorun_main_c(
     _pause_quit_label = str(_game_cfg.get("pause_quit_scene") or "").strip() if isinstance(_game_cfg, dict) else ""
     _pause_quit_safe  = safe_ident(_pause_quit_label) if _pause_quit_label else ""
 
+    # PAUSE-1 S3: project-level pause menu toggle (game.pause_menu_enabled).
+    # When False (or absent on a *brand-new* project), no pause codegen at all
+    # is emitted — OPTION button stays free for the game to repurpose. When
+    # True (default for back-compat, since the hardcoded menu used to always
+    # exist), the existing hardcoded menu is generated, *gated per-scene* by
+    # the new ``scene.pause_menu_enabled`` flag (also default True for compat).
+    # Scenes that opt out — typically intro / main menu / cutscene / dialog
+    # screens — get OPTION back as a free button on that scene only.
+    _pause_menu_project_enabled = bool(
+        _game_cfg.get("pause_menu_enabled", True) if isinstance(_game_cfg, dict) else True
+    )
+
+    # PAUSE-1 S3.5: dynamic pause menu items (project.pause_menu.items[]).
+    # If absent → fall back to the legacy hardcoded "RESUME" + "QUIT" menu
+    # (uses ``_pause_quit_safe`` for QUIT target). This keeps every existing
+    # project working unchanged.
+    # If present → generate one menu row per item with the configured label
+    # and action. Supported preset actions:
+    #   - "resume"             → close menu, restore game state (s_pause_sel ID)
+    #   - "goto_scene_reset"   → full scene change, no return (target = item.target)
+    #   - "goto_scene_preserve"→ modal scene change w/ return_to_caller support
+    #   - "save_game"          → flash save in-place, stay in menu (TODO S3.6)
+    _pause_menu_cfg = (project_data or {}).get("pause_menu") or {}
+    _pause_menu_items = _pause_menu_cfg.get("items") if isinstance(_pause_menu_cfg, dict) else None
+    if not isinstance(_pause_menu_items, list) or not _pause_menu_items:
+        _pause_menu_items = None  # signal: use legacy path
+    # Defensive: enforce a hard cap matching the on-screen menu area (max 8
+    # rows between PAUSED header row 5 and screen bottom row 18 at 2-row
+    # spacing). Beyond that the items would scroll off the visible viewport.
+    if _pause_menu_items is not None and len(_pause_menu_items) > 8:
+        _pause_menu_items = _pause_menu_items[:8]
+    # Resolve each item's target scene label (if any) to a NGP_SCENE_*_IDX symbol.
+    if _pause_menu_items is not None:
+        for _itm in _pause_menu_items:
+            if not isinstance(_itm, dict):
+                continue
+            _tgt = str(_itm.get("target") or "").strip()
+            _itm["_target_safe"] = safe_ident(_tgt) if _tgt else ""
+
     inc_scenes = f'../{export_dir_rel}/scenes_autogen.h'
 
     def _ctrl_pad(ctrl: dict, key: str) -> str:
@@ -2569,9 +2621,36 @@ def write_autorun_main_c(
                     f"    }} else {{ (actor).vx = 0; (actor).vy = 0; }} \\\n",
                 ] + tail
 
+            elif move_type == 0 and not has_topdown_vehicle and not has_topdown_advance:
+                # absolute + direct + 4-dir (default RPG): true cardinal-only
+                # movement. Cancel vertical when horizontal is active (axis
+                # priority, NES Zelda / classic RPG convention) and bypass
+                # the sin8/cos8 lookup — at small max_speed values (e.g. 1)
+                # the >>4 in _vx_from_angle truncated diagonals to 0 for
+                # positive components but kept -1 for negative ones, giving
+                # the well-known asymmetric "only NW works" 4-dir bug.
+                lines += [
+                    f"#define {VAR}_CTRL_UPDATE(actor) do {{ \\\n",
+                    f"    {{ s8 _dx = {dx_expr}; s8 _dy = {dy_expr}; \\\n",
+                    f"      if (_dx != 0 && _dy != 0) _dy = 0; /* 4-dir filter: horizontal axis wins on diagonal input */ \\\n",
+                    f"      if (_dx != 0 || _dy != 0) {{ \\\n",
+                    f"        u8 _ang = s_td_angle; \\\n",
+                    f"        if      (_dy < 0) _ang = 0u; /* N */ \\\n",
+                    f"        else if (_dx > 0) _ang = 2u; /* E */ \\\n",
+                    f"        else if (_dy > 0) _ang = 4u; /* S */ \\\n",
+                    f"        else              _ang = 6u; /* W */ \\\n",
+                    f"        s_td_angle = _ang; \\\n",
+                    f"        (actor).vx = (s8)((s16)_dx * (s16){max_speed}); \\\n",
+                    f"        (actor).vy = (s8)((s16)_dy * (s16){max_speed}); \\\n",
+                    f"      }} else {{ (actor).vx = 0; (actor).vy = 0; }} }} \\\n",
+                ] + tail
+
             else:
-                # absolute + direct (default RPG) and absolute + vehicle/advance
-                # Direction pressed → angle; then apply speed or immediate vx/vy
+                # absolute + direct (8-dir) and absolute + vehicle/advance
+                # Direction pressed → angle; then apply speed via sin8/cos8.
+                # WARNING: with very small max_speed (≤2) the >>4 step in
+                # _vx_from_angle truncates diagonal components asymmetrically
+                # — keep max_speed ≥ 4 for usable 8-dir play.
                 lines += [
                     f"#define {VAR}_CTRL_UPDATE(actor) do {{ \\\n",
                     f"    {{ s8 _dx = {dx_expr}; s8 _dy = {dy_expr}; \\\n",
@@ -2645,6 +2724,9 @@ def write_autorun_main_c(
     c.append('#include "ngpc_timing.h"\n')
     c.append('#include "ngpc_sprite.h"\n')
     c.append('#include "sounds.h"\n')
+    # DEAD-UI-1 PoC: pull in custom events table when the project has any.
+    # Header always exists post-export (custom_events_gen always writes it).
+    c.append('#include "../GraphX/gen/ngpc_custom_events.h"\n')
     # Stub Sfx_Play so platformer SFX calls compile even when sound is disabled.
     c.append("#if !defined(NGP_ENABLE_SOUND) || !(NGP_ENABLE_SOUND)\n")
     c.append("static void Sfx_Play(unsigned char id) { (void)id; }\n")
@@ -4632,7 +4714,7 @@ def write_autorun_main_c(
         c.append("        if (group_vflip) part_flags ^= SPR_VFLIP;\n")
         c.append("        part_flags = (u8)((part_flags & (u8)~0x18u) | priority);\n")
         c.append("        if (px < -7 || px > 159 || py < -7 || py > 151) ngpc_sprite_hide((u8)(spr_start + i));\n")
-        c.append("        else ngpc_sprite_set((u8)(spr_start + i), (u8)((u16)px & 0xFFu), (u8)((u16)py & 0xFFu), p->tile, p->pal, part_flags);\n")
+        c.append("        else ngpc_sprite_set((u8)(spr_start + i), (u8)((u16)px & 0xFFu), (u8)((u16)py & 0xFFu), (u16)(*def->vram_tile_base + p->tile), (u8)(*def->vram_pal_base + p->pal), part_flags);\n")
         c.append("    }\n")
         c.append("    return count;\n")
         c.append("}\n\n")
@@ -4693,8 +4775,8 @@ def write_autorun_main_c(
         c.append("    def = sc->resolve_entity_frame(type, frame_idx);\n")
         c.append("    if (!def || def->count == 0u) return 0u;\n")
         c.append("    part = &def->parts[0];\n")
-        c.append("    *tile = part->tile;\n")
-        c.append("    *pal = part->pal;\n")
+        c.append("    *tile = (u16)(*def->vram_tile_base + part->tile);\n")
+        c.append("    *pal = (u8)(*def->vram_pal_base + part->pal);\n")
         c.append("    *flags = (u8)(SPR_MIDDLE | (u8)part->flags);\n")
         c.append("    *ox = (s16)part->ox;\n")
         c.append("    *oy = (s16)part->oy;\n")
@@ -5539,6 +5621,19 @@ def write_autorun_main_c(
     c.append("    u8  s_pause_save_scr_prio = 0u;\n")
     c.append("    u8  s_pause_save_bg_ctl = 0x80u;\n")
     c.append("    u16 s_pause_save_bg_col0 = 0u;\n")
+    c.append("    /* PAUSE-1 modal sub-scene snapshot (goto_scene_preserve / return_to_caller).\n")
+    c.append("     * Single-level stack (N=1) for MVP — opening a second modal while one is\n")
+    c.append("     * already active is refused at the dispatch site. Snapshot captures cam +\n")
+    c.append("     * per-player screen-space position; return_to_caller restores them after\n")
+    c.append("     * the normal scene transition has rebuilt VRAM. */\n")
+    c.append("    u8  s_modal_caller_scene = 0xFFu;\n")
+    c.append("    u8  s_modal_returning = 0u;\n")
+    c.append("    s16 s_modal_cam_px = 0;\n")
+    c.append("    s16 s_modal_cam_py = 0;\n")
+    for _mp in (players or []):
+        _mn = _mp["name"]
+        c.append(f"    s16 s_modal_{_mn}_x = 0;\n")
+        c.append(f"    s16 s_modal_{_mn}_y = 0;\n")
     c.append("    u8 lives = 0u;\n")
     c.append("    u8 continues_left = 0u;\n")
     c.append("    u8 respawn_timer = 0u;\n")
@@ -6016,6 +6111,12 @@ def write_autorun_main_c(
     c.append("        u16 _sc_map_h;\n")
     c.append("        u8 trig_n;\n")
     c.append("        u8 reg_n;\n")
+    c.append("        /* DEAD-UI-1 PoC: custom event bus.\n")
+    c.append("         * Set by scene-trigger handler for TRIG_ACT_EMIT_EVENT (action 0).\n")
+    c.append("         * Drained by the dispatcher loop placed right after the trigger loop\n")
+    c.append("         * — walks g_custom_events[] and executes a curated subset of actions. */\n")
+    c.append("        u8 _pending_event = 0u;\n")
+    c.append("        u8 _has_pending_event = 0u;\n")
     c.append("        u16 npc_talked;\n")
     c.append("        u16 entity_contact;\n")
     c.append("        u8 in_reg[NGPNG_AUTORUN_MAX_REG];\n")
@@ -6122,10 +6223,20 @@ def write_autorun_main_c(
         c.append("            }\n")
         c.append("        }\n")
     c.append("        ngpc_input_update();\n")
+    # PAUSE-1 S3: pause toggle is generated unconditionally to keep the brace
+    # structure of the surrounding loop intact (the body below references many
+    # outer-scope vars). The trigger condition is gated by two flags:
+    #   * project-level: ``_pause_menu_project_enabled`` decides whether the
+    #     leading sentinel is hard-coded to 0 (dead toggle) or to 1 (live).
+    #     False = compiler dead-code-eliminates the body, OPTION is free.
+    #   * per-scene: ``g_scene_pause_menu_en[cur_scene]`` lets specific scenes
+    #     (intro / main menu / cutscene) opt out at runtime even when the
+    #     project keeps the menu enabled globally.
     c.append("        /* ---- Pause toggle (OPTION) ---------------------------------------- */\n")
     _dlg_active_cond = ("!(dialog_scene < (u8)NGP_SCENE_COUNT && ngpc_dlg_is_active(&dialog_runner)) && "
                         if has_dialogues else "")
-    c.append(f"        if (!s_paused && {_dlg_active_cond}!game_over && !stage_clear &&\n")
+    _pme_proj_sentinel = "1" if _pause_menu_project_enabled else "0"
+    c.append(f"        if ({_pme_proj_sentinel} && g_scene_pause_menu_en[cur_scene] && !s_paused && {_dlg_active_cond}!game_over && !stage_clear &&\n")
     c.append("                (ngpc_pad_pressed & PAD_OPTION)) {\n")
     c.append("            s_paused = 1u; s_pause_sel = 0u;\n")
     c.append("            ngpc_pad_pressed &= (u8)~PAD_OPTION;  /* consume — prevents same-frame un-pause */\n")
@@ -6176,8 +6287,23 @@ def write_autorun_main_c(
     c.append("            ngpc_gfx_set_palette(GFX_SCR1, (u8)NGPNG_AUTORUN_TEXT_PAL,\n")
     c.append("                RGB(0,0,0), RGB(15,15,15), RGB(8,8,8), RGB(4,4,4));\n")
     c.append("            ngpc_text_print(GFX_SCR1,(u8)NGPNG_AUTORUN_TEXT_PAL, 7u, 5u, \"PAUSED\");\n")
-    c.append("            ngpc_text_print(GFX_SCR1,(u8)NGPNG_AUTORUN_TEXT_PAL, 5u, 9u, \"> RESUME\");\n")
-    c.append("            ngpc_text_print(GFX_SCR1,(u8)NGPNG_AUTORUN_TEXT_PAL, 5u,11u, \"  QUIT\");\n")
+    if _pause_menu_items is None:
+        # Legacy hardcoded 2-item menu (RESUME / QUIT).
+        c.append("            ngpc_text_print(GFX_SCR1,(u8)NGPNG_AUTORUN_TEXT_PAL, 5u, 9u, \"> RESUME\");\n")
+        c.append("            ngpc_text_print(GFX_SCR1,(u8)NGPNG_AUTORUN_TEXT_PAL, 5u,11u, \"  QUIT\");\n")
+    else:
+        # Dynamic items from project.pause_menu.items[]. Row 9 + 2*i = first
+        # row below the PAUSED header (row 5). Selected item gets "> " prefix,
+        # others get "  " padding so column 5 stays aligned across redraws.
+        for _i, _itm in enumerate(_pause_menu_items):
+            _label = str(_itm.get("label", f"ITEM{_i}")).strip() or f"ITEM{_i}"
+            # Truncate to 14 chars total inc. prefix to fit screen (col 5..18 = 14 cols).
+            if len(_label) > 12:
+                _label = _label[:12]
+            _label_c = _label.replace("\\", "\\\\").replace("\"", "\\\"")
+            _row = 9 + 2 * _i
+            _prefix = "> " if _i == 0 else "  "
+            c.append(f"            ngpc_text_print(GFX_SCR1,(u8)NGPNG_AUTORUN_TEXT_PAL, 5u,{_row:>2}u, \"{_prefix}{_label_c}\");\n")
     c.append("        }\n")
     if has_dialogues:
         c.append("        dialog_consumed_input = 0u;\n")
@@ -6206,7 +6332,15 @@ def write_autorun_main_c(
             c.append("                        s_player_input_locked = 0u;\n")
         c.append("                    }\n")
         c.append("                } else {\n")
-        c.append("                    if (dialog_on_done_action == DLG_DONE_SET_FLAG || dialog_on_done_action == DLG_DONE_EMIT_EVENT) {\n")
+        c.append("                    /* DEAD-UI-1 S2-fu3: dialog on_done EMIT_EVENT now feeds the same\n")
+        c.append("                     * pending-event mechanism as scene-trigger emit_event. The custom\n")
+        c.append("                     * events dispatcher (post trigger loop) will pick it up next time\n")
+        c.append("                     * it runs (same frame). SET_FLAG path stays a no-op until the\n")
+        c.append("                     * flag/variable subsystem is wired (TODO). */\n")
+        c.append("                    if (dialog_on_done_action == DLG_DONE_EMIT_EVENT) {\n")
+        c.append("                        _pending_event = dialog_on_done_arg;\n")
+        c.append("                        _has_pending_event = 1u;\n")
+        c.append("                    } else if (dialog_on_done_action == DLG_DONE_SET_FLAG) {\n")
         c.append("                        (void)dialog_on_done_arg;\n")
         c.append("                    }\n")
         c.append("                    { u8 _closed_scene = dialog_scene;\n")
@@ -6251,15 +6385,40 @@ def write_autorun_main_c(
         c.append("        ngpc_palfx_update();\n")
     c.append("        /* ---- Pause update ------------------------------------------------- */\n")
     c.append("        if (s_paused) {\n")
-    c.append("            if (ngpc_pad_pressed & PAD_UP) {\n")
-    c.append("                s_pause_sel = 0u;\n")
-    c.append("                ngpc_text_print(GFX_SCR1,(u8)NGPNG_AUTORUN_TEXT_PAL,5u, 9u,\"> RESUME\");\n")
-    c.append("                ngpc_text_print(GFX_SCR1,(u8)NGPNG_AUTORUN_TEXT_PAL,5u,11u,\"  QUIT\");\n")
-    c.append("            } else if (ngpc_pad_pressed & PAD_DOWN) {\n")
-    c.append("                s_pause_sel = 1u;\n")
-    c.append("                ngpc_text_print(GFX_SCR1,(u8)NGPNG_AUTORUN_TEXT_PAL,5u, 9u,\"  RESUME\");\n")
-    c.append("                ngpc_text_print(GFX_SCR1,(u8)NGPNG_AUTORUN_TEXT_PAL,5u,11u,\"> QUIT\");\n")
-    c.append("            }\n")
+    if _pause_menu_items is None:
+        # Legacy hardcoded 2-item nav.
+        c.append("            if (ngpc_pad_pressed & PAD_UP) {\n")
+        c.append("                s_pause_sel = 0u;\n")
+        c.append("                ngpc_text_print(GFX_SCR1,(u8)NGPNG_AUTORUN_TEXT_PAL,5u, 9u,\"> RESUME\");\n")
+        c.append("                ngpc_text_print(GFX_SCR1,(u8)NGPNG_AUTORUN_TEXT_PAL,5u,11u,\"  QUIT\");\n")
+        c.append("            } else if (ngpc_pad_pressed & PAD_DOWN) {\n")
+        c.append("                s_pause_sel = 1u;\n")
+        c.append("                ngpc_text_print(GFX_SCR1,(u8)NGPNG_AUTORUN_TEXT_PAL,5u, 9u,\"  RESUME\");\n")
+        c.append("                ngpc_text_print(GFX_SCR1,(u8)NGPNG_AUTORUN_TEXT_PAL,5u,11u,\"> QUIT\");\n")
+        c.append("            }\n")
+    else:
+        # Dynamic N-item nav. UP/DOWN moves selection with clamp at 0/N-1
+        # (not wrap-around — wrap surprises users and complicates the visual
+        # redraw of the previously-selected row). On every change, redraw
+        # every row to flip the "> " / "  " prefix on the affected ones.
+        _n_items = len(_pause_menu_items)
+        c.append(f"            u8 _old_sel = s_pause_sel;\n")
+        c.append("            if (ngpc_pad_pressed & PAD_UP) {\n")
+        c.append("                if (s_pause_sel > 0u) s_pause_sel = (u8)(s_pause_sel - 1u);\n")
+        c.append("            } else if (ngpc_pad_pressed & PAD_DOWN) {\n")
+        c.append(f"                if (s_pause_sel < {_n_items - 1}u) s_pause_sel = (u8)(s_pause_sel + 1u);\n")
+        c.append("            }\n")
+        c.append("            if (s_pause_sel != _old_sel) {\n")
+        # Redraw all rows (cheap on 8 max items) so the previously-highlighted
+        # row gets its "  " prefix back without per-row branching.
+        for _i, _itm in enumerate(_pause_menu_items):
+            _label = str(_itm.get("label", f"ITEM{_i}")).strip() or f"ITEM{_i}"
+            if len(_label) > 12:
+                _label = _label[:12]
+            _label_c = _label.replace("\\", "\\\\").replace("\"", "\\\"")
+            _row = 9 + 2 * _i
+            c.append(f"                ngpc_text_print(GFX_SCR1,(u8)NGPNG_AUTORUN_TEXT_PAL,5u,{_row:>2}u, (s_pause_sel == {_i}u) ? \"> {_label_c}\" : \"  {_label_c}\");\n")
+        c.append("            }\n")
     c.append("            if (ngpc_pad_pressed & PAD_A) {\n")
     c.append("                s_paused = 0u;\n")
     c.append("                /* Restore the regs we snapshotted on pause-enter — viewport,\n")
@@ -6273,105 +6432,236 @@ def write_autorun_main_c(
     c.append("                HW_PAL_BG[0] = s_pause_save_bg_col0;\n")
     c.append("                HW_BG_CTL = s_pause_save_bg_ctl;\n")
     c.append("                HW_SCR_PRIO = s_pause_save_scr_prio;\n")
-    c.append("                if (s_pause_sel == 1u) {\n")
-    if _pause_quit_safe:
-        _pq_sym = _pause_quit_safe.upper()
-        c.append(f"                    /* QUIT → scene {_pause_quit_safe} (full transition) */\n")
-    else:
-        c.append("                    /* QUIT — restart current scene from beginning */\n")
-    c.append("                    game_over = 0u; stage_clear = 0u;\n")
-    if has_save:
-        c.append("                    g_game_over_saved = 0u;\n")
-    c.append("                    timer = 0; timer_sec = 0u; timer_tick = 59u;\n")
-    if has_dialogues:
-        c.append("                    ngpng_dialog_abort(&dialog_runner, &dialog_scene);\n")
-        if has_triggers:
-            c.append("                    s_player_input_locked = 0u;\n")
-    c.append("                    sc->exit();\n")
-    if _pause_quit_safe:
-        # Defensive: if pause_quit_scene references a scene that doesn't exist
-        # (typical when the project is renamed or the default "intro" isn't
-        # created), fall back to the current scene instead of breaking the build.
-        c.append(f"#if defined(NGP_SCENE_{_pq_sym}_IDX)\n")
-        c.append(f"                    cur_scene = (u8)NGP_SCENE_{_pq_sym}_IDX;\n")
-        c.append("                    sc = &g_ngp_scenes[cur_scene];\n")
-        c.append("#endif\n")
-    c.append("                    sc->enter();\n")
-    if has_palfx:
-        c.append("                    ngpng_palfx_enter(cur_scene);\n")
-    c.append("                    ngpng_scene_runtime_enter_view(sc, cur_scene, &cam_px, &cam_py, &tx, &ty);\n")
-    # CAM-1: reset cinematic camera state on pause-quit scene change
-    c.append("                    runtime_cam_path_mode   = sc->cam_path_en ? 1u : 0u;\n")
-    c.append("                    runtime_cam_path_idx    = sc->cam_path_idx;\n")
-    c.append("                    runtime_cam_path_speed  = sc->cam_path_speed;\n")
-    c.append("                    runtime_cam_path_loop   = sc->cam_path_loop;\n")
-    c.append("                    runtime_cam_path_freeze = sc->cam_path_freeze_player;\n")
-    c.append("                    ngpng_camera_init_path(sc, runtime_cam_path_idx, &cam_path_state);\n")
-    c.append("                    if (runtime_cam_path_mode == 1u) { cam_px = cam_path_state.cur_x; cam_py = cam_path_state.cur_y;\n")
-    c.append("                        ngpng_apply_camera_constraints(sc, &cam_px, &cam_py);\n")
-    c.append("                        tx = (u16)(cam_px >> 3); ty = (u16)(cam_py >> 3);\n")
-    c.append("                        ngpng_update_plane_scroll(sc, cam_px, cam_py); }\n")
-    if has_mapstream:
-        c.append("#ifdef NGPNG_HAS_MAPSTREAM\n")
-        c.append("                    ngpng_mapstream_load_scene(cur_scene, cam_px, cam_py);\n")
-        c.append("#endif\n")
-    if has_enemy:
-        if has_waves:
-            c.append("                    ngpc_wave_start(&wave_seq, sc->wave_table, sc->wave_table_n);\n")
-            if _has_wave_scroll:
-                c.append("                    g_wave_scroll_cursor   = 0u;\n")
-                c.append("                    g_wave_scroll_last_pos = 0;\n")
-                c.append("                    /* F1: fast-forward past already-passed scroll waves. */\n")
-                c.append("                    {\n")
-                c.append("                        u8 _ff_wm = s_ngpng_wave_mode[cur_scene];\n")
-                c.append("                        if (_ff_wm != 0u && sc->wave_table && sc->wave_table_n > 0u) {\n")
-                c.append("                            s16 _ff_pos = (_ff_wm == 1u) ? cam_px : cam_py;\n")
-                c.append("                            while (g_wave_scroll_cursor < sc->wave_table_n && (s16)sc->wave_table[g_wave_scroll_cursor].delay <= _ff_pos) {\n")
-                c.append("                                g_wave_scroll_cursor = (u8)(g_wave_scroll_cursor + 1u);\n")
-                c.append("                            }\n")
-                c.append("                            wave_seq.next = g_wave_scroll_cursor;\n")
-                c.append("                            g_wave_scroll_last_pos = _ff_pos;\n")
-                c.append("                        }\n")
-                c.append("                    }\n")
+    if _pause_menu_items is None:
+        # ---- LEGACY 2-item dispatcher (RESUME / QUIT) -------------------
+        # Kept untouched for back-compat: any project that does NOT define
+        # ``pause_menu.items[]`` gets the original hardcoded behaviour.
+        c.append("                if (s_pause_sel == 1u) {\n")
+        if _pause_quit_safe:
+            _pq_sym = _pause_quit_safe.upper()
+            c.append(f"                    /* QUIT → scene {_pause_quit_safe} (full transition) */\n")
         else:
-            c.append("                    next_wave = 0u;\n")
-        if has_wave_rand:
-            c.append("                    ngpng_rwave_enter_scene(sc);\n")
-    if has_shooting:
-        c.append("                    ngpng_player_shots_clear(shots, &player_shots_active, &player_shots_alloc);\n")
-    if has_bullets:
-        c.append("                    ngpng_enemy_bullets_clear(enemy_bullets, &enemy_bullets_active, &enemy_bullets_alloc);\n")
-    c.append(f"                    ngpng_scene_runtime_full_reset(sc, &scene_rt, NGPNG_SCENE_RT_LIVES_START, 1u, 1u, 0u, {'1u' if has_hud else '0u'});\n")
-    if players:
-        n = players[0]["name"]
-        VAR = n.upper()
-        c.append("                    {\n")
-        c.append("                        s16 spawn_x;\n")
-        c.append("                        s16 spawn_y;\n")
-        # 0xFFu for checkpoint_scene/region → spawn from beginning (no checkpoint)
-        c.append("                        ngpng_scene_runtime_place_respawn(sc, cur_scene, 0xFFu, 0xFFu, &cam_px, &cam_py, &tx, &ty, &spawn_x, &spawn_y);\n")
-        c.append(f"                        {VAR}_CTRL_INIT(s_{n}, spawn_x, spawn_y);\n")
-        c.append(f"                        s_{n}.flags = player_ent_flags;\n")
-        c.append(f"                        ngpng_player_clamp_world(sc, &s_{n}, cam_px, cam_py, player_body_x, player_body_y, player_body_w, player_body_h, player_render_off_x, player_render_off_y, player_frame_w, player_frame_h);\n")
-        c.append(f"                        ngpng_player_clamp_camera(&s_{n}, player_body_x, player_body_y, player_body_w, player_body_h);\n")
-        for p in players[1:]:
-            _n2 = p["name"]
-            c.append(f"                        s_{_n2} = s_{n};\n")
+            c.append("                    /* QUIT — restart current scene from beginning */\n")
+        c.append("                    game_over = 0u; stage_clear = 0u;\n")
+        if has_save:
+            c.append("                    g_game_over_saved = 0u;\n")
+        c.append("                    timer = 0; timer_sec = 0u; timer_tick = 59u;\n")
+        if has_dialogues:
+            c.append("                    ngpng_dialog_abort(&dialog_runner, &dialog_scene);\n")
+            if has_triggers:
+                c.append("                    s_player_input_locked = 0u;\n")
+        c.append("                    sc->exit();\n")
+        if _pause_quit_safe:
+            # Defensive: if pause_quit_scene references a scene that doesn't exist
+            # (typical when the project is renamed or the default "intro" isn't
+            # created), fall back to the current scene instead of breaking the build.
+            c.append(f"#if defined(NGP_SCENE_{_pq_sym}_IDX)\n")
+            c.append(f"                    cur_scene = (u8)NGP_SCENE_{_pq_sym}_IDX;\n")
+            c.append("                    sc = &g_ngp_scenes[cur_scene];\n")
+            c.append("#endif\n")
+        c.append("                    sc->enter();\n")
+        if has_palfx:
+            c.append("                    ngpng_palfx_enter(cur_scene);\n")
+        c.append("                    ngpng_scene_runtime_enter_view(sc, cur_scene, &cam_px, &cam_py, &tx, &ty);\n")
+        # CAM-1: reset cinematic camera state on pause-quit scene change
+        c.append("                    runtime_cam_path_mode   = sc->cam_path_en ? 1u : 0u;\n")
+        c.append("                    runtime_cam_path_idx    = sc->cam_path_idx;\n")
+        c.append("                    runtime_cam_path_speed  = sc->cam_path_speed;\n")
+        c.append("                    runtime_cam_path_loop   = sc->cam_path_loop;\n")
+        c.append("                    runtime_cam_path_freeze = sc->cam_path_freeze_player;\n")
+        c.append("                    ngpng_camera_init_path(sc, runtime_cam_path_idx, &cam_path_state);\n")
+        c.append("                    if (runtime_cam_path_mode == 1u) { cam_px = cam_path_state.cur_x; cam_py = cam_path_state.cur_y;\n")
+        c.append("                        ngpng_apply_camera_constraints(sc, &cam_px, &cam_py);\n")
+        c.append("                        tx = (u16)(cam_px >> 3); ty = (u16)(cam_py >> 3);\n")
+        c.append("                        ngpng_update_plane_scroll(sc, cam_px, cam_py); }\n")
+        if has_mapstream:
+            c.append("#ifdef NGPNG_HAS_MAPSTREAM\n")
+            c.append("                    ngpng_mapstream_load_scene(cur_scene, cam_px, cam_py);\n")
+            c.append("#endif\n")
+        if has_enemy:
+            if has_waves:
+                c.append("                    ngpc_wave_start(&wave_seq, sc->wave_table, sc->wave_table_n);\n")
+                if _has_wave_scroll:
+                    c.append("                    g_wave_scroll_cursor   = 0u;\n")
+                    c.append("                    g_wave_scroll_last_pos = 0;\n")
+                    c.append("                    /* F1: fast-forward past already-passed scroll waves. */\n")
+                    c.append("                    {\n")
+                    c.append("                        u8 _ff_wm = s_ngpng_wave_mode[cur_scene];\n")
+                    c.append("                        if (_ff_wm != 0u && sc->wave_table && sc->wave_table_n > 0u) {\n")
+                    c.append("                            s16 _ff_pos = (_ff_wm == 1u) ? cam_px : cam_py;\n")
+                    c.append("                            while (g_wave_scroll_cursor < sc->wave_table_n && (s16)sc->wave_table[g_wave_scroll_cursor].delay <= _ff_pos) {\n")
+                    c.append("                                g_wave_scroll_cursor = (u8)(g_wave_scroll_cursor + 1u);\n")
+                    c.append("                            }\n")
+                    c.append("                            wave_seq.next = g_wave_scroll_cursor;\n")
+                    c.append("                            g_wave_scroll_last_pos = _ff_pos;\n")
+                    c.append("                        }\n")
+                    c.append("                    }\n")
+            else:
+                c.append("                    next_wave = 0u;\n")
+            if has_wave_rand:
+                c.append("                    ngpng_rwave_enter_scene(sc);\n")
+        if has_shooting:
+            c.append("                    ngpng_player_shots_clear(shots, &player_shots_active, &player_shots_alloc);\n")
+        if has_bullets:
+            c.append("                    ngpng_enemy_bullets_clear(enemy_bullets, &enemy_bullets_active, &enemy_bullets_alloc);\n")
+        c.append(f"                    ngpng_scene_runtime_full_reset(sc, &scene_rt, NGPNG_SCENE_RT_LIVES_START, 1u, 1u, 0u, {'1u' if has_hud else '0u'});\n")
+        if players:
+            n = players[0]["name"]
+            VAR = n.upper()
+            c.append("                    {\n")
+            c.append("                        s16 spawn_x;\n")
+            c.append("                        s16 spawn_y;\n")
+            # 0xFFu for checkpoint_scene/region → spawn from beginning (no checkpoint)
+            c.append("                        ngpng_scene_runtime_place_respawn(sc, cur_scene, 0xFFu, 0xFFu, &cam_px, &cam_py, &tx, &ty, &spawn_x, &spawn_y);\n")
+            c.append(f"                        {VAR}_CTRL_INIT(s_{n}, spawn_x, spawn_y);\n")
+            c.append(f"                        s_{n}.flags = player_ent_flags;\n")
+            c.append(f"                        ngpng_player_clamp_world(sc, &s_{n}, cam_px, cam_py, player_body_x, player_body_y, player_body_w, player_body_h, player_render_off_x, player_render_off_y, player_frame_w, player_frame_h);\n")
+            c.append(f"                        ngpng_player_clamp_camera(&s_{n}, player_body_x, player_body_y, player_body_w, player_body_h);\n")
+            for p in players[1:]:
+                _n2 = p["name"]
+                c.append(f"                        s_{_n2} = s_{n};\n")
+            c.append("                    }\n")
+        c.append("                } else {\n")
+        c.append("                    /* RESUME — restore BG (enter() reloads tiles + map, clears SCR) */\n")
+        c.append("                    g_ngp_scenes[cur_scene].enter();\n")
+        if has_mapstream:
+            c.append("                    ngpng_mapstream_load_scene(cur_scene, cam_px, cam_py);\n")
+        c.append("                }\n")
+    else:
+        # ---- DYNAMIC N-item dispatcher (PAUSE-1 S3.5) -------------------
+        # Items come from project.pause_menu.items[]. Each item picks ONE
+        # of three preset actions; their resolved effects below are kept
+        # intentionally light so the dispatcher stays small in ROM. Heavy
+        # scene-restart semantics (full reset, place_respawn, CTRL_INIT)
+        # are NOT applied here — projects needing that should either stay
+        # on the legacy menu (drop pause_menu.items) or target a separate
+        # "title" scene that starts clean from its own enter() callback.
+        c.append("                /* PAUSE-1 S3.5 dynamic dispatcher — one branch per menu item.\n")
+        c.append("                 * Wrapped in its own block so the C89 var declarations stay\n")
+        c.append("                 * at the start of a block (cc900 rejects mid-block decls). */\n")
+        c.append("                {\n")
+        c.append("                u8 _pme_target = 0xFFu;     /* scene index for goto_* actions */\n")
+        c.append("                u8 _pme_action = 0u;        /* 0=resume, 1=goto_reset, 2=goto_preserve */\n")
+        for _i, _itm in enumerate(_pause_menu_items):
+            _act = str(_itm.get("action") or "resume").strip().lower()
+            _tgt_safe = _itm.get("_target_safe") or ""
+            _tgt_up = _tgt_safe.upper()
+            c.append(f"                if (s_pause_sel == {_i}u) {{\n")
+            if _act == "resume":
+                c.append("                    _pme_action = 0u;\n")
+            elif _act in ("goto_scene_reset", "goto_scene"):
+                c.append("                    _pme_action = 1u;\n")
+                if _tgt_up:
+                    c.append(f"#if defined(NGP_SCENE_{_tgt_up}_IDX)\n")
+                    c.append(f"                    _pme_target = (u8)NGP_SCENE_{_tgt_up}_IDX;\n")
+                    c.append("#endif\n")
+            elif _act == "goto_scene_preserve":
+                c.append("                    _pme_action = 2u;\n")
+                if _tgt_up:
+                    c.append(f"#if defined(NGP_SCENE_{_tgt_up}_IDX)\n")
+                    c.append(f"                    _pme_target = (u8)NGP_SCENE_{_tgt_up}_IDX;\n")
+                    c.append("#endif\n")
+            else:
+                # Unsupported action (save_game / unknown). Treat as resume
+                # so the user does not get stuck in a non-dismissable menu.
+                c.append(f"                    /* TODO: action '{_act}' not yet supported in dynamic dispatcher; treating as resume. */\n")
+                c.append("                    _pme_action = 0u;\n")
+            c.append("                }\n")
+        # Common resume code (also used as fallback when goto target unresolved).
+        c.append("                if (_pme_action == 0u || _pme_target == 0xFFu) {\n")
+        c.append("                    /* RESUME (or unresolved target → fallback to resume) —\n")
+        c.append("                     * restore the paused scene's BG and continue gameplay. */\n")
+        c.append("                    g_ngp_scenes[cur_scene].enter();\n")
+        if has_mapstream:
+            c.append("                    ngpng_mapstream_load_scene(cur_scene, cam_px, cam_py);\n")
+        c.append("                } else {\n")
+        c.append("                    /* GOTO_SCENE_RESET (action 1) or GOTO_SCENE_PRESERVE (action 2).\n")
+        c.append("                     * The transition is inlined here — we cannot use the\n")
+        c.append("                     * ``requested_scene`` mechanism because it is reset to 0xFFu\n")
+        c.append("                     * at the start of the gameplay-update block which runs in\n")
+        c.append("                     * the same frame (s_paused has just been cleared). For\n")
+        c.append("                     * preserve mode we also stash the caller's cam+player so\n")
+        c.append("                     * ``return_to_caller`` can restore them. */\n")
+        c.append("                    if (_pme_action == 2u && s_modal_caller_scene == 0xFFu) {\n")
+        c.append("                        s_modal_caller_scene = cur_scene;\n")
+        c.append("                        s_modal_cam_px = cam_px;\n")
+        c.append("                        s_modal_cam_py = cam_py;\n")
+        for _p in (players or []):
+            _pn = _p["name"]
+            c.append(f"                        s_modal_{_pn}_x = s_{_pn}.x;\n")
+            c.append(f"                        s_modal_{_pn}_y = s_{_pn}.y;\n")
         c.append("                    }\n")
-    c.append("                } else {\n")
-    c.append("                    /* RESUME — restore BG (enter() reloads tiles + map, clears SCR) */\n")
-    c.append("                    g_ngp_scenes[cur_scene].enter();\n")
-    if has_mapstream:
-        c.append("                    ngpng_mapstream_load_scene(cur_scene, cam_px, cam_py);\n")
-    c.append("                }\n")
+        c.append("                    /* Reset frame counters and pre-transition state. */\n")
+        c.append("                    game_over = 0u; stage_clear = 0u;\n")
+        if has_save:
+            c.append("                    g_game_over_saved = 0u;\n")
+        c.append("                    timer = 0; timer_sec = 0u; timer_tick = 59u;\n")
+        if has_dialogues:
+            c.append("                    ngpng_dialog_abort(&dialog_runner, &dialog_scene);\n")
+            if has_triggers:
+                c.append("                    s_player_input_locked = 0u;\n")
+        c.append("                    /* Scene swap: exit → cur_scene = target → enter. */\n")
+        c.append("                    sc->exit();\n")
+        c.append("                    cur_scene = _pme_target;\n")
+        c.append("                    sc = &g_ngp_scenes[cur_scene];\n")
+        c.append("                    sc->enter();\n")
+        if has_palfx:
+            c.append("                    ngpng_palfx_enter(cur_scene);\n")
+        c.append("                    ngpng_scene_runtime_enter_view(sc, cur_scene, &cam_px, &cam_py, &tx, &ty);\n")
+        c.append("                    runtime_cam_path_mode   = sc->cam_path_en ? 1u : 0u;\n")
+        c.append("                    runtime_cam_path_idx    = sc->cam_path_idx;\n")
+        c.append("                    runtime_cam_path_speed  = sc->cam_path_speed;\n")
+        c.append("                    runtime_cam_path_loop   = sc->cam_path_loop;\n")
+        c.append("                    runtime_cam_path_freeze = sc->cam_path_freeze_player;\n")
+        c.append("                    ngpng_camera_init_path(sc, runtime_cam_path_idx, &cam_path_state);\n")
+        c.append("                    if (runtime_cam_path_mode == 1u) { cam_px = cam_path_state.cur_x; cam_py = cam_path_state.cur_y;\n")
+        c.append("                        ngpng_apply_camera_constraints(sc, &cam_px, &cam_py);\n")
+        c.append("                        tx = (u16)(cam_px >> 3); ty = (u16)(cam_py >> 3);\n")
+        c.append("                        ngpng_update_plane_scroll(sc, cam_px, cam_py); }\n")
+        if has_mapstream:
+            c.append("#ifdef NGPNG_HAS_MAPSTREAM\n")
+            c.append("                    ngpng_mapstream_load_scene(cur_scene, cam_px, cam_py);\n")
+            c.append("#endif\n")
+        if has_enemy and has_waves:
+            c.append("                    ngpc_wave_start(&wave_seq, sc->wave_table, sc->wave_table_n);\n")
+        if has_shooting:
+            c.append("                    ngpng_player_shots_clear(shots, &player_shots_active, &player_shots_alloc);\n")
+        if has_bullets:
+            c.append("                    ngpng_enemy_bullets_clear(enemy_bullets, &enemy_bullets_active, &enemy_bullets_alloc);\n")
+        # For RESET-style (action 1): full entity reset + player respawn.
+        # For PRESERVE (action 2): skip these — target scene will run with its
+        # own fresh entity slots (modal is short-lived) and player position is
+        # restored on return_to_caller.
+        c.append("                    if (_pme_action == 1u) {\n")
+        c.append(f"                        ngpng_scene_runtime_full_reset(sc, &scene_rt, NGPNG_SCENE_RT_LIVES_START, 1u, 1u, 0u, {'1u' if has_hud else '0u'});\n")
+        if players:
+            n = players[0]["name"]
+            VAR = n.upper()
+            c.append("                        {\n")
+            c.append("                            s16 spawn_x;\n")
+            c.append("                            s16 spawn_y;\n")
+            c.append("                            ngpng_scene_runtime_place_respawn(sc, cur_scene, 0xFFu, 0xFFu, &cam_px, &cam_py, &tx, &ty, &spawn_x, &spawn_y);\n")
+            c.append(f"                            {VAR}_CTRL_INIT(s_{n}, spawn_x, spawn_y);\n")
+            c.append(f"                            s_{n}.flags = player_ent_flags;\n")
+            c.append(f"                            ngpng_player_clamp_world(sc, &s_{n}, cam_px, cam_py, player_body_x, player_body_y, player_body_w, player_body_h, player_render_off_x, player_render_off_y, player_frame_w, player_frame_h);\n")
+            c.append(f"                            ngpng_player_clamp_camera(&s_{n}, player_body_x, player_body_y, player_body_w, player_body_h);\n")
+            for p in players[1:]:
+                _n2 = p["name"]
+                c.append(f"                            s_{_n2} = s_{n};\n")
+            c.append("                        }\n")
+        c.append("                    }\n")
+        c.append("                }\n")
+        c.append("                }  /* end dynamic dispatcher block */\n")
     # Reset player sprite sentinels so the entity draw loop redraws them next frame
     # (ngpc_sprite_hide_all() left shadow in "hidden" state; without a reset the
-    #  last_x/last_y/last_frame cache prevents ngpc_sprite_set() from being called).
+    #  last_x/last_y/last_frame/last_flags cache prevents ngpc_sprite_set() from
+    #  being called and the sprite stays in its "hidden" shadow for 1+ frame —
+    #  visible as a brief flicker/glitch on QUIT and sometimes RESUME).
     for _p in (players or []):
         _pn = _p["name"]
-        c.append(f"                s_{_pn}_visible = 0u; s_{_pn}_last_x = (s16)-32768; s_{_pn}_last_y = (s16)-32768; s_{_pn}_last_frame = 0xFFu;\n")
+        c.append(f"                s_{_pn}_visible = 0u; s_{_pn}_last_x = (s16)-32768; s_{_pn}_last_y = (s16)-32768; s_{_pn}_last_frame = 0xFFu; s_{_pn}_last_flags = 0xFFu;\n")
         if _p.get("has_layer1"):
-            c.append(f"                s_{_pn}_l1_visible = 0u; s_{_pn}_l1_last_x = (s16)-32768; s_{_pn}_l1_last_y = (s16)-32768; s_{_pn}_l1_last_frame = 0xFFu;\n")
+            c.append(f"                s_{_pn}_l1_visible = 0u; s_{_pn}_l1_last_x = (s16)-32768; s_{_pn}_l1_last_y = (s16)-32768; s_{_pn}_l1_last_frame = 0xFFu; s_{_pn}_l1_last_flags = 0xFFu;\n")
     c.append("            }\n")
     c.append("            if (ngpc_pad_pressed & PAD_OPTION) {\n")
     c.append("                /* OPTION again = resume shortcut */\n")
@@ -6387,12 +6677,12 @@ def write_autorun_main_c(
     c.append("                g_ngp_scenes[cur_scene].enter();\n")
     if has_mapstream:
         c.append("                ngpng_mapstream_load_scene(cur_scene, cam_px, cam_py);\n")
-    # Same sentinel reset for OPTION shortcut
+    # Same sentinel reset for OPTION shortcut (last_flags included — see PAD_A path).
     for _p in (players or []):
         _pn = _p["name"]
-        c.append(f"                s_{_pn}_visible = 0u; s_{_pn}_last_x = (s16)-32768; s_{_pn}_last_y = (s16)-32768; s_{_pn}_last_frame = 0xFFu;\n")
+        c.append(f"                s_{_pn}_visible = 0u; s_{_pn}_last_x = (s16)-32768; s_{_pn}_last_y = (s16)-32768; s_{_pn}_last_frame = 0xFFu; s_{_pn}_last_flags = 0xFFu;\n")
         if _p.get("has_layer1"):
-            c.append(f"                s_{_pn}_l1_visible = 0u; s_{_pn}_l1_last_x = (s16)-32768; s_{_pn}_l1_last_y = (s16)-32768; s_{_pn}_l1_last_frame = 0xFFu;\n")
+            c.append(f"                s_{_pn}_l1_visible = 0u; s_{_pn}_l1_last_x = (s16)-32768; s_{_pn}_l1_last_y = (s16)-32768; s_{_pn}_l1_last_frame = 0xFFu; s_{_pn}_l1_last_flags = 0xFFu;\n")
     c.append("            }\n")
     c.append("            ngpc_pad_held = 0u; ngpc_pad_pressed = 0u;\n")
     c.append("        }\n")
@@ -6541,7 +6831,10 @@ def write_autorun_main_c(
         c.append("        ngpng_props_update(sc, props, prop_count, cam_px, cam_py);\n")
     if players:
         c.append("        /* ---- Player actor update ---- */\n")
-        c.append("        if (!game_over && !stage_clear && respawn_timer == 0u) {\n")
+        c.append("        /* PAUSE-1 S3.5b: gate by per-scene has_player so scenes without\n")
+        c.append("         * a player sprite (title/menu/cutscene) don't keep the global\n")
+        c.append("         * player struct moving + responding to input behind the scenes. */\n")
+        c.append("        if (g_scene_has_player[cur_scene] && !game_over && !stage_clear && respawn_timer == 0u) {\n")
         n = players[0]["name"]
         VAR = n.upper()
         # Build list of scene IDX conditions where a topdown player form is active.
@@ -7604,7 +7897,10 @@ def write_autorun_main_c(
             c.append("                checkpoint_scene, checkpoint_region);\n")
             c.append("            g_game_over_saved = 1u;\n")
             c.append("        }\n")
-        c.append("        if (player_hp > 0u && !(player_invul > 0u && (player_invul & 2u))) {\n")
+        c.append("        /* PAUSE-1 S3.5b: gate the global player draw by per-scene has_player.\n")
+        c.append("         * Scenes with no player sprite (title/menu/cutscene) skip the draw\n")
+        c.append("         * so the global s_<player> struct doesn't render a ghost. */\n")
+        c.append("        if (g_scene_has_player[cur_scene] && player_hp > 0u && !(player_invul > 0u && (player_invul & 2u))) {\n")
         c.append("            if (player_form_mode) {\n")
         c.append(f"                u8 player_render_idx;\n")
         c.append(f"                if (player_form < {len(players)}u) player_render_idx = player_form;\n")
@@ -8254,6 +8550,31 @@ def write_autorun_main_c(
         c.append("                    break;\n")
         c.append("                }\n")
         c.append("            }\n")
+        c.append("            /* PAUSE-1: goto_scene_preserve — snapshot cam + player, switch\n")
+        c.append("             * to target scene. The return_to_caller action below pops the\n")
+        c.append("             * snapshot. Refused if a modal is already active (N=1 stack). */\n")
+        c.append("            if (t->action == TRIG_ACT_GOTO_SCENE_PRESERVE) {\n")
+        c.append("                u8 next = t->a0;\n")
+        c.append("                if (next < (u8)NGP_SCENE_COUNT && next != cur_scene\n")
+        c.append("                        && s_modal_caller_scene == 0xFFu) {\n")
+        c.append("                    s_modal_caller_scene = cur_scene;\n")
+        c.append("                    s_modal_cam_px = cam_px;\n")
+        c.append("                    s_modal_cam_py = cam_py;\n")
+        for _p in (players or []):
+            _pn = _p["name"]
+            c.append(f"                    s_modal_{_pn}_x = s_{_pn}.x;\n")
+            c.append(f"                    s_modal_{_pn}_y = s_{_pn}.y;\n")
+        c.append("                    requested_scene = next;\n")
+        c.append("                    break;\n")
+        c.append("                }\n")
+        c.append("            }\n")
+        c.append("            if (t->action == TRIG_ACT_RETURN_TO_CALLER) {\n")
+        c.append("                if (s_modal_caller_scene != 0xFFu) {\n")
+        c.append("                    requested_scene = s_modal_caller_scene;\n")
+        c.append("                    s_modal_returning = 1u;\n")
+        c.append("                    break;\n")
+        c.append("                }\n")
+        c.append("            }\n")
         c.append("            if (t->action == TRIG_ACT_WARP_TO) {\n")
         c.append("                u8 next = t->a0;\n")
         c.append("                if (next < (u8)NGP_SCENE_COUNT && next != cur_scene) {\n")
@@ -8402,7 +8723,111 @@ def write_autorun_main_c(
             c.append("                }\n")
             c.append("            }\n")
             c.append("#endif\n")
+        # DEAD-UI-1 PoC: emit_event handler (action ID 0). Stashes the event id;
+        # the dispatcher loop right after the trigger loop walks g_custom_events
+        # and executes matching rows. Last-write-wins on _pending_event when
+        # several emit_event fire in the same frame — that's an acceptable
+        # simplification for the PoC and matches how dialogs/triggers tend to
+        # fire one named event at a time.
+        c.append("            if (t->action == TRIG_ACT_EMIT_EVENT) {\n")
+        c.append("                _pending_event = t->a0;\n")
+        c.append("                _has_pending_event = 1u;\n")
+        c.append("            }\n")
         c.append("        }\n")
+    # DEAD-UI-1 PoC: custom events dispatcher. Walks g_custom_events[] when a
+    # pending event was set by an emit_event trigger this frame, and dispatches
+    # a curated subset of actions inline. Only emitted when the project has
+    # custom events declared (CUSTOM_EVENT_COUNT > 0) — otherwise the loop is
+    # dead code so we skip it entirely.
+    c.append("        /* DEAD-UI-1: custom events bus (PoC). Walks g_custom_events[]\n")
+    c.append("         * when an emit_event trigger fired this frame. Action subset is\n")
+    c.append("         * conservative — audio, flag/variable mutation, scene transition.\n")
+    c.append("         * Other actions are silently ignored (TODO: expand subset). */\n")
+    c.append("        if (_has_pending_event) {\n")
+    c.append("#if defined(CUSTOM_EVENT_COUNT) && (CUSTOM_EVENT_COUNT > 0)\n")
+    c.append("            u8 _cev_i;\n")
+    c.append("            u8 _cev_evt = _pending_event;\n")
+    c.append("            for (_cev_i = 0u; _cev_i < (u8)CUSTOM_EVENT_COUNT; ++_cev_i) {\n")
+    c.append("                const NgpngEventAction *_ev = &g_custom_events[_cev_i];\n")
+    c.append("                u8 _ev_act = _ev->action;\n")
+    c.append("                u8 _ev_a0  = _ev->a0;\n")
+    c.append("                u8 _ev_a1  = _ev->a1;\n")
+    c.append("                (void)_ev_a1;\n")
+    c.append("                if (_ev->event_id != _cev_evt) continue;\n")
+    c.append("                /* --- Audio (gated by NGP_ENABLE_SOUND) --- */\n")
+    c.append("#if defined(NGP_ENABLE_SOUND) && (NGP_ENABLE_SOUND)\n")
+    c.append("                if (_ev_act == TRIG_ACT_PLAY_SFX) { Sfx_Play(_ev_a0); }\n")
+    c.append("                else if (_ev_act == TRIG_ACT_FADE_BGM) { Bgm_FadeOut(_ev_a0); }\n")
+    c.append("                else if (_ev_act == TRIG_ACT_STOP_BGM) { Bgm_Stop(); }\n")
+    c.append("                else if (_ev_act == TRIG_ACT_START_BGM) {\n")
+    c.append("#if (NGPNG_SONG_COUNT > 0)\n")
+    c.append("                    if (_ev_a0 < (u8)NGPNG_SONG_COUNT) NgpcProject_BgmStartLoop4ByIndex(_ev_a0);\n")
+    c.append("#endif\n")
+    c.append("                }\n")
+    c.append("#endif\n")
+    c.append("                /* --- Score / health / lives (gameplay vars) --- */\n")
+    c.append("                if (_ev_act == TRIG_ACT_ADD_SCORE) { score = (u16)(score + ((u16)_ev_a0 * 10u)); }\n")
+    c.append("                /* --- Screen effects --- */\n")
+    c.append("                if (_ev_act == TRIG_ACT_SCREEN_SHAKE) {\n")
+    c.append("                    shake_amp = _ev_a0 ? _ev_a0 : 2u;\n")
+    c.append("                    shake_timer = _ev_a1 ? _ev_a1 : 8u;\n")
+    c.append("                }\n")
+    if _has_death_fade:
+        c.append("                if (_ev_act == TRIG_ACT_FADE_OUT) {\n")
+        c.append(f"                    {_df_fn_out}(GFX_SCR1, 0xFFu, {_df_speed}u);\n")
+        c.append(f"                    {_df_fn_out}(GFX_SCR2, 0xFFu, {_df_speed}u);\n")
+        c.append(f"                    {_df_fn_out}(GFX_SPR,  0xFFu, {_df_speed}u);\n")
+        c.append("                }\n")
+        c.append("                if (_ev_act == TRIG_ACT_FADE_IN) {\n")
+        c.append("                    ngpc_palfx_stop_all();\n")
+        c.append("                }\n")
+    if has_save:
+        c.append("                /* --- Save (gated by save support) --- */\n")
+        c.append("                if (_ev_act == TRIG_ACT_SAVE_GAME) {\n")
+        c.append("                    s_save_dirty = 1u;\n")
+        c.append("                    ngpng_save_flush(cur_scene, checkpoint_scene, checkpoint_region);\n")
+        c.append("                }\n")
+        c.append("                if (_ev_act == TRIG_ACT_SET_CHECKPOINT) {\n")
+        c.append("                    checkpoint_scene = cur_scene;\n")
+        c.append("                    checkpoint_region = (_ev_a0 < (u8)NGPNG_AUTORUN_MAX_REG) ? _ev_a0 : 0xFFu;\n")
+        c.append("                }\n")
+    c.append("                /* --- Warp variant: same as goto_scene but carries a1 = spawn region --- */\n")
+    c.append("                if (_ev_act == TRIG_ACT_WARP_TO) {\n")
+    c.append("                    if (_ev_a0 < (u8)NGP_SCENE_COUNT && _ev_a0 != cur_scene) {\n")
+    c.append("                        requested_scene = _ev_a0;\n")
+    c.append("                        requested_spawn = _ev_a1;\n")
+    c.append("                    }\n")
+    c.append("                }\n")
+    c.append("                /* --- Scene transitions (delegate to requested_scene mechanism) --- */\n")
+    c.append("                if (_ev_act == TRIG_ACT_GOTO_SCENE) {\n")
+    c.append("                    if (_ev_a0 < (u8)NGP_SCENE_COUNT && _ev_a0 != cur_scene) requested_scene = _ev_a0;\n")
+    c.append("                }\n")
+    c.append("                if (_ev_act == TRIG_ACT_GOTO_SCENE_PRESERVE) {\n")
+    c.append("                    if (_ev_a0 < (u8)NGP_SCENE_COUNT && _ev_a0 != cur_scene\n")
+    c.append("                            && s_modal_caller_scene == 0xFFu) {\n")
+    c.append("                        s_modal_caller_scene = cur_scene;\n")
+    c.append("                        s_modal_cam_px = cam_px;\n")
+    c.append("                        s_modal_cam_py = cam_py;\n")
+    for _p in (players or []):
+        _pn = _p["name"]
+        c.append(f"                        s_modal_{_pn}_x = s_{_pn}.x;\n")
+        c.append(f"                        s_modal_{_pn}_y = s_{_pn}.y;\n")
+    c.append("                        requested_scene = _ev_a0;\n")
+    c.append("                    }\n")
+    c.append("                }\n")
+    c.append("                if (_ev_act == TRIG_ACT_RETURN_TO_CALLER) {\n")
+    c.append("                    if (s_modal_caller_scene != 0xFFu) {\n")
+    c.append("                        requested_scene = s_modal_caller_scene;\n")
+    c.append("                        s_modal_returning = 1u;\n")
+    c.append("                    }\n")
+    c.append("                }\n")
+    c.append("                /* TODO: extend subset (set_flag, set_variable, screen_shake,\n")
+    c.append("                 * fade_out, fade_in, save_game, etc.) — see roadmap DEAD-UI-1. */\n")
+    c.append("            }\n")
+    c.append("#endif /* CUSTOM_EVENT_COUNT > 0 */\n")
+    c.append("            _has_pending_event = 0u;\n")
+    c.append("            _pending_event = 0u;\n")
+    c.append("        }\n")
     c.append("        if (!scene_changed && requested_scene < (u8)NGP_SCENE_COUNT && requested_scene != cur_scene) {\n")
     if has_dialogues:
         c.append("            ngpng_dialog_abort(&dialog_runner, &dialog_scene);\n")
@@ -8534,6 +8959,27 @@ def write_autorun_main_c(
     c.append("            print_scene_line(cur_scene);\n")
     c.append("#endif\n")
     c.append("            scene_changed = 1;\n")
+    c.append("            /* PAUSE-1: return_to_caller post-transition restore. The scene\n")
+    c.append("             * change above ran enter()+mapstream which reset cam + player to\n")
+    c.append("             * the caller scene's defaults; override now with the snapshot so\n")
+    c.append("             * the player appears at their pre-modal position. */\n")
+    c.append("            if (s_modal_returning) {\n")
+    c.append("                cam_px = s_modal_cam_px;\n")
+    c.append("                cam_py = s_modal_cam_py;\n")
+    c.append("                ngpng_apply_camera_constraints(sc, &cam_px, &cam_py);\n")
+    c.append("                tx = (u16)(cam_px >> 3); ty = (u16)(cam_py >> 3);\n")
+    c.append("                ngpng_update_plane_scroll(sc, cam_px, cam_py);\n")
+    for _p in (players or []):
+        _pn = _p["name"]
+        c.append(f"                s_{_pn}.x = s_modal_{_pn}_x;\n")
+        c.append(f"                s_{_pn}.y = s_modal_{_pn}_y;\n")
+    if has_mapstream:
+        c.append("#ifdef NGPNG_HAS_MAPSTREAM\n")
+        c.append("                ngpng_mapstream_load_scene(cur_scene, cam_px, cam_py);\n")
+        c.append("#endif\n")
+    c.append("                s_modal_caller_scene = 0xFFu;\n")
+    c.append("                s_modal_returning = 0u;\n")
+    c.append("            }\n")
     c.append("        }\n")
     c.append("        if (!scene_changed) {\n")
     if has_triggers:

@@ -313,6 +313,25 @@ MECHANICS_REGISTRY: list[dict] = [
         ],
         "keywords": ["procgen", "procedural", "random", "dungeon", "cave", "roguelike", "level gen"],
     },
+    # --- Feedback / UI ---
+    {
+        "id":              "pause_menu",
+        "label":           "Menu pause",
+        "description":     ("Menu pause configurable (PAD_OPTION ouvre / D-pad navigue / A confirme). "
+                            "Items personnalisables : RESUME / GOTO_SCENE_PRESERVE (inventaire, options — retour à la position) / "
+                            "GOTO_SCENE_RESET (titre, retry — full reset). "
+                            "Quand désactivé ici, OPTION devient libre pour le jeu. Désactivable aussi par scène (intro, cutscene, …) via la case « Menu pause actif sur cette scène » dans le panneau Scene."),
+        "default_enabled": True,  # legacy compat: hardcoded RESUME/QUIT menu existed before
+        "category":        "feedback",
+        "inline_config":   "pause_menu",
+        "config_locations": [
+            ("Mechanics → Menu pause → éditeur d'items (juste sous la description)",
+             "Édite la liste des items (label + action + scène cible). Default = RESUME / QUIT historique si rien défini."),
+            ("Scene → panneau droit → case « Menu pause actif sur cette scène »",
+             "Décocher sur intro / main menu / cutscene / écran modal pour libérer OPTION sur ces scènes."),
+        ],
+        "keywords": ["pause", "menu", "option", "inventory", "title", "quit", "resume", "modal"],
+    },
 ]
 
 

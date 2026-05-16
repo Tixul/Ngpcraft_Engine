@@ -58,7 +58,9 @@ u8 ngpc_mspr_draw(u8 spr_start, s16 x, s16 y,
         ngpc_sprite_set(spr_start + i,
                         (u8)((u16)px & 0xFF),
                         (u8)((u16)py & 0xFF),
-                        p->tile, p->pal, part_flags);
+                        (u16)(*def->vram_tile_base + p->tile),
+                        (u8)(*def->vram_pal_base + p->pal),
+                        part_flags);
     }
 
     return def->count;

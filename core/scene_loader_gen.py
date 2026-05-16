@@ -642,11 +642,122 @@ def write_scene_loader_h(
     lines.append("}\n")
     lines.append("#endif\n\n")
 
+    # ---- Per-scene sprite VRAM + palette layout (option-B relative refs) ----
+    # Each <cid>_tile_base (u16) and <cid>_pal_base (u8) are RAM variables
+    # (see ngpc_sprite_export.py output). The renderer reads
+    # `*def->vram_tile_base + part.tile` and `*def->vram_pal_base + part.pal`
+    # so the same sprite definition can be loaded at different VRAM and
+    # palette slots in different scenes. We pack cumulatively from each
+    # scene's anchor — 256 tile slots + 16 palette slots are *per-scene*
+    # budgets, not project-wide.
+    bundle_cfg_sl = (project_data.get("bundle") or {}) if isinstance(project_data, dict) else {}
+    try:
+        spr_anchor = int(scene.get("spr_tile_base", bundle_cfg_sl.get("tile_base", 256)))
+    except Exception:
+        spr_anchor = int(bundle_cfg_sl.get("tile_base", 256) or 256)
+    if int(_tile_cursor_final) > spr_anchor:
+        # Bump above any tilemap that already occupies the sprite VRAM area
+        # (mirrors headless_export.export_scene's auto-bump).
+        spr_anchor = int(_tile_cursor_final)
+    try:
+        pal_anchor = int(scene.get("spr_pal_base", bundle_cfg_sl.get("pal_base", 0)))
+    except Exception:
+        pal_anchor = int(bundle_cfg_sl.get("pal_base", 0) or 0)
+
+    sprite_runtime_tile_bases: dict[str, int] = {}
+    sprite_runtime_pal_bases: dict[str, int] = {}
+    _spr_cursor = int(spr_anchor)
+    _pal_cursor = int(pal_anchor)
+    _fixed_pal_slots: dict[str, int] = {}  # share palette slot across sprites with same fixed_palette
+    for _idx, _cid in enumerate(sprite_cids):
+        _nm = sprite_names[_idx]
+        _safe_nm = re.sub(r"[^a-zA-Z0-9_]+", "_", _nm).strip("_")
+        sprite_runtime_tile_bases[_cid] = _spr_cursor
+
+        # Resolve the original scene["sprites"] entry for this name to
+        # honour `fixed_palette` (shared palette slot) and to fall back
+        # on sprite_tile_estimate if the _mspr.c is missing.
+        _spr_entry = next(
+            (s for s in (scene.get("sprites") or [])
+             if isinstance(s, dict) and _scene_sprite_name(s) == _nm),
+            None,
+        )
+
+        # ---- Tile count (parse exported _mspr.c, or estimate fallback) ----
+        _count_tiles = 0
+        _c_path = Path(export_dir) / f"{_safe_nm}_mspr.c"
+        if _c_path.is_file():
+            try:
+                _n = _parse_tilemap_tile_slots_from_c(
+                    _c_path.read_text(encoding="utf-8", errors="replace"),
+                    _safe_nm,
+                )
+                if _n is not None:
+                    _count_tiles = int(_n)
+            except Exception:
+                pass
+        if _count_tiles == 0 and _spr_entry is not None:
+            try:
+                from core.project_model import sprite_tile_estimate as _ste
+                _count_tiles = int(_ste(_spr_entry))
+            except Exception:
+                _count_tiles = 0
+        _spr_cursor += int(_count_tiles)
+
+        # ---- Palette slot (cumulative, with fixed_palette dedup) ----------
+        # Parse palette_count from _mspr.c so multi-palette sprites (rare,
+        # auto-split layer1) advance the cursor by the correct number of slots.
+        _pal_count = 1
+        if _c_path.is_file():
+            try:
+                _txt = _c_path.read_text(encoding="utf-8", errors="replace")
+                _m = re.search(
+                    rf"\bconst\s+u8\s+{re.escape(_safe_nm)}_palette_count\s*=\s*(\d+)u\s*;",
+                    _txt,
+                )
+                if _m:
+                    _pal_count = max(1, int(_m.group(1)))
+            except Exception:
+                pass
+        _fixed = ""
+        if _spr_entry is not None:
+            _fixed = str(_spr_entry.get("fixed_palette") or "").strip()
+        if _fixed and _fixed in _fixed_pal_slots and _pal_count == 1:
+            # Auto-share palette slot for sprites with identical fixed_palette
+            # (mirrors headless_export.export_scene's pal sharing).
+            sprite_runtime_pal_bases[_cid] = _fixed_pal_slots[_fixed]
+        else:
+            sprite_runtime_pal_bases[_cid] = _pal_cursor
+            if _fixed and _pal_count == 1:
+                _fixed_pal_slots[_fixed] = _pal_cursor
+            _pal_cursor += _pal_count
+
+    if _spr_cursor > 512 and warnings_out is not None:
+        scene_label = str(scene.get("label") or scene.get("id") or safe or "scene")
+        warnings_out.append(
+            f"[{scene_label}] scene sprite VRAM overflow: total {_spr_cursor} tiles "
+            f"(max 512). Reduce sprite count or sizes for this scene."
+        )
+    if _pal_cursor > 16 and warnings_out is not None:
+        scene_label = str(scene.get("label") or scene.get("id") or safe or "scene")
+        warnings_out.append(
+            f"[{scene_label}] scene sprite palette overflow: total {_pal_cursor} palettes "
+            f"(max 16). Reduce sprite palette count or use fixed_palette to share."
+        )
+
     lines.append(f"static void scene_{safe}_load_sprites(void)\n{{\n")
     if not sprite_names:
         lines.append("    /* (no sprites) */\n")
     else:
         for cid in sprite_cids:  # C-safe identifiers (hyphens replaced by underscores)
+            _tb = int(sprite_runtime_tile_bases.get(cid, spr_anchor))
+            _pb = int(sprite_runtime_pal_bases.get(cid, pal_anchor))
+            # Write the per-scene runtime VRAM + palette offsets BEFORE
+            # loading tiles/palettes so the renderer (which reads
+            # *def->vram_tile_base / *def->vram_pal_base) picks up this
+            # scene's allocation.
+            lines.append(f"    {cid}_tile_base = (u16){_tb}u;\n")
+            lines.append(f"    {cid}_pal_base = (u8){_pb}u;\n")
             lines.append(f"    ngpng_load_sprite_palettes({cid}_palettes, {cid}_palette_count, {cid}_pal_base);\n")
             lines.append(f"    ngpc_gfx_load_tiles_at({cid}_tiles, {cid}_tiles_count, {cid}_tile_base);\n")
     lines.append("}\n\n")

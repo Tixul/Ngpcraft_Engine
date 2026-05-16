@@ -22,21 +22,51 @@
 /* Maximum parts (8x8 sprites) per metasprite. */
 #define MSPR_MAX_PARTS  16
 
-/* A single part of a metasprite definition. */
+/* A single part of a metasprite definition.
+ *
+ * IMPORTANT — relative tile/palette indexing
+ * -------------------------------------------
+ * Both `tile` AND `pal` are *relative* indices, NOT absolute VRAM slots.
+ * The renderer resolves the final VRAM tile as
+ * `*def->vram_tile_base + p->tile`, and the final palette slot as
+ * `*def->vram_pal_base + p->pal`. This lets a single sprite definition
+ * live at different VRAM offsets and at different palette slots in
+ * different scenes — each scene's loader writes its own values into the
+ * sprite's `<name>_tile_base` and `<name>_pal_base` RAM variables before
+ * drawing.
+ */
 typedef struct {
     s8  ox;         /* X offset from metasprite origin (signed) */
     s8  oy;         /* Y offset from metasprite origin (signed) */
-    u16 tile;       /* Tile index (0-511) */
-    u8  pal;        /* Palette number (0-15) */
+    u16 tile;       /* RELATIVE tile index within sprite (0..tiles_count/8 - 1) */
+    u8  pal;        /* RELATIVE palette offset within sprite (0..palette_count - 1) */
     u8  flags;      /* Per-part flags (SPR_HFLIP etc, combined with group flags) */
 } MsprPart;
 
-/* A metasprite definition (const, stored in ROM). */
+/* A metasprite definition (const, stored in ROM).
+ *
+ * `vram_tile_base` / `vram_pal_base` point to the owning sprite's
+ * `<name>_tile_base` / `<name>_pal_base` RAM variables. Renderer reads
+ * `*def->vram_tile_base + part.tile` and `*def->vram_pal_base + part.pal`
+ * to get absolute VRAM/palette slots. The variables themselves are
+ * written by `scene_<x>_load_sprites()` so each scene can pack sprite
+ * VRAM and palette slots independently (256 tile-slot + 16 palette-slot
+ * budget *per scene*, not project-wide).
+ */
 typedef struct {
-    u8       count;                 /* Number of 8x8 parts */
-    u8       width;                 /* Bounding box width in pixels (for flip calc) */
-    u8       height;                /* Bounding box height in pixels (for flip calc) */
-    MsprPart parts[MSPR_MAX_PARTS]; /* Part definitions */
+    u8        count;                 /* Number of 8x8 parts */
+    u8        width;                 /* Bounding box width in pixels (for flip calc) */
+    u8        height;                /* Bounding box height in pixels (for flip calc) */
+    /* NOTE: non-const pointers. cc900 (THC1-Error-233 "Illegal initialization")
+     * refuses ``const u16 *`` initializer from address of a non-const u16 var
+     * inside a ``const NgpcMetasprite`` table, even though the standard C
+     * promotion is valid. The pointed-to vars (<name>_tile_base / _pal_base)
+     * are mutated by scene_load to rebase the sprite per scene anyway, so they
+     * are genuinely non-const at runtime — the const-correctness here was
+     * aspirational only. */
+    u16 *vram_tile_base;             /* &<name>_tile_base (per-scene VRAM offset) */
+    u8  *vram_pal_base;              /* &<name>_pal_base  (per-scene palette offset) */
+    MsprPart  parts[MSPR_MAX_PARTS]; /* Part definitions */
 } NgpcMetasprite;
 
 /* A metasprite animation frame table entry. */

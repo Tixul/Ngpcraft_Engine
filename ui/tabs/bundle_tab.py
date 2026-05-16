@@ -223,7 +223,8 @@ class BundleTab(ProjectPathMixin, QWidget):
 
     def _save_and_notify(self) -> None:
         """Persist project data and broadcast the scene change to other tabs."""
-        self._save_and_notify()
+        self._on_save_fn()
+        self._emit_scene_changed()
 
     # ------------------------------------------------------------------
     # UI construction

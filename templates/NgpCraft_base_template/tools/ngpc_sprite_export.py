@@ -337,15 +337,22 @@ def format_c_source(
     lines.extend(_fmt_u16_rows(pal_words))
     lines.append("};")
     lines.append("")
-    lines.append("const u8 %s_pal_base = %du;" % (name, pal_base))
-    lines.append("")
-    lines.append("const u16 %s_tile_base = %du;" % (name, tile_base))
+    # Per-scene mutable VRAM/palette bases. Each scene's load_sprites()
+    # writes the actual VRAM slot + palette slot before the first draw —
+    # see scene_loader_gen. `MsprPart.tile`/`MsprPart.pal` are relative
+    # offsets (0..N-1); the renderer adds these variables at draw time.
+    # Init values are the export-time bases, used only as a fallback if
+    # the renderer runs before any load_sprites().
+    lines.append("u16 %s_tile_base = %du;" % (name, tile_base))
+    lines.append("u8 %s_pal_base = %du;" % (name, pal_base))
     lines.append("")
 
     for fi in range(frame_count):
         parts = frame_parts[fi]
         lines.append("const NgpcMetasprite %s_frame_%d = {" % (name, fi))
         lines.append("    %du, %du, %du," % (len(parts), frame_w, frame_h))
+        lines.append("    &%s_tile_base," % name)
+        lines.append("    &%s_pal_base," % name)
         lines.append("    {")
         if not parts:
             lines.append("        { 0, 0, 0, 0, 0 }")
@@ -373,6 +380,8 @@ def format_c_source(
             parts = layer1_frame_parts[fi]
             lines.append("const NgpcMetasprite %s_layer1_frame_%d = {" % (name, fi))
             lines.append("    %du, %du, %du," % (len(parts), frame_w, frame_h))
+            lines.append("    &%s_tile_base," % name)
+            lines.append("    &%s_pal_base," % name)
             lines.append("    {")
             if not parts:
                 lines.append("        { 0, 0, 0, 0, 0 }")
@@ -412,8 +421,9 @@ def format_c_header(name: str, frame_count: int, has_layer1: bool = False) -> st
     lines.append("")
     lines.append("extern const u8 %s_palette_count;" % name)
     lines.append("extern const u16 NGP_FAR %s_palettes[];" % name)
-    lines.append("extern const u8 %s_pal_base;" % name)
-    lines.append("extern const u16 %s_tile_base;" % name)
+    lines.append("/* Mutable: both bases written by scene_<x>_load_sprites() per-scene. */")
+    lines.append("extern u16 %s_tile_base;" % name)
+    lines.append("extern u8 %s_pal_base;" % name)
     lines.append("")
     for fi in range(frame_count):
         lines.append("extern const NgpcMetasprite %s_frame_%d;" % (name, fi))
@@ -556,12 +566,17 @@ def main() -> int:
                     unique_tiles.append(words)
                     tile_to_index[words] = tile_idx
 
-            final_tile_id = args.tile_base + tile_idx
-            if final_tile_id > 511:
-                raise ValueError("Tile index overflow (>511). Reduce tiles or tile-base.")
+            # MsprPart.tile and MsprPart.pal are RELATIVE indices (0..N-1)
+            # within the sprite's tile/palette sets. The renderer adds the
+            # sprite's runtime tile_base + pal_base variables at draw time,
+            # letting each scene place the same sprite at a different VRAM
+            # offset AND a different palette slot. Overflow is now checked
+            # by the scene loader (per-scene allocation), not here.
+            if tile_idx > 511:
+                raise ValueError("Sprite tile count overflow (>511). Reduce tiles.")
 
             frame_parts[meta["frame"]].append(
-                (meta["ox"], meta["oy"], final_tile_id, args.pal_base + pal_id)
+                (meta["ox"], meta["oy"], tile_idx, pal_id)
             )
 
         for fi, parts in enumerate(frame_parts):
@@ -581,17 +596,19 @@ def main() -> int:
     else:
         base_name = sanitize_c_identifier(os.path.splitext(os.path.basename(args.input))[0])
 
-    # When --layer2 produced a second palette, split frame_parts into base (pal 0)
-    # and overlay (pal 1+) so the engine autorun can render each layer separately.
+    # When --layer2 produced a second palette, split frame_parts into base
+    # (relative pal 0 = the sprite's first palette) and overlay (relative
+    # pal 1+) so the engine autorun can render each layer separately.
+    # MsprPart.pal is now relative — base layer == pid 0, overlay == pid != 0.
     layer1_frame_parts = None
     base_frame_parts = frame_parts
     if args.layer2 and len(palette_colors) > 1:
         base_frame_parts = [
-            [(ox, oy, tid, pid) for (ox, oy, tid, pid) in parts if pid == args.pal_base]
+            [(ox, oy, tid, pid) for (ox, oy, tid, pid) in parts if pid == 0]
             for parts in frame_parts
         ]
         layer1_parts = [
-            [(ox, oy, tid, pid) for (ox, oy, tid, pid) in parts if pid != args.pal_base]
+            [(ox, oy, tid, pid) for (ox, oy, tid, pid) in parts if pid != 0]
             for parts in frame_parts
         ]
         # Only emit layer1 if at least one frame has overlay tiles

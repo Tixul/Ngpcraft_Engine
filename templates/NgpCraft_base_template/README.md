@@ -755,15 +755,25 @@ Group-level `SPR_HFLIP`/`SPR_VFLIP` automatically swaps quad layout and toggles
 per-part flips. No need for separate left/right sprite definitions.
 
 ```c
-// Define a 16x16 character (4 parts)
+// Define a 16x16 character (4 parts).
+// MsprPart.tile and MsprPart.pal are RELATIVE indices within this
+// sprite's tile/palette sets. The renderer adds *def->vram_tile_base and
+// *def->vram_pal_base at draw time, so the same definition can be loaded
+// at different VRAM offsets AND different palette slots in different
+// scenes. Both refs must point to RAM variables (typically
+// `<name>_tile_base` and `<name>_pal_base` emitted by ngpc_sprite_export.py).
+u16 player_idle_tile_base = 256u;  /* written by scene_load_sprites() */
+u8  player_idle_pal_base  = 0u;    /* written by scene_load_sprites() */
 const NgpcMetasprite player_idle = {
     4,          /* count */
     16, 16,     /* width, height (for flip calculation) */
+    &player_idle_tile_base,
+    &player_idle_pal_base,
     {
-        { 0, 0, 100, 0, SPR_FRONT },   /* top-left     */
-        { 8, 0, 101, 0, SPR_FRONT },   /* top-right    */
-        { 0, 8, 102, 0, SPR_FRONT },   /* bottom-left  */
-        { 8, 8, 103, 0, SPR_FRONT },   /* bottom-right */
+        { 0, 0, 0, 0, SPR_FRONT },   /* top-left     (rel tile 0, rel pal 0) */
+        { 8, 0, 1, 0, SPR_FRONT },   /* top-right    (rel tile 1, rel pal 0) */
+        { 0, 8, 2, 0, SPR_FRONT },   /* bottom-left  (rel tile 2, rel pal 0) */
+        { 8, 8, 3, 0, SPR_FRONT },   /* bottom-right (rel tile 3, rel pal 0) */
     }
 };
 

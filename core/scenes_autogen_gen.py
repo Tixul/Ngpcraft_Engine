@@ -59,7 +59,39 @@ def write_scenes_autogen(*, project_data: dict, export_dir: Path) -> tuple[Path 
         if not (scene_h.exists() and level_h.exists()):
             skipped.append(label)
             continue
-        entries.append({"label": label, "safe": safe})
+        # PAUSE-1 S3: per-scene pause_menu_enabled (default True for back-compat).
+        # The autorun pause toggle is gated by this at runtime via the
+        # g_scene_pause_menu_en[] array emitted at the end of this file.
+        # Scenes that opt out (intro/menu/cutscene) get OPTION back.
+        # Read priority: scene.level_rules.pause_menu_enabled (where the UI
+        # writes it as of S4) > scene.pause_menu_enabled (legacy top-level)
+        # > True (default for back-compat).
+        _lvl_rules = s.get("level_rules") if isinstance(s.get("level_rules"), dict) else {}
+        if "pause_menu_enabled" in _lvl_rules:
+            _pme = _lvl_rules["pause_menu_enabled"]
+        else:
+            _pme = s.get("pause_menu_enabled", True)
+        if not isinstance(_pme, bool):
+            _pme = bool(_pme) if _pme is not None else True
+        # PAUSE-1 S3.5b: per-scene "has_player" flag — true when the scene's
+        # sprites[] declares at least one sprite with gameplay_role "player".
+        # Used by the autorun to gate the global player draw + physics on
+        # title/menu/cutscene scenes that don't host gameplay. Without this,
+        # transitioning to such a scene leaves the player sprite drifting
+        # and input-responsive (NgpCraft players are global, not per-scene).
+        try:
+            from core.entity_roles import sprite_gameplay_role
+            _has_player = any(
+                sprite_gameplay_role(spr) == "player"
+                for spr in (s.get("sprites") or [])
+                if isinstance(spr, dict)
+            )
+        except Exception:
+            _has_player = True  # fail-open: assume player present
+        entries.append({
+            "label": label, "safe": safe,
+            "pause_menu_en": _pme, "has_player": _has_player,
+        })
 
     if not entries:
         return (None, None, skipped)
@@ -343,6 +375,8 @@ def write_scenes_autogen(*, project_data: dict, export_dir: Path) -> tuple[Path 
     hl.append("#define TRIG_ACT_SPAWN_OPTION       93 /* MECH-14: g_opt_count += 1 (capped at MAX) */\n")
     hl.append("#define TRIG_ACT_DESPAWN_OPTION     94 /* MECH-14: g_opt_count -= 1 (floored at 0) */\n")
     hl.append("#define TRIG_ACT_SET_OPTION_COUNT   95 /* MECH-14: g_opt_count = clamp(a0, 0..MAX) */\n")
+    hl.append("#define TRIG_ACT_GOTO_SCENE_PRESERVE 96 /* PAUSE-1: scene change with caller-return snapshot */\n")
+    hl.append("#define TRIG_ACT_RETURN_TO_CALLER    97 /* PAUSE-1: pop snapshot back to caller scene */\n")
     hl.append("#endif\n\n")
 
     hl.append("typedef void (*NgpSceneFn)(void);\n")
@@ -564,7 +598,13 @@ def write_scenes_autogen(*, project_data: dict, export_dir: Path) -> tuple[Path 
         hl.append(f"#define NGP_SCENE_{e['safe'].upper()}_IDX {i}u\n")
     hl.append("\n")
     hl.append("extern const NgpSceneDef g_ngp_scenes[NGP_SCENE_COUNT];\n")
-    hl.append("extern const NgpSceneDrawFn g_ngp_scene_draw[NGP_SCENE_COUNT];\n\n")
+    hl.append("extern const NgpSceneDrawFn g_ngp_scene_draw[NGP_SCENE_COUNT];\n")
+    hl.append("/* PAUSE-1 S3: 1u = pause menu can open on this scene (default), */\n")
+    hl.append("/*             0u = OPTION ignored on this scene (intro/menu/...) */\n")
+    hl.append("extern const u8 g_scene_pause_menu_en[NGP_SCENE_COUNT];\n")
+    hl.append("/* PAUSE-1 S3.5b: 1u = scene has a player sprite (player draw + physics run), */\n")
+    hl.append("/*                0u = scene has no player (title/menu/cutscene) — autorun skips. */\n")
+    hl.append("extern const u8 g_scene_has_player[NGP_SCENE_COUNT];\n\n")
     hl.append("#endif /* " + guard + " */\n")
 
     # --- C file ---
@@ -1003,6 +1043,23 @@ def write_scenes_autogen(*, project_data: dict, export_dir: Path) -> tuple[Path 
     for e in entries:
         safe = e["safe"]
         cl.append(f"    ngp_scene_{safe}_draw,\n")
+    cl.append("};\n\n")
+
+    # PAUSE-1 S3: per-scene pause_menu_enabled bitmap. autorun reads
+    # g_scene_pause_menu_en[cur_scene] before reacting to PAD_OPTION.
+    # Default 1u keeps the legacy behaviour for projects pre-PAUSE-1.
+    cl.append("const u8 g_scene_pause_menu_en[NGP_SCENE_COUNT] = {\n")
+    for e in entries:
+        cl.append(f"    {1 if e.get('pause_menu_en', True) else 0}u,  /* {e['label']} */\n")
+    cl.append("};\n\n")
+
+    # PAUSE-1 S3.5b: per-scene "has_player" bitmap. 1u = scene declares a
+    # player sprite (player draw + physics + input run normally). 0u =
+    # title/menu/cutscene scene with no player — autorun skips the player
+    # block so the global s_<player> doesn't drift visibly on screen.
+    cl.append("const u8 g_scene_has_player[NGP_SCENE_COUNT] = {\n")
+    for e in entries:
+        cl.append(f"    {1 if e.get('has_player', True) else 0}u,  /* {e['label']} */\n")
     cl.append("};\n")
 
     out_h.write_text("".join(hl), encoding="utf-8")

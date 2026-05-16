@@ -32,8 +32,11 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox as _QtSpinBox,
     QVBoxLayout,
     QWidget,
@@ -552,6 +555,260 @@ def _build_option_satellite_config(project_data: dict, on_change) -> QWidget:
     return w
 
 
+def _build_pause_menu_config(project_data: dict, on_change) -> QWidget:
+    """Inline config for the PAUSE-1 pause menu mechanic.
+
+    Stores under ``project_data["pause_menu"]`` (top-level, not under
+    ``mechanics_config``) so the codegen reader in template_integration.py
+    keeps working unchanged. Schema::
+
+        {
+            "enabled": true,                    (mirror of mechanics.pause_menu)
+            "items":   [
+                { "label": "RESUME",  "action": "resume" },
+                { "label": "TITLE",   "action": "goto_scene_reset",
+                                       "target": "intro" },
+                ...
+            ]
+        }
+
+    The widget is a 2-column layout: list of items on the left (with add /
+    remove / up / down), edit panel on the right (label / action / target).
+    Selecting an item shows its edit panel; "Add" appends a new RESUME-style
+    item. Max 8 items (the visible menu rows on a 152-px screen).
+    """
+    PRESET_ACTIONS = [
+        ("resume",                "Reprendre"),
+        ("goto_scene_reset",      "Aller à scène (reset)"),
+        ("goto_scene_preserve",   "Aller à scène (preserve)"),
+        ("save_game",             "Sauvegarder (TODO)"),
+    ]
+
+    w = QWidget()
+    outer = QVBoxLayout(w)
+    outer.setContentsMargins(0, 4, 0, 0)
+    outer.setSpacing(6)
+
+    # ---- Backing-store accessor (creates dict on first edit) -----------
+    def _cfg() -> dict:
+        cfg = project_data.get("pause_menu") if isinstance(project_data, dict) else None
+        if not isinstance(cfg, dict):
+            cfg = {"enabled": True, "items": []}
+            if isinstance(project_data, dict):
+                project_data["pause_menu"] = cfg
+        cfg.setdefault("enabled", True)
+        cfg.setdefault("items", [])
+        if not isinstance(cfg["items"], list):
+            cfg["items"] = []
+        return cfg
+
+    cfg = _cfg()
+
+    # ---- Items list (left column) --------------------------------------
+    body = QHBoxLayout()
+    body.setSpacing(8)
+    outer.addLayout(body)
+
+    left = QVBoxLayout()
+    left.setSpacing(4)
+    left_box = QFrame()
+    left_box.setLayout(left)
+    left_box.setFrameShape(QFrame.Shape.StyledPanel)
+    left_box.setStyleSheet(
+        "QFrame { background:#252b34; border:1px solid #3a4a5e; border-radius:3px; }"
+    )
+    left.addWidget(QLabel("<b>Items du menu</b> (max 8)"))
+    list_w = QListWidget()
+    list_w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+    list_w.setMinimumHeight(150)
+    left.addWidget(list_w, 1)
+
+    btn_row = QHBoxLayout()
+    btn_add = QPushButton("+ Ajouter")
+    btn_del = QPushButton("− Supprimer")
+    btn_up  = QPushButton("↑")
+    btn_dn  = QPushButton("↓")
+    btn_up.setMaximumWidth(32)
+    btn_dn.setMaximumWidth(32)
+    for b in (btn_add, btn_del, btn_up, btn_dn):
+        btn_row.addWidget(b)
+    btn_row.addStretch()
+    left.addLayout(btn_row)
+    body.addWidget(left_box, 1)
+
+    # ---- Item edit panel (right column) --------------------------------
+    right = QVBoxLayout()
+    right.setSpacing(4)
+    right_box = QFrame()
+    right_box.setLayout(right)
+    right_box.setFrameShape(QFrame.Shape.StyledPanel)
+    right_box.setStyleSheet(
+        "QFrame { background:#252b34; border:1px solid #3a4a5e; border-radius:3px; }"
+    )
+    right.addWidget(QLabel("<b>Item sélectionné</b>"))
+
+    le_label = QLineEdit()
+    le_label.setMaxLength(12)
+    le_label.setPlaceholderText("Label (12 chars max)")
+    _row(right, "Label", le_label, 80)
+
+    cb_action = QComboBox()
+    for aid, alabel in PRESET_ACTIONS:
+        cb_action.addItem(alabel, aid)
+    _row(right, "Action", cb_action, 80)
+
+    cb_target = QComboBox()
+    cb_target.addItem("(N/A — resume ne navigue pas)", "")
+
+    def _refresh_target_combo(current: str = "") -> None:
+        cb_target.blockSignals(True)
+        cb_target.clear()
+        cb_target.addItem("(scène courante)", "")
+        scenes = project_data.get("scenes", []) if isinstance(project_data, dict) else []
+        if isinstance(scenes, list):
+            for sc in scenes:
+                if not isinstance(sc, dict):
+                    continue
+                label = str(sc.get("label") or sc.get("name") or sc.get("id") or "?")
+                cb_target.addItem(label, label)
+        idx = cb_target.findData(current or "")
+        cb_target.setCurrentIndex(max(0, idx))
+        cb_target.blockSignals(False)
+
+    _refresh_target_combo()
+    _row(right, "Scène cible", cb_target, 80)
+
+    hint = QLabel(
+        "<small><i>"
+        "resume: ferme le menu, reprend la partie.<br>"
+        "goto_scene_reset: full reset vers la scène cible (titre/main menu).<br>"
+        "goto_scene_preserve: transition modale, scène cible doit fournir un<br>"
+        "trigger return_to_caller pour revenir à la position d'origine.<br>"
+        "save_game: pas encore implémenté côté runtime (S3.6)."
+        "</i></small>"
+    )
+    hint.setWordWrap(True)
+    hint.setStyleSheet("color:#8a96a4;")
+    right.addWidget(hint)
+    right.addStretch()
+    body.addWidget(right_box, 2)
+
+    # ---- Item state helpers --------------------------------------------
+    def _items() -> list:
+        return _cfg()["items"]
+
+    def _selected_idx() -> int:
+        row = list_w.currentRow()
+        return row if row >= 0 else -1
+
+    def _set_panel_enabled(enabled: bool) -> None:
+        le_label.setEnabled(enabled)
+        cb_action.setEnabled(enabled)
+        cb_target.setEnabled(enabled)
+
+    def _refresh_list(select: int = -1) -> None:
+        list_w.blockSignals(True)
+        list_w.clear()
+        for i, it in enumerate(_items()):
+            label = str(it.get("label", f"ITEM{i}")).strip() or f"ITEM{i}"
+            act   = str(it.get("action", "resume"))
+            txt   = f"{i+1}. {label}  ({act})"
+            list_w.addItem(QListWidgetItem(txt))
+        if select >= 0 and select < len(_items()):
+            list_w.setCurrentRow(select)
+        list_w.blockSignals(False)
+
+    def _load_into_panel() -> None:
+        idx = _selected_idx()
+        if idx < 0 or idx >= len(_items()):
+            _set_panel_enabled(False)
+            le_label.setText("")
+            cb_action.setCurrentIndex(0)
+            cb_target.setCurrentIndex(0)
+            return
+        _set_panel_enabled(True)
+        it = _items()[idx]
+        le_label.blockSignals(True)
+        cb_action.blockSignals(True)
+        le_label.setText(str(it.get("label", "")))
+        act_idx = cb_action.findData(str(it.get("action", "resume")))
+        cb_action.setCurrentIndex(max(0, act_idx))
+        le_label.blockSignals(False)
+        cb_action.blockSignals(False)
+        _refresh_target_combo(str(it.get("target", "")))
+        # disable target combo when the selected action does not use it
+        act = cb_action.currentData() or "resume"
+        cb_target.setEnabled(act in ("goto_scene_reset", "goto_scene_preserve"))
+
+    def _persist(field: str, value) -> None:
+        idx = _selected_idx()
+        if idx < 0 or idx >= len(_items()):
+            return
+        _items()[idx][field] = value
+        _refresh_list(select=idx)
+        on_change()
+
+    # ---- Wire signals --------------------------------------------------
+    list_w.currentRowChanged.connect(lambda _i: _load_into_panel())
+
+    def _on_add():
+        items = _items()
+        if len(items) >= 8:
+            return
+        items.append({"label": "ITEM", "action": "resume"})
+        _refresh_list(select=len(items) - 1)
+        on_change()
+    btn_add.clicked.connect(_on_add)
+
+    def _on_del():
+        idx = _selected_idx()
+        if idx < 0:
+            return
+        _items().pop(idx)
+        _refresh_list(select=min(idx, len(_items()) - 1))
+        _load_into_panel()
+        on_change()
+    btn_del.clicked.connect(_on_del)
+
+    def _on_up():
+        idx = _selected_idx()
+        if idx <= 0:
+            return
+        items = _items()
+        items[idx - 1], items[idx] = items[idx], items[idx - 1]
+        _refresh_list(select=idx - 1)
+        on_change()
+    btn_up.clicked.connect(_on_up)
+
+    def _on_dn():
+        idx = _selected_idx()
+        items = _items()
+        if idx < 0 or idx >= len(items) - 1:
+            return
+        items[idx + 1], items[idx] = items[idx], items[idx + 1]
+        _refresh_list(select=idx + 1)
+        on_change()
+    btn_dn.clicked.connect(_on_dn)
+
+    def _on_label_changed(text: str):
+        _persist("label", text[:12])
+    le_label.textEdited.connect(_on_label_changed)
+
+    def _on_action_changed(_i: int):
+        act = cb_action.currentData() or "resume"
+        _persist("action", act)
+        cb_target.setEnabled(act in ("goto_scene_reset", "goto_scene_preserve"))
+    cb_action.currentIndexChanged.connect(_on_action_changed)
+
+    def _on_target_changed(_i: int):
+        _persist("target", cb_target.currentData() or "")
+    cb_target.currentIndexChanged.connect(_on_target_changed)
+
+    _refresh_list()
+    _load_into_panel()
+    return w
+
+
 # Map of inline_config tag → factory(project_data, on_change_callback) → QWidget.
 # Add new mechanics' inline widgets here.
 INLINE_CONFIG_FACTORIES = {
@@ -560,6 +817,7 @@ INLINE_CONFIG_FACTORIES = {
     "highscore":          _build_highscore_config,
     "game_over_flow":     _build_game_over_flow_config,
     "option_satellite":   _build_option_satellite_config,
+    "pause_menu":         _build_pause_menu_config,
 }
 
 

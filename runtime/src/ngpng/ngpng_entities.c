@@ -573,7 +573,9 @@ u8 ngpng_sprite_mspr_draw(u8 spr_start, s16 x, s16 y, const NgpcMetasprite *def,
         else
             ngpc_sprite_set((u8)(spr_start + i),
                 (u8)((u16)px & 0xFFu), (u8)((u16)py & 0xFFu),
-                p->tile, p->pal, part_flags);
+                (u16)(*def->vram_tile_base + p->tile),
+                (u8)(*def->vram_pal_base + p->pal),
+                part_flags);
     }
     return count;
 }
@@ -876,8 +878,11 @@ u8 ngpng_entity_sprite_info(const NgpSceneDef *sc, u8 type, u8 frame_idx,
     def = sc->resolve_entity_frame(type, frame_idx);
     if (!def || def->count == 0u) return 0u;
     part  = &def->parts[0];
-    *tile  = part->tile;
-    *pal   = part->pal;
+    /* Resolve relative tile_idx / pal_idx → absolute VRAM/palette slots.
+     * The returned *tile/*pal are fed straight to ngpc_sprite_set by the
+     * caller (bullet/option cache), so we apply the runtime bases here once. */
+    *tile  = (u16)(*def->vram_tile_base + part->tile);
+    *pal   = (u8)(*def->vram_pal_base + part->pal);
     *flags = (u8)(SPR_FRONT | (u8)part->flags);
     *ox    = (s16)part->ox;
     *oy    = (s16)part->oy;
