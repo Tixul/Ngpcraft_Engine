@@ -67,6 +67,12 @@ _C_DOT_EMPTY     = QColor("#555566")
 _C_THUMB_BG      = QColor("#1a1a1e")
 _C_START_STRIPE  = QColor("#2a5c3a")
 _C_ENT_BADGE_BG  = QColor("#2a3848")
+# Battle Assets container scene (v1.1.3) — violet, distinct from green/start
+# and amber/v1.0 ; signals "engine-managed asset container, not playable".
+_C_BA_CARD       = QColor("#241036")
+_C_BA_BORDER     = QColor("#a060f0")
+_C_BA_STRIPE     = QColor("#3e1c5e")
+_C_DOT_BA        = QColor("#a060f0")
 
 _NO_PLAYER_PROFILES = {"menu", "visual_novel", "puzzle", "race"}
 
@@ -87,6 +93,10 @@ _PROFILE_LABEL = {
 
 
 def _scene_status(scene_data: dict) -> str:
+    # Engine-managed Battle Assets container scene (v1.1.3) — gets its own
+    # status so the SceneCard paints with violet border + stripe.
+    if scene_data.get("is_battle_assets_scene"):
+        return "battle_assets"
     has_tilemap = any(
         str(tm.get("file") or tm.get("path") or "").strip()
         for tm in (scene_data.get("tilemaps") or [])
@@ -174,21 +184,34 @@ class SceneCard(QGraphicsItem):
         rect = QRectF(0.5, 0.5, _CARD_W - 1, _CARD_H - 1)
 
         # Background
-        painter.setBrush(QBrush(_C_START_CARD if self._is_start else _C_CARD))
+        is_ba = bool(self._data.get("is_battle_assets_scene"))
+        if is_ba:
+            painter.setBrush(QBrush(_C_BA_CARD))
+        elif self._is_start:
+            painter.setBrush(QBrush(_C_START_CARD))
+        else:
+            painter.setBrush(QBrush(_C_CARD))
         if self.isSelected():
             painter.setPen(QPen(_C_SEL_BORDER, 2.0))
+        elif is_ba:
+            painter.setPen(QPen(_C_BA_BORDER, 1.5))
         elif self._is_start:
             painter.setPen(QPen(_C_START_BORDER, 1.5))
         else:
             painter.setPen(QPen(_C_CARD_BORDER, 1.0))
         painter.drawRoundedRect(rect, _CARD_R, _CARD_R)
 
-        # MAP-5: green top stripe on start card
-        if self._is_start:
+        # Top stripe : green for start, violet for Battle Assets container.
+        stripe_color = None
+        if is_ba:
+            stripe_color = _C_BA_STRIPE
+        elif self._is_start:
+            stripe_color = _C_START_STRIPE
+        if stripe_color is not None:
             painter.save()
             painter.setClipRect(QRectF(1, 1, _CARD_W - 2, 5))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(_C_START_STRIPE))
+            painter.setBrush(QBrush(stripe_color))
             painter.drawRoundedRect(QRectF(1, 1, _CARD_W - 2, 12), _CARD_R, _CARD_R)
             painter.restore()
 
@@ -203,9 +226,12 @@ class SceneCard(QGraphicsItem):
             painter.drawPixmap(int(ox), int(oy), self._thumb)
 
         # Status dot
-        dot_color = {"ok": _C_DOT_OK, "warn": _C_DOT_WARN, "empty": _C_DOT_EMPTY}.get(
-            self._status, _C_DOT_EMPTY
-        )
+        dot_color = {
+            "ok": _C_DOT_OK,
+            "warn": _C_DOT_WARN,
+            "empty": _C_DOT_EMPTY,
+            "battle_assets": _C_DOT_BA,
+        }.get(self._status, _C_DOT_EMPTY)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(dot_color))
         painter.drawEllipse(QRectF(_DOT_X - _DOT_R, _DOT_Y - _DOT_R, _DOT_R * 2, _DOT_R * 2))
@@ -614,6 +640,10 @@ class SceneMapTab(ProjectPathMixin, QWidget):
     """Project-group tab: scene relationship map."""
 
     open_scene_requested = pyqtSignal(str)
+    # v1.1.3 : emitted when deleting the Battle Assets scene from the canvas
+    # context menu (which also disables battle_engine). MainWindow connects
+    # this to refresh the Mechanics tab checkboxes.
+    mechanics_state_changed = pyqtSignal()
 
     def __init__(
         self,
@@ -786,15 +816,28 @@ class SceneMapTab(ProjectPathMixin, QWidget):
         if not scene_data:
             return
 
+        is_ba = bool(scene_data.get("is_battle_assets_scene"))
+        managed_by = str(scene_data.get("managed_by_mechanic") or "")
+
         menu = QMenu(self)
-        act_open      = menu.addAction("Open scene")
+        act_open = menu.addAction("Open scene")
+
+        # Engine-managed Battle Assets : hide rename/duplicate/set-start
+        # (would break the codegen contract or have no meaning for an asset
+        # container that's never played).
+        act_rename = act_duplicate = act_start = None
+        if not is_ba:
+            menu.addSeparator()
+            act_rename    = menu.addAction("Rename…")
+            act_duplicate = menu.addAction("Duplicate")
+            menu.addSeparator()
+            act_start     = menu.addAction("Set as start scene")
+
         menu.addSeparator()
-        act_rename    = menu.addAction("Rename…")
-        act_duplicate = menu.addAction("Duplicate")
-        menu.addSeparator()
-        act_start     = menu.addAction("Set as start scene")
-        menu.addSeparator()
-        act_delete    = menu.addAction("Delete scene…")
+        if is_ba:
+            act_delete = menu.addAction(f"Disable «{managed_by}» (removes this scene)…")
+        else:
+            act_delete = menu.addAction("Delete scene…")
 
         chosen = menu.exec(QPoint(x, y))
         if chosen == act_open:
@@ -806,7 +849,10 @@ class SceneMapTab(ProjectPathMixin, QWidget):
         elif chosen == act_start:
             self._ctx_set_start(scene_data.get("label", ""))
         elif chosen == act_delete:
-            self._ctx_delete(sid, scene_data)
+            if is_ba:
+                self._ctx_delete_battle_assets_scene(sid, scene_data)
+            else:
+                self._ctx_delete(sid, scene_data)
 
     def _ctx_rename(self, scene_data: dict) -> None:
         old = scene_data.get("label", "")
@@ -846,3 +892,37 @@ class SceneMapTab(ProjectPathMixin, QWidget):
         (self._data or {})["scenes"] = [s for s in scenes if s.get("id") != sid]
         self._on_save()
         self.refresh()
+
+    def _ctx_delete_battle_assets_scene(self, sid: str, scene_data: dict) -> None:
+        """Delete the auto Battle Assets scene from canvas → also disables
+        the managing mech so it doesn't get re-spawned next frame."""
+        from core.mechanics import set_mechanic_enabled
+
+        managed_by = str(scene_data.get("managed_by_mechanic") or "battle_engine")
+        n_sprites = len(scene_data.get("sprites") or [])
+        n_tilemaps = len(scene_data.get("tilemaps") or [])
+        has_content = (n_sprites + n_tilemaps) > 0
+
+        msg = f"Supprimer cette scène va aussi désactiver <b>{managed_by}</b>.<br><br>"
+        if has_content:
+            msg += (f"⚠ Cette scène contient <b>{n_sprites} sprite(s)</b> et "
+                    f"<b>{n_tilemaps} tilemap(s)</b>. Tu vas les perdre.<br><br>")
+        msg += "Continuer ?"
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Supprimer Battle Assets ?")
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(msg)
+        box.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        if box.exec() != QMessageBox.StandardButton.Ok:
+            return
+
+        scenes = (self._data or {}).get("scenes") or []
+        (self._data or {})["scenes"] = [s for s in scenes if s.get("id") != sid]
+        set_mechanic_enabled(self._data, managed_by, False)
+        self._on_save()
+        self.refresh()
+        self.mechanics_state_changed.emit()
+

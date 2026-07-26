@@ -61,6 +61,17 @@ void ngpc_rchain_init(void)
     s_splits = 0;
     s_count  = 0;
     s_idx    = 0;
+
+    /* Enable the Timer0 IRQ once, via the BIOS. Writing the interrupt-level
+     * registers directly does NOT arm the IRQ on NGPC hardware -- the BIOS owns
+     * the interrupt-level hardware. Convention per the official Toshiba SDK
+     * (8Bit.txt "H-int Setting"): rw3 = VECT_INTLVSET (4), rb3 = priority level,
+     * rc3 = interrupt number (2 = 8-bit Timer 0). The per-frame arm() below only
+     * (re)programs T01MOD/TREG0/TRUN; the interrupt level is set here just once. */
+    __asm("ldb rb3, 4");   /* priority level 4 (VBlank-level, fires under EI 0) */
+    __asm("ldb rc3, 2");   /* interrupt number 2 = Timer0                       */
+    __asm("ldb rw3, 4");   /* rw3 = BIOS_INTLVSET (= 4)                         */
+    __asm("swi 1");        /* BIOS installs the level; NOW the IRQ can fire     */
 }
 
 void ngpc_rchain_arm(const RChainSplit *splits, u8 count)

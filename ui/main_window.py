@@ -269,6 +269,16 @@ class MainWindow(QMainWindow):
         self._mechanics_tab.mechanics_changed.connect(
             self._level_tab._on_mechanics_changed
         )
+        # v1.1.3 : battle_engine toggle spawns / removes the auto Battle
+        # Assets scene → refresh scene_map AND project tab so the new scene
+        # appears (project tab is the only place to add sprites/tilemaps).
+        self._mechanics_tab.scene_list_changed.connect(self._map_tab.refresh)
+        self._mechanics_tab.scene_list_changed.connect(self._project_tab._populate_scenes)
+        # Reverse : user deletes Battle Assets from scene_map context menu,
+        # which also disables battle_engine mech → repaint Mechanics tab.
+        self._map_tab.mechanics_state_changed.connect(
+            self._mechanics_tab.refresh_dynamic_sources
+        )
         self._tabs.addTab(self._level_tab, tr("tab.level"))
 
         self._palette_tab = PaletteTab(self)

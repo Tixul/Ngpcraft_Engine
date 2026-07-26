@@ -43,23 +43,23 @@ u8 ngpc_menu_update(NgpcMenu *m) {
     return MENU_NONE;
 }
 
-void ngpc_menu_draw(const NgpcMenu *m, u8 plane, u8 tx, u8 ty, char cur_ch) {
+void ngpc_menu_draw(const NgpcMenu *m, u8 plane, u8 pal, u8 tx, u8 ty, char cur_ch) {
     u8 i;
     char prefix[2];
     prefix[1] = '\0';
 
     for (i = 0; i < m->count; i++) {
         prefix[0] = (i == m->cursor) ? cur_ch : ' ';
-        ngpc_text_print(plane, tx,     ty + i, prefix);
-        ngpc_text_print(plane, tx + 1, ty + i, m->items[i]);
+        ngpc_text_print(plane, pal, tx,     ty + i, prefix);
+        ngpc_text_print(plane, pal, tx + 1, ty + i, m->items[i]);
     }
 }
 
-void ngpc_menu_erase(const NgpcMenu *m, u8 plane, u8 tx, u8 ty, u8 width) {
+void ngpc_menu_erase(const NgpcMenu *m, u8 plane, u8 pal, u8 tx, u8 ty, u8 width) {
     u8 i;
     /* Utilise les 'width' premiers espaces de _blanks (max 20) */
     if (width > 20) width = 20;
     for (i = 0; i < m->count; i++) {
-        ngpc_text_print(plane, tx, ty + i, _blanks + (20 - width));
+        ngpc_text_print(plane, pal, tx, ty + i, _blanks + (20 - width));
     }
 }

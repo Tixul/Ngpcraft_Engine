@@ -226,6 +226,14 @@ def _sync_validated_sprite_runtime(project_root: Path) -> None:
         # B-6: ngpng scene runtime (scene enter/reset helpers)
         ("src/ngpng/ngpng_scene_runtime.h", "src/ngpng/ngpng_scene_runtime.h"),
         ("src/ngpng/ngpng_scene_runtime.c", "src/ngpng/ngpng_scene_runtime.c"),
+        # JRPG combat templates (v1.1) — always synced (harmless if mech off,
+        # the Makefile gates OBJS inclusion on battle_engine / random_encounters
+        # so they're only compiled when actually needed). Without this sync the
+        # user's project drifts from the engine when battle_engine evolves
+        # (e.g. signature change of random_encounters_on_step(u8 cur_scene)).
+        ("src/ngpng/battle_engine.c",       "src/ngpng/battle_engine.c"),
+        ("src/ngpng/battle_engine_hooks.c", "src/ngpng/battle_engine_hooks.c"),
+        ("src/ngpng/random_encounters.c",   "src/ngpng/random_encounters.c"),
     ]
     for src_rel, dst_rel in files:
         # Look in runtime/ first, then fall back to templates/.
@@ -1045,6 +1053,36 @@ def patch_makefile_for_autogen(*, template_root: Path, export_dir_rel: str, enab
         block.append("OBJS += $(OBJ_DIR)/optional/ngpc_dialog/ngpc_font_data.rel")
         block.append("OBJS += $(OBJ_DIR)/optional/ngpc_soam/ngpc_soam_c.rel")
         block.append("OBJS += $(OBJ_DIR)/optional/ngpc_soam/ngpc_soam_flush.rel")
+    # JRPG combat — battle_engine + random_encounters .c templates compiled
+    # when the respective mechanics are ON. Pulls in ngpc_dialog / ngpc_menu /
+    # ngpc_inventory from optional/ (with filter-out to dedup if has_dialogues
+    # already added ngpc_dialog).
+    from core.mechanics import is_mechanic_enabled as _mech_on_mk
+    _mk_battle = bool(project_data) and _mech_on_mk(project_data, "battle_engine")
+    _mk_random = bool(project_data) and _mech_on_mk(project_data, "random_encounters")
+    if _mk_battle:
+        block.append("# JRPG combat: battle_engine + hooks + required optional modules.")
+        block.append("CDEFS += -Ioptional")
+        block.append("OBJS += $(OBJ_DIR)/src/ngpng/battle_engine.rel")
+        block.append("OBJS += $(OBJ_DIR)/src/ngpng/battle_engine_hooks.rel")
+        # Dedup-safe : filter then re-add even if has_dialogues already added it.
+        block.append("OBJS := $(filter-out $(OBJ_DIR)/optional/ngpc_dialog/ngpc_dialog.rel,$(OBJS))")
+        block.append("OBJS += $(OBJ_DIR)/optional/ngpc_dialog/ngpc_dialog.rel")
+        block.append("OBJS := $(filter-out $(OBJ_DIR)/optional/ngpc_dialog/ngpc_font.rel,$(OBJS))")
+        block.append("OBJS += $(OBJ_DIR)/optional/ngpc_dialog/ngpc_font.rel")
+        block.append("OBJS := $(filter-out $(OBJ_DIR)/optional/ngpc_dialog/ngpc_font_data.rel,$(OBJS))")
+        block.append("OBJS += $(OBJ_DIR)/optional/ngpc_dialog/ngpc_font_data.rel")
+        # ngpc_dialog depends on ngpc_soam (sprite-OAM helpers) — always needed
+        # when dialog is in the build, dedupe same as the font files.
+        block.append("OBJS := $(filter-out $(OBJ_DIR)/optional/ngpc_soam/ngpc_soam_c.rel,$(OBJS))")
+        block.append("OBJS += $(OBJ_DIR)/optional/ngpc_soam/ngpc_soam_c.rel")
+        block.append("OBJS := $(filter-out $(OBJ_DIR)/optional/ngpc_soam/ngpc_soam_flush.rel,$(OBJS))")
+        block.append("OBJS += $(OBJ_DIR)/optional/ngpc_soam/ngpc_soam_flush.rel")
+        block.append("OBJS += $(OBJ_DIR)/optional/ngpc_menu/ngpc_menu.rel")
+        block.append("OBJS += $(OBJ_DIR)/optional/ngpc_inventory/ngpc_inventory.rel")
+    if _mk_random:
+        block.append("# JRPG random encounters: step counter + chance roll + battle dispatch.")
+        block.append("OBJS += $(OBJ_DIR)/src/ngpng/random_encounters.rel")
     if has_dungeongen:
         block.append("# DungeonGen runtime: procgen room generator + cluster navigation.")
         block.append("CDEFS += -Ioptional")
@@ -2070,6 +2108,10 @@ def write_autorun_main_c(
     # MECH-6 hi-score — table extends the existing NgpngSaveData struct (single
     # flash slot, append-only). Pattern validated on hardware in StarGunner.
     _has_hiscore   = _mech_on_dash(project_data, "highscore")
+    # JRPG combat (Pokémon-style) — auto-wired into the autorun when ON :
+    # boot init, main-loop dispatch, BGM/event hook stubs (battle_engine_hooks.c).
+    _has_battle_engine     = _mech_on_dash(project_data, "battle_engine")
+    _has_random_encounters = _mech_on_dash(project_data, "random_encounters")
     _hs_cfg        = _get_mech_cfg(project_data, "highscore")
     _hs_n          = max(1, min(10, int(_hs_cfg.get("num_entries", 10) or 10)))
     _hs_l          = max(1, min(5,  int(_hs_cfg.get("initials_length", 3) or 3)))
@@ -2731,6 +2773,14 @@ def write_autorun_main_c(
     c.append("#if !defined(NGP_ENABLE_SOUND) || !(NGP_ENABLE_SOUND)\n")
     c.append("static void Sfx_Play(unsigned char id) { (void)id; }\n")
     c.append("#endif\n")
+    # JRPG combat — pull in the generated headers + declare the runtime API.
+    if _has_battle_engine:
+        c.append("/* JRPG combat (battle_engine mechanic ON) — auto-wired below. */\n")
+        c.append('#include "../GraphX/gen/item_table.h"\n')
+        c.append('#include "../GraphX/gen/monster_table.h"\n')
+        c.append('#include "../GraphX/gen/battle_engine.h"\n')
+        if _has_random_encounters:
+            c.append('#include "../GraphX/gen/random_encounters.h"\n')
     if _has_hiscore:
         c.append(f"#define NGPNG_HISCORE_N {_hs_n}u\n")
         c.append(f"#define NGPNG_HISCORE_L {_hs_l}u\n")
@@ -5621,6 +5671,24 @@ def write_autorun_main_c(
     c.append("    u8  s_pause_save_scr_prio = 0u;\n")
     c.append("    u8  s_pause_save_bg_ctl = 0x80u;\n")
     c.append("    u16 s_pause_save_bg_col0 = 0u;\n")
+    # Battle state save (mirrors pause-save pattern). Captures gameplay HW
+    # state so it can be restored AFTER the battle ends — without this, the
+    # tilemap, palettes, and sprite shadow remain in their "battle" state and
+    # the gameplay scene shows glitched art when control returns.
+    if _has_battle_engine:
+        c.append("    /* Battle state save (same pattern as pause). Snapshot taken on the\n")
+        c.append("     * FIRST frame battle becomes active ; restored on the frame it\n")
+        c.append("     * becomes inactive again. The scene's enter() rebuilds tiles + map.\n")
+        c.append("     * Sprite shadow state is forced-stale so the next render flushes\n")
+        c.append("     * the gameplay sprite OAM properly.                              */\n")
+        c.append("    u8  s_be_was_active = 0u;\n")
+        c.append("    u8  s_be_save_win_x = 0u;\n")
+        c.append("    u8  s_be_save_win_y = 0u;\n")
+        c.append("    u8  s_be_save_win_w = 160u;\n")
+        c.append("    u8  s_be_save_win_h = 152u;\n")
+        c.append("    u8  s_be_save_scr_prio = 0u;\n")
+        c.append("    u8  s_be_save_bg_ctl = 0x80u;\n")
+        c.append("    u16 s_be_save_bg_col0 = 0u;\n")
     c.append("    /* PAUSE-1 modal sub-scene snapshot (goto_scene_preserve / return_to_caller).\n")
     c.append("     * Single-level stack (N=1) for MVP — opening a second modal while one is\n")
     c.append("     * already active is refused at the dispatch site. Snapshot captures cam +\n")
@@ -5868,6 +5936,11 @@ def write_autorun_main_c(
     c.append("    Sounds_Init();\n")
     c.append("    #endif\n")
     c.append("#endif\n")
+    # JRPG combat boot init — seeds qrandom, builds the cmd menu, populates
+    # the starter inventory. Must run AFTER Sounds_Init so SFX cues work.
+    if _has_battle_engine:
+        c.append("    /* battle_engine boot init (mechanic ON — auto-wired). */\n")
+        c.append("    battle_engine_init();\n")
     if has_dungeongen:
         _dg_seed_mode  = "rtc"
         _dg_seed_fixed = 1
@@ -6145,6 +6218,66 @@ def write_autorun_main_c(
     c.append("        _dbg_vb_prev = g_vb_counter;\n")
     c.append("#endif\n")
     c.append("        ngpc_vsync();\n")
+    # JRPG combat dispatch — when battle is active, run its update/render and
+    # skip the rest of the normal scene loop (input, AI, physics, etc.) so the
+    # overworld stays frozen behind the battle HUD. The battle ends by setting
+    # is_active=0 inside battle_engine.c ; the next frame falls through to the
+    # normal scene update.
+    if _has_battle_engine:
+        c.append("        /* battle_engine: pause-menu-style state ownership.\n")
+        c.append("         * - First frame battle becomes active : snapshot gameplay HW regs.\n")
+        c.append("         * - Each frame battle is active        : run update/render, skip the rest.\n")
+        c.append("         * - First frame battle becomes inactive: restore HW regs + scene enter()\n")
+        c.append("         *   + mapstream reload + force sprite shadow stale (full redraw).\n")
+        c.append("         */\n")
+        c.append("        if (battle_engine_is_active()) {\n")
+        c.append("            if (!s_be_was_active) {\n")
+        c.append("                /* Battle just started — snapshot gameplay state. */\n")
+        c.append("                s_be_save_win_x    = HW_WIN_X;\n")
+        c.append("                s_be_save_win_y    = HW_WIN_Y;\n")
+        c.append("                s_be_save_win_w    = HW_WIN_W;\n")
+        c.append("                s_be_save_win_h    = HW_WIN_H;\n")
+        c.append("                s_be_save_scr_prio = HW_SCR_PRIO;\n")
+        c.append("                s_be_save_bg_ctl   = HW_BG_CTL;\n")
+        c.append("                s_be_save_bg_col0  = HW_PAL_BG[0];\n")
+        c.append("                s_be_was_active    = 1u;\n")
+        c.append("            }\n")
+        c.append("            battle_engine_update();\n")
+        c.append("            battle_engine_render();\n")
+        c.append("            continue;\n")
+        c.append("        }\n")
+        c.append("        if (s_be_was_active) {\n")
+        c.append("            /* Battle just ended — restore gameplay state (same recipe as pause exit). */\n")
+        c.append("            s_be_was_active = 0u;\n")
+        c.append("            HW_WIN_X     = s_be_save_win_x;\n")
+        c.append("            HW_WIN_Y     = s_be_save_win_y;\n")
+        c.append("            HW_WIN_W     = s_be_save_win_w;\n")
+        c.append("            HW_WIN_H     = s_be_save_win_h;\n")
+        c.append("            HW_PAL_BG[0] = s_be_save_bg_col0;\n")
+        c.append("            HW_BG_CTL    = s_be_save_bg_ctl;\n")
+        c.append("            HW_SCR_PRIO  = s_be_save_scr_prio;\n")
+        c.append("            g_ngp_scenes[cur_scene].enter();\n")
+        if has_mapstream:
+            c.append("#ifdef NGPNG_HAS_MAPSTREAM\n")
+            c.append("            ngpng_mapstream_load_scene(cur_scene, cam_px, cam_py);\n")
+            c.append("#endif\n")
+        # Force sprite shadow stale so the next render redraws every player sprite
+        # at the right tile/palette (otherwise gameplay sprites read battle-era
+        # palette indices from the OAM and show wrong colors).
+        for _pp in (players or []):
+            _pn = _pp["name"]
+            c.append(f"            s_{_pn}_visible = 0u;\n")
+            c.append(f"            s_{_pn}_last_x = (s16)-32768;\n")
+            c.append(f"            s_{_pn}_last_y = (s16)-32768;\n")
+            c.append(f"            s_{_pn}_last_frame = 0xFFu;\n")
+            c.append(f"            s_{_pn}_last_flags = 0xFFu;\n")
+            if _pp.get("has_layer1"):
+                c.append(f"            s_{_pn}_l1_visible = 0u;\n")
+                c.append(f"            s_{_pn}_l1_last_x = (s16)-32768;\n")
+                c.append(f"            s_{_pn}_l1_last_y = (s16)-32768;\n")
+                c.append(f"            s_{_pn}_l1_last_frame = 0xFFu;\n")
+                c.append(f"            s_{_pn}_l1_last_flags = 0xFFu;\n")
+        c.append("        }\n")
     c.append("#if NGP_ENABLE_DEBUG\n")
     c.append("        {\n")
     c.append("            char _dbg_str[7];\n")
@@ -9007,6 +9140,36 @@ def write_autorun_main_c(
         c.append("                g_hs_screen_just_opened = 0u;\n")
         c.append("                ngpng_hiscore_overlay_clear();\n")
         c.append("            }\n")
+        c.append("        }\n")
+    # JRPG random encounters tick — true tile-cross detection.
+    # The internal step counter only increments when the player crosses a
+    # tile boundary (Δ(x>>3) != 0 or Δ(y>>3) != 0). Standing still does NOT
+    # tick the counter, which matches Pokémon-style encounter logic.
+    # First-frame state initialised lazily via a 0xFFFF sentinel.
+    if _has_random_encounters:
+        # The player actor is named s_<sprite_name>. Use the first player
+        # sprite if any ; otherwise emit the tick unconditionally (no
+        # tile-cross gating possible without a player to track).
+        _player_actor = (players[0]["name"] if players else None)
+        c.append("        /* random_encounters: tick only on actual tile-cross. */\n")
+        c.append("        if (g_scene_random_encounters_en[cur_scene]) {\n")
+        if _player_actor:
+            c.append("            static s16 s_re_last_player_x = (s16)0x7FFF;\n")
+            c.append("            static s16 s_re_last_player_y = (s16)0x7FFF;\n")
+            c.append(f"            s16 _re_cur_x = s_{_player_actor}.x;\n")
+            c.append(f"            s16 _re_cur_y = s_{_player_actor}.y;\n")
+            c.append("            if (s_re_last_player_x != (s16)0x7FFF) {\n")
+            c.append("                /* tile = pixel >> 3 (8px tiles). Compare tile coords. */\n")
+            c.append("                if (((_re_cur_x >> 3) != (s_re_last_player_x >> 3)) ||\n")
+            c.append("                    ((_re_cur_y >> 3) != (s_re_last_player_y >> 3))) {\n")
+            c.append("                    random_encounters_on_step(cur_scene);\n")
+            c.append("                }\n")
+            c.append("            }\n")
+            c.append("            s_re_last_player_x = _re_cur_x;\n")
+            c.append("            s_re_last_player_y = _re_cur_y;\n")
+        else:
+            c.append("            /* No player actor — fall back to per-frame tick. */\n")
+            c.append("            random_encounters_on_step(cur_scene);\n")
         c.append("        }\n")
     c.append("        ngpc_sprite_frame_end();\n")
     c.append("    }\n")

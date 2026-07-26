@@ -10,8 +10,12 @@
 #include "ngpc_font.h"
 #include "ngpc_font_data.h"
 #include "../../src/gfx/ngpc_gfx.h"
-#ifdef NO_SYSFONT
+/* ngpc_hw.h needed UNCONDITIONALLY for the RGB() macro used in
+ * ngpc_font_apply_palette (default sysfont path). Previously gated on
+ * NO_SYSFONT, which left RGB undefined when sysfont was enabled — cc900
+ * then compiled RGB as an external function call → link error. */
 #include "../../src/core/ngpc_hw.h"
+#ifdef NO_SYSFONT
 #include "../../GraphX/gen/ngpc_custom_font.h"
 #endif
 

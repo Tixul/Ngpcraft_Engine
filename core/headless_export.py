@@ -1131,14 +1131,57 @@ def export_project(
             gen_manifest.add(cev_h)
         except Exception as e:
             log(f"WARN  cannot write ngpc_custom_events.h: {e}")
-        try:
-            from core.item_table_gen import write_item_table_h
-            it_h = write_item_table_h(project_data=data, export_dir=export_dir_abs)
-            log(f"ItemTable: {it_h}")
-            gen_manifest.add(it_h)
-        except Exception as e:
-            log(f"WARN  cannot write item_table.h: {e}")
         from core.mechanics import is_mechanic_enabled as _mech_on
+        if _mech_on(data, "item_table"):
+            try:
+                from core.item_table_gen import write_item_table_h
+                it_h = write_item_table_h(project_data=data, export_dir=export_dir_abs)
+                log(f"ItemTable: {it_h}")
+                gen_manifest.add(it_h)
+            except Exception as e:
+                log(f"WARN  cannot write item_table.h: {e}")
+        else:
+            log("ItemTable: skipped (mechanic 'item_table' disabled)")
+        if _mech_on(data, "monster_table"):
+            try:
+                from core.monster_table_gen import write_monster_table_h
+                mt_h = write_monster_table_h(project_data=data, export_dir=export_dir_abs)
+                log(f"MonsterTbl: {mt_h}")
+                gen_manifest.add(mt_h)
+            except Exception as e:
+                log(f"WARN  cannot write monster_table.h: {e}")
+        else:
+            log("MonsterTbl: skipped (mechanic 'monster_table' disabled)")
+        if _mech_on(data, "battle_engine"):
+            try:
+                from core.battle_engine_gen import write_battle_engine_h
+                be_h = write_battle_engine_h(project_data=data, export_dir=export_dir_abs)
+                log(f"BattleEng : {be_h}")
+                gen_manifest.add(be_h)
+            except Exception as e:
+                log(f"WARN  cannot write battle_engine.h: {e}")
+            try:
+                from core.battle_engine_assets_gen import write_battle_engine_assets
+                bea_h, bea_c = write_battle_engine_assets(
+                    project_data=data, export_dir=export_dir_abs
+                )
+                log(f"BattleAsset: {bea_h} + {bea_c}")
+                gen_manifest.add(bea_h)
+                gen_manifest.add(bea_c)
+            except Exception as e:
+                log(f"WARN  cannot write battle_engine_assets.h/.c: {e}")
+        else:
+            log("BattleEng : skipped (mechanic 'battle_engine' disabled)")
+        if _mech_on(data, "random_encounters"):
+            try:
+                from core.random_encounters_gen import write_random_encounters_h
+                re_h = write_random_encounters_h(project_data=data, export_dir=export_dir_abs)
+                log(f"RandomEnc : {re_h}")
+                gen_manifest.add(re_h)
+            except Exception as e:
+                log(f"WARN  cannot write random_encounters.h: {e}")
+        else:
+            log("RandomEnc : skipped (mechanic 'random_encounters' disabled)")
         _procgen_on = _mech_on(data, "procgen")
         try:
             if _procgen_on:

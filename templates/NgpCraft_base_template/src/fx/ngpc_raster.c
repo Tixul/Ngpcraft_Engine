@@ -102,10 +102,22 @@ void ngpc_raster_init(void)
      * - TRUN bit 0 = 1 (start Timer 0)
      *
      * Note: exact timer configuration may need tuning on real hardware.
-     * The HBlank signal is ~32 us per line (6144000 Hz / 192 lines / 60 Hz).
+     * A scanline is ~515 CPU cycles (~84 us) at 6.144 MHz (silicon-measured).
+     * TREG0 counts HBlanks/scanlines here (TI0 clock), NOT CPU cycles.
      */
     HW_T01MOD &= (u8)~0xC3; /* Timer0 clock = TI0, 8-bit mode */
     HW_TREG0 = 0x01;
+
+    /* CRITICAL: enabling the Timer0 IRQ MUST go through the BIOS. Writing the
+     * interrupt-level registers directly does NOT arm the IRQ on NGPC hardware
+     * -- the BIOS owns the interrupt-level hardware. Convention per the official
+     * Toshiba SDK (8Bit.txt "H-int Setting"): rw3 = VECT_INTLVSET (4),
+     * rb3 = priority level, rc3 = interrupt number (2 = 8-bit Timer 0). */
+    __asm("ldb rb3, 4");   /* priority level 4 (VBlank-level, fires under EI 0) */
+    __asm("ldb rc3, 2");   /* interrupt number 2 = Timer0                       */
+    __asm("ldb rw3, 4");   /* rw3 = BIOS_INTLVSET (= 4)                         */
+    __asm("swi 1");        /* BIOS installs the level; NOW the IRQ can fire     */
+
     HW_TRUN |= 0x01;   /* Enable Timer 0 */
 }
 

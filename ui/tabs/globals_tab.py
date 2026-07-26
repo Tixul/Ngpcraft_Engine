@@ -142,8 +142,20 @@ class GlobalsTab(QWidget, ProjectPathMixin):
         self._sub_tabs.addTab(self._build_audio_tab(), tr("proj.audio_group"))
         self._sub_tabs.addTab(self._build_entity_types_tab(), tr("glob.entity_types_tab"))
         self._sub_tabs.addTab(self._build_items_tab(), "Items")
+        self._monsters_tab_index = self._sub_tabs.addTab(self._build_monsters_tab(), "Monsters")
         self._sub_tabs.addTab(self._build_custom_events_tab(), "Événements")
         self._sub_tabs.addTab(self._build_save_tab(), tr("glob.save_tab"))
+        # Refresh Monsters dropdowns (sprite picker) every time the tab is
+        # shown — otherwise sprites added to a scene AFTER opening the editor
+        # don't appear in the combo. Cheap : monsters table is small.
+        self._sub_tabs.currentChanged.connect(self._on_sub_tab_changed)
+
+    def _on_sub_tab_changed(self, idx: int) -> None:
+        """Refresh per-tab dropdowns that depend on project-wide state."""
+        if idx == getattr(self, "_monsters_tab_index", -1):
+            # Re-aggregate project sprites + rebuild rows so combos pick up
+            # newly-imported sprites without needing a project reload.
+            self._load_monsters_from_project()
 
     def _build_variables_tab(self) -> QWidget:
         w = QWidget()
@@ -342,6 +354,7 @@ class GlobalsTab(QWidget, ProjectPathMixin):
         self._load_sfx_map_from_project()
         self._load_entity_types_from_project()
         self._load_items_from_project()
+        self._load_monsters_from_project()
         self._load_save_config_from_project()
         self.load_custom_events()
 
@@ -1803,6 +1816,12 @@ class GlobalsTab(QWidget, ProjectPathMixin):
         ("ITEM_CUSTOM",    "Custom"),
     ]
     _RARITY_LABELS: list[str] = ["Common", "Uncommon", "Rare"]
+    # Battle targeting — keys match TARGET_NAMES in core/item_table_gen.py
+    _ITEM_TARGETS: list[tuple[str, str]] = [
+        ("ITEM_TARGET_SELF",  "Soi"),
+        ("ITEM_TARGET_ENEMY", "Ennemi"),
+        ("ITEM_TARGET_NONE",  "Aucun"),
+    ]
 
     def _build_items_tab(self) -> QWidget:
         w = QWidget()
@@ -1812,20 +1831,22 @@ class GlobalsTab(QWidget, ProjectPathMixin):
 
         hint = QLabel(
             "Définissez la table d'items du projet. Exportée en <b>item_table.h</b>."
-            "<br>Chaque item a un type, une valeur, une rareté et un prix (boutique)."
+            "<br>Chaque item a un type, une valeur, une rareté, un prix (boutique), "
+            "et des réglages battle (cible, utilisable en combat, consommable, stack max, "
+            "messages d'usage). Désactiver le mech « Système d'items » dans Mechanics tab "
+            "skip la génération du .h."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#aaa;font-size:11px;")
         lay.addWidget(hint)
 
-        self._item_table = QTableWidget(0, 6)
-        self._item_table.setHorizontalHeaderLabels(["Nom", "Type", "Valeur", "Rareté", "Prix", "Sprite"])
+        headers = ["Nom", "Type", "Valeur", "Rareté", "Prix", "Sprite",
+                   "Cible", "Battle", "Conso", "Stack"]
+        self._item_table = QTableWidget(0, len(headers))
+        self._item_table.setHorizontalHeaderLabels(headers)
         self._item_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self._item_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self._item_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self._item_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self._item_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        self._item_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        for col in range(1, len(headers)):
+            self._item_table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         self._item_table.verticalHeader().setDefaultSectionSize(24)
         self._item_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self._item_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -1841,12 +1862,23 @@ class GlobalsTab(QWidget, ProjectPathMixin):
         self._btn_item_del.setEnabled(False)
         self._btn_item_del.clicked.connect(self._item_del)
         btn_row.addWidget(self._btn_item_del)
+        self._btn_item_msgs = QPushButton("✏ Modifier les messages…")
+        self._btn_item_msgs.setEnabled(False)
+        self._btn_item_msgs.setToolTip(
+            "Édite les messages d'usage (battle dialog box) pour l'item sélectionné :\n"
+            "• Message à l'utilisation — affiché quand l'item est consommé\n"
+            "• Message si effet impossible — ex : « HP déjà au max »"
+        )
+        self._btn_item_msgs.clicked.connect(self._item_edit_msgs)
+        btn_row.addWidget(self._btn_item_msgs)
         btn_row.addStretch()
         lay.addLayout(btn_row)
 
-        self._item_table.itemSelectionChanged.connect(
-            lambda: self._btn_item_del.setEnabled(self._item_table.currentRow() >= 0)
-        )
+        def _on_sel_changed():
+            has_sel = self._item_table.currentRow() >= 0
+            self._btn_item_del.setEnabled(has_sel)
+            self._btn_item_msgs.setEnabled(has_sel)
+        self._item_table.itemSelectionChanged.connect(_on_sel_changed)
         return w
 
     def _refresh_item_ids(self) -> None:
@@ -1855,7 +1887,12 @@ class GlobalsTab(QWidget, ProjectPathMixin):
         self._item_table.setVerticalHeaderLabels([str(i) for i in range(n)])
 
     def _item_add(self) -> None:
-        self._item_insert_row({"name": "item", "type": "ITEM_HEAL", "value": 10, "rarity": 0, "price": 5})
+        self._item_insert_row({
+            "name": "item", "type": "ITEM_HEAL", "value": 10, "rarity": 0, "price": 5,
+            "target": "ITEM_TARGET_SELF",
+            "usable_in_battle": True, "consumable": True, "max_stack": 9,
+            "msg_use": "", "msg_no_effect": "",
+        })
         self._refresh_item_ids()
         self._save_items_to_project()
 
@@ -1917,6 +1954,48 @@ class GlobalsTab(QWidget, ProjectPathMixin):
         sprite_spin.valueChanged.connect(self._save_items_to_project)
         self._item_table.setCellWidget(row, 5, sprite_spin)
 
+        # Col 6: target combo (battle effect side)
+        target_combo = QComboBox()
+        for key, label in self._ITEM_TARGETS:
+            target_combo.addItem(label, key)
+        cur_target = str(item.get("target", "ITEM_TARGET_SELF") or "ITEM_TARGET_SELF")
+        t_idx = next((i for i, (k, _) in enumerate(self._ITEM_TARGETS) if k == cur_target), 0)
+        target_combo.setCurrentIndex(t_idx)
+        target_combo.setToolTip("Qui reçoit l'effet de l'item en combat (Soi / Ennemi / Aucun)")
+        target_combo.currentIndexChanged.connect(self._save_items_to_project)
+        self._item_table.setCellWidget(row, 6, target_combo)
+
+        # Col 7: usable_in_battle checkbox
+        usable_cb = QCheckBox()
+        usable_cb.setChecked(bool(item.get("usable_in_battle", True)))
+        usable_cb.setToolTip("Si décoché : l'item n'apparaît pas dans le menu ITEM du combat (item de quête, clé, etc.)")
+        usable_cb.stateChanged.connect(self._save_items_to_project)
+        self._item_table.setCellWidget(row, 7, usable_cb)
+
+        # Col 8: consumable checkbox
+        conso_cb = QCheckBox()
+        conso_cb.setChecked(bool(item.get("consumable", True)))
+        conso_cb.setToolTip("Si décoché : l'item n'est PAS retiré de l'inventaire après usage (équipement permanent, etc.)")
+        conso_cb.stateChanged.connect(self._save_items_to_project)
+        self._item_table.setCellWidget(row, 8, conso_cb)
+
+        # Col 9: max_stack spin
+        stack_spin = QSpinBox()
+        stack_spin.setRange(1, 255)
+        stack_spin.setFrame(False)
+        stack_spin.setValue(max(1, min(255, int(item.get("max_stack", 9) or 9))))
+        stack_spin.setToolTip("Quantité maximale par slot d'inventaire")
+        stack_spin.valueChanged.connect(self._save_items_to_project)
+        self._item_table.setCellWidget(row, 9, stack_spin)
+
+        # Persist message templates on the name cell's UserRole (dialog edits them).
+        name_cell = self._item_table.item(row, 0)
+        if name_cell is not None:
+            name_cell.setData(Qt.ItemDataRole.UserRole, {
+                "msg_use":       str(item.get("msg_use", "") or ""),
+                "msg_no_effect": str(item.get("msg_no_effect", "") or ""),
+            })
+
         self._item_table.blockSignals(False)
         self._refresh_item_ids()
 
@@ -1952,10 +2031,366 @@ class GlobalsTab(QWidget, ProjectPathMixin):
             price = price_spin.value() if price_spin else 0
             sprite_spin = self._item_table.cellWidget(row, 5)
             sprite_id = sprite_spin.value() if sprite_spin else 0
-            items.append({"name": name, "type": item_type, "value": value, "rarity": rarity, "price": price, "sprite_id": sprite_id})
+            target_combo = self._item_table.cellWidget(row, 6)
+            target = target_combo.currentData() if target_combo else "ITEM_TARGET_SELF"
+            usable_cb = self._item_table.cellWidget(row, 7)
+            usable = bool(usable_cb.isChecked()) if usable_cb else True
+            conso_cb = self._item_table.cellWidget(row, 8)
+            consumable = bool(conso_cb.isChecked()) if conso_cb else True
+            stack_spin = self._item_table.cellWidget(row, 9)
+            max_stack = stack_spin.value() if stack_spin else 9
+            msgs = name_item.data(Qt.ItemDataRole.UserRole) if name_item else None
+            if not isinstance(msgs, dict):
+                msgs = {}
+            items.append({
+                "name": name, "type": item_type, "value": value, "rarity": rarity,
+                "price": price, "sprite_id": sprite_id,
+                "target": target, "usable_in_battle": usable, "consumable": consumable,
+                "max_stack": max_stack,
+                "msg_use":       str(msgs.get("msg_use", "") or ""),
+                "msg_no_effect": str(msgs.get("msg_no_effect", "") or ""),
+            })
         if isinstance(self._data, dict):
             self._data["item_table"] = items
         self._on_save()
+
+    def _item_edit_msgs(self) -> None:
+        """Open a small dialog to edit msg_use / msg_no_effect for the selected row."""
+        row = self._item_table.currentRow()
+        if row < 0:
+            return
+        name_cell = self._item_table.item(row, 0)
+        if name_cell is None:
+            return
+        msgs = name_cell.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(msgs, dict):
+            msgs = {}
+
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Messages — {name_cell.text() or 'item'}")
+        form = QFormLayout(dlg)
+        ed_use = QLineEdit(str(msgs.get("msg_use", "") or ""))
+        ed_use.setMaxLength(40)
+        ed_use.setToolTip("Affiché dans la dialog box quand l'item est consommé (ex: « Potion used. »). Vide = pas de message.")
+        ed_noe = QLineEdit(str(msgs.get("msg_no_effect", "") or ""))
+        ed_noe.setMaxLength(40)
+        ed_noe.setToolTip("Affiché quand l'usage échoue (ex: « HP already full. »). Vide = pas de message.")
+        form.addRow("Message à l'utilisation :", ed_use)
+        form.addRow("Si effet impossible :", ed_noe)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        form.addRow(btns)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            name_cell.setData(Qt.ItemDataRole.UserRole, {
+                "msg_use":       ed_use.text().strip(),
+                "msg_no_effect": ed_noe.text().strip(),
+            })
+            self._save_items_to_project()
+
+    # ------------------------------------------------------------------
+    # Monsters tab (battle registry — peer of entity_types, used by
+    # battle_engine + random_encounters mechanics)
+    # ------------------------------------------------------------------
+
+    def _build_monsters_tab(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(6)
+
+        hint = QLabel(
+            "Définissez la table de monstres du projet (combat JRPG). Exportée en "
+            "<b>monster_table.h</b>. <br>Chaque monstre a ses stats combat "
+            "(HP/Atk/Def/Crit/Miss), son sprite + slot OAM (auto-alloué à partir de "
+            "20 si laissé à 0), ses récompenses (XP, gold, drops d'items). "
+            "Activable via le mech <b>monster_table</b> dans Mechanics."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#aaa;font-size:11px;")
+        lay.addWidget(hint)
+
+        headers = ["Nom", "HP", "Atk min", "Atk rng", "Def",
+                   "Crit %", "Crit ×10", "Miss %",
+                   "Sprite", "Slot", "XP", "Gold", "Drops"]
+        self._monster_table = QTableWidget(0, len(headers))
+        self._monster_table.setHorizontalHeaderLabels(headers)
+        self._monster_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for col in range(1, len(headers)):
+            self._monster_table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        self._monster_table.verticalHeader().setDefaultSectionSize(24)
+        self._monster_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        self._monster_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._monster_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._monster_table.itemChanged.connect(lambda _: self._save_monsters_to_project())
+        lay.addWidget(self._monster_table, 1)
+
+        btn_row = QHBoxLayout()
+        btn_add = QPushButton("+ Ajouter")
+        btn_add.clicked.connect(self._monster_add)
+        btn_row.addWidget(btn_add)
+        self._btn_monster_del = QPushButton("− Supprimer")
+        self._btn_monster_del.setEnabled(False)
+        self._btn_monster_del.clicked.connect(self._monster_del)
+        btn_row.addWidget(self._btn_monster_del)
+        self._btn_monster_drops = QPushButton("✏ Modifier les drops…")
+        self._btn_monster_drops.setEnabled(False)
+        self._btn_monster_drops.setToolTip(
+            "Édite la liste des items qui peuvent dropper à la mort du monstre.\n"
+            "Chaque drop = un item du projet + une probabilité 0-100%."
+        )
+        self._btn_monster_drops.clicked.connect(self._monster_edit_drops)
+        btn_row.addWidget(self._btn_monster_drops)
+        btn_row.addStretch()
+        lay.addLayout(btn_row)
+
+        def _on_sel_changed():
+            has_sel = self._monster_table.currentRow() >= 0
+            self._btn_monster_del.setEnabled(has_sel)
+            self._btn_monster_drops.setEnabled(has_sel)
+        self._monster_table.itemSelectionChanged.connect(_on_sel_changed)
+        return w
+
+    def _refresh_monster_ids(self) -> None:
+        """Update vertical header to show 0-based MONSTER_IDX_* indices."""
+        n = self._monster_table.rowCount()
+        self._monster_table.setVerticalHeaderLabels([str(i) for i in range(n)])
+
+    def _monster_add(self) -> None:
+        self._monster_insert_row({
+            "name": "monster", "max_hp": 10,
+            "attack_min": 1, "attack_range": 2,
+            "defense": 0, "crit_chance_pct": 5, "crit_multiplier": 20,
+            "miss_chance_pct": 5,
+            "sprite_id": 0, "sprite_slot": 0,
+            "xp_drop": 0, "gold_drop": 0,
+            "item_drops": [],
+        })
+        self._refresh_monster_ids()
+        self._save_monsters_to_project()
+
+    def _monster_del(self) -> None:
+        row = self._monster_table.currentRow()
+        if row >= 0:
+            self._monster_table.removeRow(row)
+            self._refresh_monster_ids()
+            self._save_monsters_to_project()
+
+    def _monster_insert_row(self, monster: dict) -> None:
+        self._monster_table.blockSignals(True)
+        row = self._monster_table.rowCount()
+        self._monster_table.insertRow(row)
+        save = lambda *_: self._save_monsters_to_project()
+
+        # Col 0 : name
+        self._monster_table.setItem(row, 0, QTableWidgetItem(str(monster.get("name", "monster"))))
+
+        # Cols 1-11 : spinboxes (ranges per spec). Col 8 (sprite) is special : QComboBox.
+        spin_specs = [
+            (1,  "max_hp",          1, 255,  10),
+            (2,  "attack_min",      0, 255,  1),
+            (3,  "attack_range",    0, 255,  2),
+            (4,  "defense",         0, 255,  0),
+            (5,  "crit_chance_pct", 0, 100,  5),
+            (6,  "crit_multiplier", 10, 255, 20),  # ×10 stored, displayed as raw
+            (7,  "miss_chance_pct", 0, 100,  5),
+            (9,  "sprite_slot",     0, 255,  0),  # 0 = auto-alloc
+            (10, "xp_drop",         0, 255,  0),
+            (11, "gold_drop",       0, 255,  0),
+        ]
+        for col, key, lo, hi, default in spin_specs:
+            spin = QSpinBox()
+            spin.setRange(lo, hi)
+            spin.setFrame(False)
+            spin.setValue(max(lo, min(hi, int(monster.get(key, default) or default))))
+            spin.valueChanged.connect(save)
+            self._monster_table.setCellWidget(row, col, spin)
+
+        # Col 8 : sprite picker — QComboBox populated from all project sprites
+        # (aggregated across scenes). User picks by NAME ; we store both the
+        # name (sprite_name) and the resolved index (sprite_id) — codegen uses
+        # the name as source of truth, sprite_id is back-compat fallback.
+        from ui.tabs.mechanics_tab import _list_project_sprites
+        sprite_combo = QComboBox()
+        sprite_combo.addItem("(non sélectionné)", "")
+        project_sprites = _list_project_sprites(self._data if isinstance(self._data, dict) else {})
+        for label, name in project_sprites:
+            sprite_combo.addItem(label, name)
+        cur_sprite_name = str(monster.get("sprite_name", "") or "")
+        # Backward compat : if no sprite_name, leave "(non sélectionné)"
+        target = 0
+        for i in range(sprite_combo.count()):
+            if sprite_combo.itemData(i) == cur_sprite_name and cur_sprite_name:
+                target = i
+                break
+        sprite_combo.setCurrentIndex(target)
+        sprite_combo.setToolTip(
+            "Sprite affiché pour ce monstre en combat. Liste agrégée de tous "
+            "les sprites du projet (toutes scènes confondues). Pour ajouter "
+            "des options ici, importe des sprites via le Sprite Setup d'une scène."
+        )
+        sprite_combo.currentIndexChanged.connect(save)
+        self._monster_table.setCellWidget(row, 8, sprite_combo)
+
+        # Tooltips for other non-obvious columns
+        self._monster_table.cellWidget(row, 6).setToolTip("Multiplicateur de crit stocké ×10 (ex: 20 = ×2.0, 15 = ×1.5)")
+        self._monster_table.cellWidget(row, 9).setToolTip("Slot OAM (0 = auto-alloué à partir de 20 par pas de 4)")
+
+        # Col 12 : drops summary label (read-only, set via dialog)
+        drops = monster.get("item_drops") if isinstance(monster.get("item_drops"), list) else []
+        summary = QTableWidgetItem(f"{len(drops)} drop(s)" if drops else "—")
+        summary.setFlags(summary.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        summary.setData(Qt.ItemDataRole.UserRole, drops)
+        self._monster_table.setItem(row, 12, summary)
+
+        self._monster_table.blockSignals(False)
+        self._refresh_monster_ids()
+
+    def _save_monsters_to_project(self) -> None:
+        monsters = []
+        for row in range(self._monster_table.rowCount()):
+            name_item = self._monster_table.item(row, 0)
+            name = name_item.text().strip() if name_item else "monster"
+            def _v(col: int, default: int = 0) -> int:
+                w = self._monster_table.cellWidget(row, col)
+                return int(w.value()) if w else default
+            drops_item = self._monster_table.item(row, 12)
+            drops = drops_item.data(Qt.ItemDataRole.UserRole) if drops_item else []
+            if not isinstance(drops, list):
+                drops = []
+            # Col 8 is the sprite combo (NAME source of truth, sprite_id legacy
+            # fallback). The codegen resolves sprite_name → asset symbol.
+            sprite_combo = self._monster_table.cellWidget(row, 8)
+            sprite_name = str(sprite_combo.currentData() or "") if sprite_combo else ""
+            monsters.append({
+                "name":            name,
+                "max_hp":          _v(1, 10),
+                "attack_min":      _v(2, 1),
+                "attack_range":    _v(3, 2),
+                "defense":         _v(4, 0),
+                "crit_chance_pct": _v(5, 5),
+                "crit_multiplier": _v(6, 20),
+                "miss_chance_pct": _v(7, 5),
+                "sprite_name":     sprite_name,   # v1.1.2 : name-based picker
+                "sprite_id":       0,             # legacy field, codegen overrides
+                "sprite_slot":     _v(9, 0),
+                "xp_drop":         _v(10, 0),
+                "gold_drop":       _v(11, 0),
+                "item_drops":      list(drops),
+            })
+        if isinstance(self._data, dict):
+            self._data["monster_table"] = monsters
+        self._on_save()
+
+    def _load_monsters_from_project(self) -> None:
+        raw = []
+        if isinstance(self._data, dict):
+            raw = self._data.get("monster_table", []) or []
+            if not isinstance(raw, list):
+                raw = []
+        self._monster_table.blockSignals(True)
+        self._monster_table.setRowCount(0)
+        for monster in raw:
+            if isinstance(monster, dict):
+                self._monster_insert_row(monster)
+        self._monster_table.blockSignals(False)
+        self._refresh_monster_ids()
+
+    def _monster_edit_drops(self) -> None:
+        """Open a dialog to edit the selected monster's item_drops list."""
+        row = self._monster_table.currentRow()
+        if row < 0:
+            return
+        summary = self._monster_table.item(row, 12)
+        if summary is None:
+            return
+        drops = summary.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(drops, list):
+            drops = []
+
+        items_pool: list[dict] = []
+        if isinstance(self._data, dict):
+            items_pool = self._data.get("item_table", []) or []
+            if not isinstance(items_pool, list):
+                items_pool = []
+
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox
+
+        dlg = QDialog(self)
+        name_cell = self._monster_table.item(row, 0)
+        dlg.setWindowTitle(f"Drops — {name_cell.text() if name_cell else 'monster'}")
+        dlg.resize(420, 280)
+        dlg_lay = QVBoxLayout(dlg)
+
+        if not items_pool:
+            warn = QLabel("⚠ Aucun item défini dans le projet (Globals → Items). "
+                          "Ajoute des items avant de définir des drops.")
+            warn.setWordWrap(True)
+            warn.setStyleSheet("color:#cc8;")
+            dlg_lay.addWidget(warn)
+
+        drop_tbl = QTableWidget(0, 2)
+        drop_tbl.setHorizontalHeaderLabels(["Item", "Chance %"])
+        drop_tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        drop_tbl.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        drop_tbl.verticalHeader().setDefaultSectionSize(24)
+        drop_tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        dlg_lay.addWidget(drop_tbl, 1)
+
+        def _insert_drop_row(item_id: int, chance: int) -> None:
+            r = drop_tbl.rowCount()
+            drop_tbl.insertRow(r)
+            cb = QComboBox()
+            for idx, it in enumerate(items_pool):
+                cb.addItem(f"{idx}: {it.get('name', '?')}", idx)
+            cb.setCurrentIndex(max(0, min(len(items_pool) - 1, item_id)) if items_pool else 0)
+            drop_tbl.setCellWidget(r, 0, cb)
+            sp = QSpinBox()
+            sp.setRange(0, 100)
+            sp.setValue(max(0, min(100, chance)))
+            sp.setSuffix(" %")
+            drop_tbl.setCellWidget(r, 1, sp)
+
+        for d in drops:
+            if isinstance(d, dict):
+                _insert_drop_row(int(d.get("item_id", 0) or 0),
+                                 int(d.get("chance_pct", 0) or 0))
+
+        bar = QHBoxLayout()
+        b_add = QPushButton("+ Ajouter un drop")
+        b_add.setEnabled(bool(items_pool))
+        b_add.clicked.connect(lambda: _insert_drop_row(0, 25))
+        bar.addWidget(b_add)
+        b_rem = QPushButton("− Retirer")
+        b_rem.clicked.connect(lambda: drop_tbl.removeRow(drop_tbl.currentRow()) if drop_tbl.currentRow() >= 0 else None)
+        bar.addWidget(b_rem)
+        bar.addStretch()
+        dlg_lay.addLayout(bar)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        dlg_lay.addWidget(btns)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            new_drops: list[dict] = []
+            for r in range(drop_tbl.rowCount()):
+                cb = drop_tbl.cellWidget(r, 0)
+                sp = drop_tbl.cellWidget(r, 1)
+                if cb is None or sp is None:
+                    continue
+                new_drops.append({
+                    "item_id":    int(cb.currentData()) if cb.currentData() is not None else 0,
+                    "chance_pct": int(sp.value()),
+                })
+            summary.setData(Qt.ItemDataRole.UserRole, new_drops)
+            summary.setText(f"{len(new_drops)} drop(s)" if new_drops else "—")
+            self._save_monsters_to_project()
 
     def _build_custom_events_tab(self) -> QWidget:
         w = QWidget()

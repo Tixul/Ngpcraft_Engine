@@ -22,11 +22,11 @@
  *   static const char *items[] = { "JOUER", "OPTIONS", "QUITTER" };
  *   static NgpcMenu menu;
  *   ngpc_menu_init(&menu, items, 3, 1);     // wrap=1
- *   ngpc_menu_draw(&menu, PLANE_SCR1, 8, 6, '>');
+ *   ngpc_menu_draw(&menu, PLANE_SCR1, 0, 8, 6, '>');
  *
  *   // Chaque frame :
  *   u8 sel = ngpc_menu_update(&menu);
- *   if (menu.changed) ngpc_menu_draw(&menu, PLANE_SCR1, 8, 6, '>');
+ *   if (menu.changed) ngpc_menu_draw(&menu, PLANE_SCR1, 0, 8, 6, '>');
  *   if (sel != MENU_NONE) { ... action[sel] ... }
  */
 
@@ -59,12 +59,14 @@ u8 ngpc_menu_update(NgpcMenu *m);
 
 /* Dessine le menu sur la tilemap.
  *   plane  : PLANE_SCR1 ou PLANE_SCR2
+ *   pal    : index de palette texte
  *   tx, ty : position en tuiles du premier item
  *   cur_ch : caractère affiché devant l'item actif (ex: '>', '*') */
-void ngpc_menu_draw(const NgpcMenu *m, u8 plane, u8 tx, u8 ty, char cur_ch);
+void ngpc_menu_draw(const NgpcMenu *m, u8 plane, u8 pal, u8 tx, u8 ty, char cur_ch);
 
 /* Efface la zone du menu (remplace par des espaces).
+ *   pal   : index de palette texte
  *   width : nombre de tuiles à effacer par ligne (titre le plus long + 2) */
-void ngpc_menu_erase(const NgpcMenu *m, u8 plane, u8 tx, u8 ty, u8 width);
+void ngpc_menu_erase(const NgpcMenu *m, u8 plane, u8 pal, u8 tx, u8 ty, u8 width);
 
 #endif /* NGPC_MENU_H */

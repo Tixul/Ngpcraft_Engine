@@ -332,6 +332,98 @@ MECHANICS_REGISTRY: list[dict] = [
         ],
         "keywords": ["pause", "menu", "option", "inventory", "title", "quit", "resume", "modal"],
     },
+
+    # --- RPG / JRPG combat (Pokémon-style) ---
+    {
+        "id":              "item_table",
+        "label":           "Système d'items / inventaire",
+        "description":     ("Registre project-wide d'items (consommables, clés, gold, buffs). "
+                            "8 types prédéfinis (HEAL, ATK_UP, DEF_UP, XP_UP, GOLD, DICE_PLUS, KEY, CUSTOM) "
+                            "+ rareté, prix shop, sprite icône, ciblage (self/enemy/none), flags "
+                            "(usable_in_battle / consumable), max_stack, messages d'usage. "
+                            "Exporté en item_table.h (NgpcItem + g_item_table[] + g_item_msgs[]). "
+                            "Consommé par battle_engine (menu items), inventory runtime (ngpc_inv_*), "
+                            "futurs systèmes shop/quête. Désactiver = skip de la génération du .h."),
+        "default_enabled": True,   # compat : l'éditeur Items existait déjà avant ce flag
+        "category":        "combat",
+        "config_locations": [
+            ("Globals → Items",
+             "Édite la table : ajoute/retire des items, règle type/valeur/rareté/prix/sprite + "
+             "battle settings (cible, usable, consumable, stack) + messages d'usage."),
+        ],
+        "keywords": ["item", "inventory", "potion", "consumable", "loot", "shop", "rpg", "jrpg", "registry"],
+    },
+    {
+        "id":              "monster_table",
+        "label":           "Registre de monstres (combat)",
+        "description":     ("Registre project-wide de monstres pour le combat JRPG : stats HP/atk/def, "
+                            "crit %, miss %, sprite, palette, slot OAM (auto-alloué à partir de 20 par "
+                            "pas de 4), XP/gold à la mort, drops d'items (par monstre, avec % de chance). "
+                            "Exporté en monster_table.h (NgpcMonster + g_monster_table[] + g_monster_names[] "
+                            "+ g_monster_drops[] avec offsets per-monstre). Consommé par battle_engine "
+                            "(stats du combattant) et random_encounters (pool par zone). Peer de "
+                            "entity_types : un monstre n'est PAS forcément une entité spawnable en scène. "
+                            "Désactiver = skip de la génération du .h."),
+        "default_enabled": False,  # opt-in, nouvelle feature, pas de données legacy à préserver
+        "category":        "combat",
+        "config_locations": [
+            ("Globals → Monsters",
+             "Édite la table : stats combat, sprite, drops d'items (référence item_table)."),
+            ("Mechanics tab → battle_engine + random_encounters",
+             "Ces mécaniques consomment monster_table — sans monstres, le menu battle reste vide."),
+        ],
+        "keywords": ["monster", "ennemi", "creature", "mob", "stats", "hp", "boss", "rpg", "jrpg", "registry"],
+    },
+    {
+        "id":              "battle_engine",
+        "label":           "Combat JRPG (Pokémon-style face-à-face)",
+        "description":     ("Moteur de combat 1v1 turn-based inspiré du démo `jrpg_demo.c` : "
+                            "menu ATTACK / ITEM / GUARD / RUN, dialog box pour les messages, "
+                            "formules dégâts avec defense/crit/miss, GUARD = -1 dégât, item menu "
+                            "dynamique alimenté par item_table (filtré usable_in_battle), bind "
+                            "optionnel d'une variable XP + gold (gain sur kill via monster_table). "
+                            "Active = la scène BATTLE auto-générée apparaît dans scene_map, ses "
+                            "anchor widgets (portraits, HP bars, menus, dialog) sont positionnables "
+                            "depuis le canvas. Multi-ennemi/party = v2 séparée."),
+        "default_enabled": False,  # opt-in
+        "category":        "combat",
+        "inline_config":   "battle_engine",
+        "config_locations": [
+            ("Mechanics → Combat JRPG → configuration inline",
+             "Tous les params système ici : stats héros, formules, menus, messages, audio, "
+             "hooks événements, bind variables XP/gold, inventaire de départ."),
+            ("Globals → Monsters",
+             "Définis les ennemis (stats + drops). Sans monstres, le combat n'a personne à affronter."),
+            ("Globals → Items",
+             "Définis les items consommables (potions, etc.). usable_in_battle=true → apparaissent dans le menu ITEM."),
+            ("Scene Map → carte BATTLE auto-générée",
+             "Visible quand la mech est ON. Double-clic pour ouvrir le Level tab et déplacer les "
+             "anchor widgets (portraits, HP bars, dialog box) au pixel près."),
+        ],
+        "keywords": ["battle", "combat", "jrpg", "rpg", "pokemon", "turn-based", "fight", "duel", "monster"],
+    },
+    {
+        "id":              "random_encounters",
+        "label":           "Rencontres aléatoires (par scène)",
+        "description":     ("Hook scène : tous les N pas, roll une chance % de déclencher un combat "
+                            "via battle_engine. Pool d'ennemis configuré par scène (sélection parmi "
+                            "monster_table). Permet l'override par zone du tilemap battle + palette "
+                            "(forêt vs caverne vs donjon). Le déclenchement sauve la position du "
+                            "joueur ; battle_engine y retourne après victoire/défaite. Config "
+                            "par-scène sous Level tab → groupe « Rencontres aléatoires »."),
+        "default_enabled": False,
+        "category":        "combat",
+        "config_locations": [
+            ("Mechanics tab → groupe « Rencontres aléatoires » → configuration inline",
+             "Tout est configurable ici : taux (steps_per_check), chance %, pool d'ennemis depuis "
+             "monster_table, ET liste à cocher des scènes où les rencontres sont actives "
+             "(coche les zones d'aventure, décoche villes/menus/cutscenes)."),
+            ("Mechanics tab → battle_engine et monster_table (dépendances)",
+             "Sans elles, random_encounters n'a rien à déclencher — auto-activées via la cascade de deps."),
+        ],
+        "inline_config":   "random_encounters",
+        "keywords": ["encounter", "random", "wild", "pokemon", "step", "trigger", "spawn battle", "zone", "biome"],
+    },
 ]
 
 
@@ -453,6 +545,102 @@ MECHANICS_CONFIG_DEFAULTS: dict[str, dict] = {
         "text_continue_no":           "NO",
         "text_final":          "GAME OVER",
         "text_name_entry":  "NEW HIGH SCORE!",
+    },
+    # Defaults faithfully derived from jrpg_demo.c (the working test project).
+    # Hero side mirrors the demo constants ; messages reflect the literal strings
+    # used in the demo so existing players can replay it identically.
+    "battle_engine": {
+        # ---- Hero stats (mirror jrpg_demo.c HERO_* constants) ----
+        "hero_max_hp":           18,    # jrpg_demo.c:L33 HERO_MAX_HP
+        "hero_attack_min":        2,    # jrpg_demo.c:L391 (2 + qrandom % 4)
+        "hero_attack_range":      4,
+        "hero_defense":           0,    # new v1 — flat damage reduction
+        "hero_crit_chance_pct":   5,    # new v1
+        "hero_crit_multiplier":  20,    # ×2.0 stored ×10
+        "hero_miss_chance_pct":   5,    # new v1
+        "guard_reduction":        1,    # jrpg_demo.c:L347
+        "run_success_pct":       75,    # new v1 — demo had instant success
+        "hero_sprite_id":         0,    # legacy : positional fallback when name unset
+        "hero_sprite_name":       "",   # battle-portrait sprite NAME (project-wide picker).
+                                        # If empty, falls back to hero_sprite_id.
+        "hero_portrait_frame":    0,    # frame index to draw (default 0 = first pose).
+                                        # Avoids cycling through gameplay walk-cycles.
+        "hero_portrait_animate": False, # when True, cycle through all anim frames (use
+                                        # only for sprites authored AS battle portraits).
+        # ---- Menu labels (FR/EN i18n via templates) ----
+        "cmd_label_attack":  "ATTACK",  # jrpg_demo.c:L64-69
+        "cmd_label_item":    "ITEM",
+        "cmd_label_guard":   "GUARD",
+        "cmd_label_run":     "RUN",
+        # ---- Inputs (PAD_* constants used at runtime) ----
+        "input_confirm":     "PAD_A",   # jrpg_demo.c:L463
+        "input_cancel":      "PAD_B",
+        # ---- Combat messages (battle dialog box templates, {enemy} placeholder) ----
+        "msg_attack_hit":    "Hero attacks.",
+        "msg_attack_kill":   "Hero attacks. {enemy} defeated.",
+        "msg_enemy_hit":     "{enemy} strikes back.",
+        "msg_enemy_kill":    "{enemy} strikes. Hero falls.",
+        "msg_guard":         "Hero guards.",
+        "msg_run":           "Hero runs away.",
+        "msg_run_fail":      "Couldn't escape!",
+        "msg_crit":          " Critical!",
+        "msg_miss":          "Hero missed.",
+        "msg_got_item":      "Got {item}!",
+        # ---- Variable bindings (slot 0-15 in game_vars, or None to disable) ----
+        "xp_variable":            None,
+        "xp_overflow_behavior":  "CLAMP",   # CLAMP | WRAP
+        "gold_variable":          None,
+        "gold_overflow_behavior":"CLAMP",
+        # ---- Starter inventory : list of {"item_id": int, "qty": int} ----
+        "starter_inventory":     [],
+        # ---- Audio (refs to audio_manifest SFX/BGM ids, 0 = silent) ----
+        "bgm_battle":             0,
+        "bgm_victory":            0,
+        "bgm_defeat":             0,
+        "sfx_menu_move":          0,
+        "sfx_menu_confirm":       0,
+        "sfx_menu_cancel":        0,
+        "sfx_player_attack":      0,
+        "sfx_enemy_attack":       0,
+        "sfx_guard":              0,
+        "sfx_item_use":           0,
+        "sfx_enemy_defeated":     0,
+        "sfx_player_defeated":    0,
+        # ---- Event hooks (custom_event id 0-N, or 0 = no hook) ----
+        "on_battle_start_event":  0,
+        "on_victory_event":       0,
+        "on_defeat_event":        0,
+        # ---- v1 layout preset (1 enemy fixed ; multi-enemy = v2 mech) ----
+        "enemy_count_preset":     1,
+        # ---- Interface customization (v1.1 pivot — layout is locked, but every
+        # menu item / display element is independently toggleable / themable) ----
+        "cmd_attack_enabled":  True,   # show ATTACK in command menu
+        "cmd_item_enabled":    True,   # show ITEM (auto-disable if item_table empty)
+        "cmd_guard_enabled":   True,   # show GUARD
+        "cmd_run_enabled":     True,   # show RUN (typically OFF for boss fights)
+        "show_hero_hp_value":  True,   # display "HP 18/18" numerically (else just "HP")
+        "show_enemy_hp_value": True,   # display enemy HP value (OFF for "mystery boss")
+        "show_enemy_name":     True,   # display monster name above HP box
+        "show_inventory_side": True,   # right-side panel : GUARD/READY + item counts
+        "cursor_char":         ">",    # menu cursor character (1 char)
+        "dialog_press_hint":   "A CONTINUE",  # hint shown in side panel when dialog open
+        # ---- Background reference (v1.1) ----
+        # Name of a project tilemap to draw as the battle background. Empty =
+        # use solid color from bg_palette. The user prepares this tilemap in
+        # the Tilemaps tab using the zone reference table documented in
+        # core/battle_anchors.py to know which areas to leave plain.
+        "bg_tilemap":          "",     # tilemap name (matches project tilemap list)
+    },
+    # Random encounters — project-wide config v1 (per-scene override = v1.5).
+    # Applies to every scene where the mechanic is ON unless overridden in
+    # scene["random_encounters"] (forward-compat key, ignored by the v1 UI).
+    "random_encounters": {
+        "steps_per_check":  16,    # roll the chance every N player steps
+        "chance_pct":       10,    # probability of triggering a battle per check
+        "enemy_pool":       [],    # list of monster_idx — empty = mech inactive at runtime
+        # Per-scene override fields (v1.5) :
+        # "battle_bg_tilemap": None,  # override the BATTLE scene tilemap for this zone
+        # "battle_bg_palette": None,  # override the BATTLE scene palette
     },
 }
 

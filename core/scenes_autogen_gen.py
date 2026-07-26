@@ -88,9 +88,18 @@ def write_scenes_autogen(*, project_data: dict, export_dir: Path) -> tuple[Path 
             )
         except Exception:
             _has_player = True  # fail-open: assume player present
+        # Random encounters per-scene enable (default True for back-compat).
+        # Read from scene["random_encounters_enabled"] set by the Mechanics
+        # tab → random_encounters → "Scènes où les rencontres sont actives"
+        # check-list. Always emitted in g_scene_random_encounters_en[] ; the
+        # autorun gates random_encounters_on_step() on this flag.
+        _re_en = s.get("random_encounters_enabled", True)
+        if not isinstance(_re_en, bool):
+            _re_en = bool(_re_en) if _re_en is not None else True
         entries.append({
             "label": label, "safe": safe,
             "pause_menu_en": _pme, "has_player": _has_player,
+            "random_encounters_en": _re_en,
         })
 
     if not entries:
@@ -604,7 +613,8 @@ def write_scenes_autogen(*, project_data: dict, export_dir: Path) -> tuple[Path 
     hl.append("extern const u8 g_scene_pause_menu_en[NGP_SCENE_COUNT];\n")
     hl.append("/* PAUSE-1 S3.5b: 1u = scene has a player sprite (player draw + physics run), */\n")
     hl.append("/*                0u = scene has no player (title/menu/cutscene) — autorun skips. */\n")
-    hl.append("extern const u8 g_scene_has_player[NGP_SCENE_COUNT];\n\n")
+    hl.append("extern const u8 g_scene_has_player[NGP_SCENE_COUNT];\n")
+    hl.append("extern const u8 g_scene_random_encounters_en[NGP_SCENE_COUNT];\n\n")
     hl.append("#endif /* " + guard + " */\n")
 
     # --- C file ---
@@ -1060,6 +1070,14 @@ def write_scenes_autogen(*, project_data: dict, export_dir: Path) -> tuple[Path 
     cl.append("const u8 g_scene_has_player[NGP_SCENE_COUNT] = {\n")
     for e in entries:
         cl.append(f"    {1 if e.get('has_player', True) else 0}u,  /* {e['label']} */\n")
+    cl.append("};\n\n")
+
+    # JRPG random encounters per-scene enable. The autorun gates the call to
+    # random_encounters_on_step() on g_scene_random_encounters_en[cur_scene].
+    # Default 1u (back-compat — projects pre-v1.1.1 keep firing everywhere).
+    cl.append("const u8 g_scene_random_encounters_en[NGP_SCENE_COUNT] = {\n")
+    for e in entries:
+        cl.append(f"    {1 if e.get('random_encounters_en', True) else 0}u,  /* {e['label']} */\n")
     cl.append("};\n")
 
     out_h.write_text("".join(hl), encoding="utf-8")
