@@ -1025,6 +1025,52 @@ class ProjectTab(ProjectPathMixin, QWidget):
             errs.append(f"item_table.h: {exc}")
             return None
 
+    def _maybe_write_battle_files(self, export_dir: Path | None, errs: list[str]) -> list[Path]:
+        """Write the JRPG battle generated files, mechanic by mechanic.
+
+        These used to exist only in the headless ``--export`` path, so a
+        project exported from the GUI got item_table.h but none of
+        monster_table.h / battle_engine.h / battle_engine_assets.{h,c} /
+        random_encounters.h — the build then failed to link
+        (_battle_engine_load_bg & co) or silently used stale tables.
+
+        Must be called BEFORE ``_maybe_write_assets_autogen_mk``:
+        battle_engine_assets.c is a real translation unit, and the .mk lists
+        objects by globbing *.c in the export dir.
+        """
+        if not export_dir or not isinstance(self._data, dict):
+            return []
+        from core.mechanics import is_mechanic_enabled
+        produced: list[Path] = []
+        if is_mechanic_enabled(self._data, "monster_table"):
+            try:
+                from core.monster_table_gen import write_monster_table_h
+                produced.append(write_monster_table_h(project_data=self._data, export_dir=export_dir))
+            except Exception as exc:
+                errs.append(f"monster_table.h: {exc}")
+        if is_mechanic_enabled(self._data, "battle_engine"):
+            try:
+                from core.battle_engine_gen import write_battle_engine_h
+                produced.append(write_battle_engine_h(project_data=self._data, export_dir=export_dir))
+            except Exception as exc:
+                errs.append(f"battle_engine.h: {exc}")
+            try:
+                from core.battle_engine_assets_gen import write_battle_engine_assets
+                bea_h, bea_c = write_battle_engine_assets(
+                    project_data=self._data, export_dir=export_dir
+                )
+                produced.append(bea_h)
+                produced.append(bea_c)
+            except Exception as exc:
+                errs.append(f"battle_engine_assets: {exc}")
+        if is_mechanic_enabled(self._data, "random_encounters"):
+            try:
+                from core.random_encounters_gen import write_random_encounters_h
+                produced.append(write_random_encounters_h(project_data=self._data, export_dir=export_dir))
+            except Exception as exc:
+                errs.append(f"random_encounters.h: {exc}")
+        return produced
+
     def _maybe_write_procgen_configs(self, export_dir: Path | None, errs: list[str]) -> list[Path]:
         """Write procgen_config.h and/or cavegen_config.h when any scene has runtime params."""
         if not export_dir or not isinstance(self._data, dict):
@@ -4906,6 +4952,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
                 errs.append(f"scenes autogen: {e}")
         dgen_assets = self._maybe_write_dungeongen_procgen_assets(exp_dir, errs)
         produced.extend(dgen_assets or [])
+        produced.extend(self._maybe_write_battle_files(exp_dir, errs))
         mk_path = self._maybe_write_assets_autogen_mk(exp_dir, errs)
         if mk_path: produced.append(mk_path)
         constants_h = self._maybe_write_constants_h(exp_dir, errs)
@@ -5255,6 +5302,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
                 errs.append(f"scenes autogen: {e}")
         dgen_assets = self._maybe_write_dungeongen_procgen_assets(exp_dir, errs)
         produced.extend(dgen_assets or [])
+        produced.extend(self._maybe_write_battle_files(exp_dir, errs))
         mk_path = self._maybe_write_assets_autogen_mk(exp_dir, errs) if do_autogen_mk else None
         if mk_path:
             msg += "\n" + tr("proj.autogen_mk_written", path=self._rel(mk_path))
@@ -5556,6 +5604,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
                         msg += "\n" + tr("proj.scenes_autogen_skipped", names=", ".join(skipped_scenes[:8]))
             except Exception as e:
                 errs.append(f"scenes autogen: {e}")
+        self._maybe_write_battle_files(exp_dir, errs)
         mk_path = self._maybe_write_assets_autogen_mk(exp_dir, errs) if do_autogen_mk else None
         if mk_path:
             msg += "\n" + tr("proj.autogen_mk_written", path=self._rel(mk_path))
@@ -5879,6 +5928,7 @@ class ProjectTab(ProjectPathMixin, QWidget):
             except Exception as e: 
                 errs.append(f"{path.name}: {e}") 
 
+        self._maybe_write_battle_files(exp_dir, errs)
         mk_path = self._maybe_write_assets_autogen_mk(exp_dir, errs)
         constants_h = self._maybe_write_constants_h(exp_dir, errs)
         game_vars_h = self._maybe_write_game_vars_h(exp_dir, errs)

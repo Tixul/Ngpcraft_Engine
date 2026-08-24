@@ -86,7 +86,10 @@ u8 ngpc_gv_get_var(u8 idx)
 #define _GV_ACT_INC_VARIABLE   31u
 #define _GV_ACT_DEC_VARIABLE   51u
 #define _GV_ACT_TOGGLE_FLAG    58u
-#define _GV_ACT_INIT_GAME_VARS 74u
+/* 100, not 74: 74 is set_npc_dialogue in scene_level_gen.act_to_id, so the old
+ * value made an init_game_vars dispatch fire on a set_npc_dialogue trigger.
+ * 78 (claimed by a legacy header in level_tab.py) was taken by drop_item. */
+#define _GV_ACT_INIT_GAME_VARS 100u
 
 u8 ngpc_gv_dispatch(u8 action, u8 a0, u8 a1)
 {

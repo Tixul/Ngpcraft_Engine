@@ -27,10 +27,28 @@ import sys
 from pathlib import Path
 
 
+def _make_console_utf8_safe() -> None:
+    """Stop the export from dying on a legacy-codepage console.
+
+    The export log contains emoji (budget markers) and echoes scene labels,
+    which users routinely name with emoji. On Windows stdout defaults to
+    cp1252, so a single such character raises UnicodeEncodeError *mid-export*
+    — after files have already been written. Degrade unprintable characters
+    instead of aborting.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def _run_headless(args: list[str]) -> int:
     """Parse --export sub-arguments and run headless export (no QApplication)."""
     from core.headless_export import export_project
     from core.bg_size_check import MismatchResolution
+
+    _make_console_utf8_safe()
 
     project_path:   Path | None = None
     scene_filter:   str  | None = None

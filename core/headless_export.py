@@ -1117,6 +1117,32 @@ def export_project(
                 gen_manifest.add(sfx_h)
         except Exception as e:
             log(f"WARN  cannot write ngpc_project_sfx_map.h: {e}")
+        # Project-wide globals. These three were GUI-only: a headless --export
+        # of a project using game variables, constants or entity types emitted
+        # C that #includes headers nobody wrote, and the build died on
+        # "THC1-Error-310: Cannot open #include file". Same class of bug as the
+        # battle files being headless-only, mirrored.
+        try:
+            from core.game_vars_gen import write_game_vars_h
+            gv_h = write_game_vars_h(project_data=data, export_dir=export_dir_abs)
+            log(f"GameVars : {gv_h}")
+            gen_manifest.add(gv_h)
+        except Exception as e:
+            log(f"WARN  cannot write ngpc_game_vars.h: {e}")
+        try:
+            from core.game_constants_gen import write_constants_h
+            gc_h = write_constants_h(project_data=data, export_dir=export_dir_abs)
+            log(f"Constants: {gc_h}")
+            gen_manifest.add(gc_h)
+        except Exception as e:
+            log(f"WARN  cannot write ngpc_project_constants.h: {e}")
+        try:
+            from core.entity_types_gen import write_entity_types_h
+            et_h = write_entity_types_h(project_data=data, export_dir=export_dir_abs)
+            log(f"EntTypes : {et_h}")
+            gen_manifest.add(et_h)
+        except Exception as e:
+            log(f"WARN  cannot write ngpc_entity_types.h: {e}")
         try:
             from core.entity_type_events_gen import write_entity_type_events_h
             ev_h = write_entity_type_events_h(project_data=data, export_dir=export_dir_abs)
@@ -1399,7 +1425,32 @@ def export_project(
     # outputs as orphans and delete them. Skip the whole reconcile in that
     # case — the manifest from the last full export stays the source of
     # truth, and the next unfiltered run will reconcile properly.
+    def _refresh_assets_mk(reason: str) -> None:
+        """Rewrite assets_autogen.mk against the gen dir as it stands NOW.
+
+        The .mk lists one .rel per *.c found under export_dir, and it is
+        written early — before the writers that ADD .c files
+        (battle_engine_assets.c, procgen tiles/sprites) and before the orphan
+        purge that REMOVES them. The early glob is therefore always stale by
+        the end of the run. Skipping this refresh is how
+        battle_engine_assets.c ended up generated but never linked on a first
+        export (TULINK-Error-209 on _battle_engine_load_bg & co, which only
+        went away by exporting a second time).
+        """
+        if not export_dir_abs:
+            return
+        try:
+            mk = write_assets_autogen_mk(
+                base_dir, export_dir_abs,
+                has_save=project_has_save_triggers(data), no_sysfont=_no_sysfont,
+            )
+            log(f"Makefile : {mk} ({reason})")
+            gen_manifest.add(mk)
+        except Exception as e:
+            log(f"WARN  cannot refresh assets_autogen.mk: {e}")
+
     if scene_filter:
+        _refresh_assets_mk("refreshed — final gen dir contents")
         log("")
         log(f"Cleanup  : skipped (partial run — scene_filter={scene_filter!r})")
         return 0 if total.success else 1
@@ -1438,25 +1489,11 @@ def export_project(
                             log(f"  - build/obj/{Path(export_dir_rel).as_posix()}/{obj_rel.as_posix()}")
                     except OSError:
                         pass
-            # assets_autogen.mk was generated earlier in this function by
-            # globbing *.c under export_dir; that glob has now shrunk, so we
-            # must regenerate the include so make stops trying to link the
-            # removed objects. Only the .mk is affected — other top-level
-            # writers (sfx_map, entity_events, ...) do not glob the gen dir.
-            if export_dir_abs:
-                try:
-                    _has_save = project_has_save_triggers(data)
-                    mk_path = write_assets_autogen_mk(
-                        base_dir, export_dir_abs,
-                        has_save=_has_save, no_sysfont=_no_sysfont,
-                    )
-                    log(f"Makefile : {mk_path} (refreshed after orphan purge)")
-                    gen_manifest.add(mk_path)
-                except Exception as e:
-                    log(f"WARN  cannot refresh assets_autogen.mk after purge: {e}")
     else:
         log("")
         log("Cleanup  : skipped (export had errors — orphan files left in place)")
+
+    _refresh_assets_mk("refreshed — final gen dir contents")
 
     # Only persist the manifest on a successful run. On failure the
     # previous manifest stays intact so the next successful run can still

@@ -1097,6 +1097,14 @@ def patch_makefile_for_autogen(*, template_root: Path, export_dir_rel: str, enab
     block.append("OBJS += $(OBJ_DIR)/src/ngpng/ngpng_triggers.rel")
     if has_triggers:
         block.append("CDEFS += -DNGPNG_HAS_TRIGGERS=1")
+    if _feat.get("has_game_vars", False):
+        # Game flags/variables: the module was written, documented and shipped
+        # with a ngpc_gv_dispatch() entry point meant for exactly this, but
+        # nothing ever linked or called it — set_flag & co were inert.
+        block.append("# Game flags/variables: trigger actions + conditions.")
+        block.append("CDEFS += -Ioptional")
+        block.append("CDEFS += -DNGPNG_HAS_GAME_VARS=1")
+        block.append("OBJS += $(OBJ_DIR)/optional/ngpc_game_vars/ngpc_game_vars.rel")
     # B-6: scene runtime module — scene enter/reset helpers used by autorun main.
     block.append("OBJS += $(OBJ_DIR)/src/ngpng/ngpng_scene_runtime.rel")
     # B-4: HUD module — compiled only when HUD items are configured in the scene.
@@ -1824,6 +1832,42 @@ def _detect_features(project_data: dict) -> dict:
         len(sc.get("pal_cycles") or []) > 0
         for sc in scenes_list if isinstance(sc, dict)
     )
+    # MECH-12: fade_transitions makes the autorun call ngpc_palfx_* (death
+    # fade + fade_out/fade_in trigger actions) even with zero pal_cycles.
+    # write_autorun_main_c applies this same override; if it is missing HERE
+    # the Makefile patcher filters ngpc_palfx.rel out of OBJS and the link
+    # dies on unresolved _ngpc_palfx_fade_to_black / _update / _stop_all.
+    # The two must be derived from the same rule.
+    from core.mechanics import is_mechanic_enabled as _mech_on_feat
+    if _mech_on_feat(project_data, "fade_transitions"):
+        has_palfx = True
+
+    # Game flags/variables: link + call optional/ngpc_game_vars as soon as any
+    # trigger, extra condition, custom event or entity-type event reads or
+    # writes one. The name lists live in game_vars_gen (which already uses them
+    # to size the generated header) — deriving them a second time here is how
+    # the palfx bug happened.
+    from core.game_vars_gen import (
+        _FLAG_CONDS, _VAR_CONDS, _FLAG_ACTIONS, _VAR_ACTIONS,
+    )
+    _gv_conds = set(_FLAG_CONDS) | set(_VAR_CONDS)
+    _gv_acts = set(_FLAG_ACTIONS) | set(_VAR_ACTIONS) | {"init_game_vars"}
+
+    def _uses_game_vars(obj) -> bool:
+        """Walk any nested trigger/event structure looking for a flag/var use."""
+        if isinstance(obj, dict):
+            if str(obj.get("cond") or "") in _gv_conds:
+                return True
+            if str(obj.get("action") or "") in _gv_acts:
+                return True
+            return any(_uses_game_vars(v) for v in obj.values())
+        if isinstance(obj, list):
+            return any(_uses_game_vars(v) for v in obj)
+        return False
+
+    has_game_vars = _uses_game_vars(scenes_list) or _uses_game_vars(
+        (project_data or {}).get("custom_events") or []
+    ) or _uses_game_vars((project_data or {}).get("entity_types") or [])
     # Wave module: any scene with at least one *scripted* wave entry.
     # A rand-only wave is consumed by ngpc_rwave, so there's no point compiling
     # ngpc_wave for it (saves ~200 B ROM + a NgpcWaveSeq instance).
@@ -1948,6 +1992,7 @@ def _detect_features(project_data: dict) -> dict:
         "has_dialogues":    has_dialogues,
         "dialog_scenes":    dialog_scenes,
         "has_palfx":        has_palfx,
+        "has_game_vars":    has_game_vars,
         "has_waves":        has_waves,
         "has_wave_rand":    has_wave_rand,
         "max_rwave_per_scene": int(max_rwave_per_scene),
@@ -2214,6 +2259,7 @@ def write_autorun_main_c(
     has_wave_rand    = feat.get("has_wave_rand", False)
     max_rwave_per_scene = int(feat.get("max_rwave_per_scene", 1) or 1)
     has_dungeongen   = feat.get("has_dungeongen", False)
+    has_game_vars    = feat.get("has_game_vars", False)
     scenes_list      = (project_data or {}).get("scenes") or []
 
     if has_dungeongen and (not has_topdown_physics or has_platform_physics):
@@ -3130,6 +3176,12 @@ def write_autorun_main_c(
     if _no_sysfont_eff:
         c.append("#ifdef NO_SYSFONT\n")
         c.append('#include "ngpc_custom_font.h"\n')
+        c.append("#endif\n")
+    if has_game_vars:
+        _sync_optional_module(template_root, "optional/ngpc_game_vars")
+        c.append("#if defined(NGPNG_HAS_GAME_VARS) && (NGPNG_HAS_GAME_VARS)\n")
+        c.append('#include "ngpc_game_vars.h"\n')          # generated: names + inits
+        c.append('#include "../optional/ngpc_game_vars/ngpc_game_vars.h"\n')
         c.append("#endif\n")
     if has_dungeongen:
         _sync_optional_module(template_root, "optional/ngpc_dungeongen")
@@ -6009,6 +6061,25 @@ def write_autorun_main_c(
         c.append("    cur_scene = (u8)NGP_SCENE_START_INDEX;\n")
         c.append("#endif\n")
     c.append("    if (cur_scene >= (u8)NGP_SCENE_COUNT) cur_scene = 0;\n")
+    if has_game_vars:
+        # Seed flags/vars from the project's Init column before the first scene
+        # runs, so a variable_ge condition on frame 1 reads the authored value
+        # and not zeroed RAM.
+        c.append("#if defined(NGPNG_HAS_GAME_VARS) && (NGPNG_HAS_GAME_VARS)\n")
+        c.append("    ngpc_gv_init();\n")
+        # ngpc_gv_init() can only read g_game_var_inits[] when the GENERATED
+        # header is visible, and it never is: ngpc_game_vars.c includes its own
+        # ngpc_game_vars.h (same basename, same directory wins), so its
+        # #ifdef NGPC_GAME_VARS_GEN_H branch is always dead and every variable
+        # starts at 0. Here BOTH headers are in scope, so seed explicitly.
+        c.append("#ifdef NGPC_GAME_VARS_GEN_H\n")
+        c.append("    {\n")
+        c.append("        u8 _gv_i;\n")
+        c.append("        for (_gv_i = 0u; _gv_i < NGPC_GV_VAR_COUNT; ++_gv_i)\n")
+        c.append("            ngpc_gv_set_var(_gv_i, g_game_var_inits[_gv_i]);\n")
+        c.append("    }\n")
+        c.append("#endif\n")
+        c.append("#endif\n")
     c.append("    #if !NGPNG_DIAG_SKIP_SCENE_ENTER\n")
     c.append("    g_ngp_scenes[cur_scene].enter();\n")
     if has_palfx:
@@ -7851,6 +7922,15 @@ def write_autorun_main_c(
             c.append(f"        s_{n}.frame = s_{players[0]['name']}.frame;\n")
             c.append(f"        s_{n}.face_hflip = s_{players[0]['name']}.face_hflip;\n")
         c.append("        if (!stage_clear && !game_over && respawn_timer == 0u && player_hp == 0u) {\n")
+        if has_fx:
+            # C89: every declaration in a block must precede the first
+            # statement. The death-fade calls below are statements, so these
+            # three must be hoisted here — emitting them after the fade gives
+            # "THC1-Error-216: Syntax error" + "'pdfx' undefined" on any
+            # project that enables both death FX and MECH-12 death fade.
+            c.append("            u8 pdfx;\n")
+            c.append("            s16 pex;\n")
+            c.append("            s16 pey;\n")
         if _has_death_fade:
             # MECH-12 — kick off a palette fade-to-black/white on all 3 GFX
             # planes the moment HP hits zero. respawn_timer is extended below
@@ -7864,9 +7944,6 @@ def write_autorun_main_c(
         if has_fx:
             c.append("            /* Player death FX — mirrors enemy death FX resolution.\n")
             c.append("             *   priority: per-type explicit (sc->type_death_fx) > player own death anim > scene auto. */\n")
-            c.append("            u8 pdfx;\n")
-            c.append("            s16 pex;\n")
-            c.append("            s16 pey;\n")
             c.append("            pdfx = (sc->type_death_fx && player_type < sc->type_role_count) ? sc->type_death_fx[player_type] : 0xFFu;\n")
             c.append(f"            pex = (s16)(cam_px + s_{players[0]['name']}.x);\n")
             c.append(f"            pey = (s16)(cam_py + s_{players[0]['name']}.y);\n")
@@ -8348,6 +8425,14 @@ def write_autorun_main_c(
         c.append("#if NGPNG_AUTORUN_DEBUG_OVERLAY\n")
         c.append("            print_trig_line(i);\n")
         c.append("#endif\n")
+        if has_game_vars:
+            # set_flag / clear_flag / toggle_flag / set_variable / inc_variable /
+            # dec_variable / init_game_vars. The module claims the action and
+            # says so via its return value — the exact contract documented in
+            # ngpc_game_vars.h. a0 = flag/var index, a1 = value or cap.
+            c.append("#if defined(NGPNG_HAS_GAME_VARS) && (NGPNG_HAS_GAME_VARS)\n")
+            c.append("            if (ngpc_gv_dispatch(t->action, t->a0, t->a1)) continue;\n")
+            c.append("#endif\n")
         c.append("#if defined(NGP_ENABLE_SOUND) && (NGP_ENABLE_SOUND)\n")
         c.append("            if (t->action == TRIG_ACT_PLAY_SFX) {\n")
         c.append("                Sfx_Play(t->a0);\n")

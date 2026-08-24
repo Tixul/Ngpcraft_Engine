@@ -1881,8 +1881,26 @@ def make_scene_level_h(
             "open_menu":        75,
             "flip_sprite_h":   76,
             "flip_sprite_v":   77,
-            "drop_item":       78,
-            "drop_random_item":79,
+            # ⚠ 78 and 79 belong to INIT_GAME_VARS / STOP_WAVE_RAND: those are
+            # the ids the generated headers #define and the ids the autorun
+            # dispatches on. Mapping drop_item/drop_random_item onto them made
+            # a "drop random item" trigger compile to id 79, which the runtime
+            # executes as "pause every random-wave director" — a silent wrong
+            # action, not a no-op. Moved to free ids (max was 97); the id lives
+            # only in generated C, projects store the action NAME, so nothing
+            # user-facing changes. Neither drop action has a runtime handler
+            # yet (see the dormant-action list in the DEVLOG).
+            "drop_item":       98,
+            "drop_random_item":99,
+            # Implemented in the autorun (TRIG_ACT_STOP_WAVE_RAND) and #defined
+            # by scenes_autogen_gen, but the name was missing here — so the
+            # action compiled to 0 (emit_event) and the runtime code was dead.
+            "stop_wave_rand":  79,
+            # init_game_vars had THREE claimed ids and no mapping: the runtime
+            # module said 74, a legacy header in level_tab.py said 78, and 74
+            # was already set_npc_dialogue here. Given a free id instead of
+            # picking one of the conflicting ones; ngpc_game_vars.c follows.
+            "init_game_vars":  100,
             "dgn_reset":        80,
             "dgn_next_cluster": 81,
             "dgn_go_back":      82,
@@ -2141,9 +2159,15 @@ def make_scene_level_h(
                         continue
                     sfx_project_to_game[project_idx] = int(game_idx)
 
+        _unknown_trigger_actions: set[str] = set()
+        _unknown_trigger_conds: set[str] = set()
         lines.append(f"static const NgpngTrigger g_{sym_use}_triggers[] = {{")
         for t in trigs:
             cond = str(t.get("cond", "enter_region") or "enter_region")
+            if cond not in cond_to_id:
+                # 0 is enter_region: an unknown condition would quietly become
+                # "player entered region 0" instead of never firing.
+                _unknown_trigger_conds.add(cond)
             cid = int(cond_to_id.get(cond, 0))
             rid = str(t.get("region_id", "") or "").strip()
             # Flag/variable conditions use flag_var_index (0..7) packed into the
@@ -2242,6 +2266,11 @@ def make_scene_level_h(
             if not act:
                 # Back-compat: old projects had only event/param (emit_event).
                 act = "emit_event"
+            if act not in act_to_id:
+                # Falling back to 0 turns an unknown action into emit_event —
+                # the trigger silently does something else entirely. Say so,
+                # loudly, instead of shipping a ROM that lies about it.
+                _unknown_trigger_actions.add(act)
             aid = int(act_to_id.get(act, 0))
             # goto_scene / warp_to / goto_scene_preserve: prefer stable scene id mapping when present.
             try:
@@ -2377,6 +2406,22 @@ def make_scene_level_h(
             once = 1 if bool(t.get("once", True)) else 0
             lines.append(f"    {{{cid}, {region_idx}, {value_expr}, {aid}, {a0}, {a1}, {once}}},")
         lines.append("};")
+        # An unmapped name does not fail: it becomes id 0, i.e. emit_event for
+        # an action and enter_region for a condition. The ROM then does
+        # something the user never asked for, with nothing in the log to
+        # explain it. Leave a trace in the header AND on stderr.
+        if _unknown_trigger_actions or _unknown_trigger_conds:
+            import sys as _sys
+            for kind, names, fallback in (
+                ("action",    sorted(_unknown_trigger_actions), "emit_event"),
+                ("condition", sorted(_unknown_trigger_conds),   "enter_region"),
+            ):
+                if not names:
+                    continue
+                msg = (f"scene '{sym_use}': unknown trigger {kind}(s) "
+                       f"{', '.join(names)} — compiled as '{fallback}' (id 0)")
+                lines.append(f"/* WARNING: {msg} */")
+                print(f"  WARN  {msg}", file=_sys.stderr)
         lines.append("")
 
         all_extra: list[list[dict]] = [

@@ -144,6 +144,78 @@ def _detect_emulator() -> str | None:
     return None
 
 
+def _detect_cosim() -> str | None:
+    """Locate the native co-simulator used for the headless liveness gate."""
+    env_cosim = os.environ.get("NGPNG_COSIM", "").strip()
+    if env_cosim:
+        return env_cosim
+    found = shutil.which("cosim")
+    if found:
+        return found
+    engine_root = Path(__file__).resolve().parents[1]
+    for sibling in ("NgpCraft_emulator", "Ngpcraft_emulator"):
+        for name in ("cosim.exe", "cosim"):
+            cand = engine_root.parent / sibling / "oracle_tools" / "cosim" / name
+            if cand.is_file():
+                return str(cand)
+    return None
+
+
+def _run_cosim_liveness(rom: Path, cosim: str, log: Callable[[str], None]) -> tuple[bool, str]:
+    """The honest runtime gate: is the ROM still executing its own code?
+
+    A ROM is alive when the PC stays inside the cartridge (0x200000-0x21FFFF)
+    or the BIOS (0xFF0000+) — the BIOS is a legitimate destination via `swi`,
+    and forgetting that makes a healthy ROM look crashed. A dead ROM walks the
+    PC past the end of the address space executing nothing.
+
+    Counting executed instructions is NOT a gate on its own: NOPs in empty
+    memory count just as well.
+    """
+    try:
+        count = int(os.environ.get("NGPNG_COSIM_INSTRS", "500000"))
+    except ValueError:
+        count = 500_000
+    cmd = [cosim, str(rom), "-n", str(count), "--json"]
+    log(f"[QA-1] cosim {rom.name} -n {count}")
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    except OSError as exc:
+        return False, f"cosim launch failed: {exc}"
+
+    executed = 0
+    first_bad: tuple[int, int] | None = None
+    sp_min, sp_max = None, None
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        pos = line.find('"pc":')
+        if pos < 0:
+            continue
+        executed += 1
+        try:
+            pc = int(line[pos + 5:line.index(",", pos)])
+            spos = line.find('"sp":')
+            sp = int(line[spos + 5:line.index(",", spos)]) if spos >= 0 else 0
+        except ValueError:
+            continue
+        if not ((0x200000 <= pc < 0x220000) or pc >= 0xFF0000):
+            if first_bad is None:
+                first_bad = (executed, pc)
+        sp_min = sp if sp_min is None else min(sp_min, sp)
+        sp_max = sp if sp_max is None else max(sp_max, sp)
+    proc.wait()
+
+    if executed == 0:
+        return False, "cosim produced no trace"
+    sp_txt = f"SP 0x{sp_min:04X}..0x{sp_max:04X}" if sp_min is not None else "SP n/a"
+    if first_bad is not None:
+        return False, (f"DEAD: PC left ROM/BIOS at instruction {first_bad[0]} "
+                       f"(pc=0x{first_bad[1]:06X}) after {executed} executed")
+    if executed < count:
+        return False, f"cosim stopped early: {executed}/{count} instructions ({sp_txt})"
+    return True, f"alive: {executed} instructions, PC always in ROM/BIOS, {sp_txt}"
+
+
 def _run_runtime_smoke(
     project_dir: Path,
     log: Callable[[str], None],
@@ -151,9 +223,18 @@ def _run_runtime_smoke(
     rom = _detect_rom(project_dir)
     if rom is None:
         return False, False, "ROM not found after build", ""
+    # Prefer the headless co-simulator: it answers "does this ROM run its own
+    # code", which is the only question worth asking. Launching a GUI emulator
+    # and checking it survives two seconds says nothing about the ROM.
+    cosim = _detect_cosim()
+    if cosim:
+        ok, summary = _run_cosim_liveness(rom, cosim, log)
+        return True, ok, summary, str(rom)
     emu = _detect_emulator()
     if not emu:
-        return False, False, "runtime smoke skipped: emulator not found", str(rom)
+        return False, False, (
+            "runtime smoke skipped: no co-simulator (set NGPNG_COSIM) and no emulator"
+        ), str(rom)
     log(f"[QA-1] smoke {project_dir.name} -> {Path(emu).name} {rom.name}")
     try:
         proc = subprocess.Popen(

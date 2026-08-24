@@ -8,6 +8,12 @@
  */
 #include "ngpng_triggers.h"
 
+#if defined(NGPNG_HAS_GAME_VARS) && (NGPNG_HAS_GAME_VARS)
+/* Flag/variable conditions read the persistent store directly. The module is
+ * only linked (and this macro only defined) when the project uses them. */
+#include "../../optional/ngpc_game_vars/ngpc_game_vars.h"
+#endif
+
 /* ---- Sizing fallbacks (real values come from Makefile CDEFS) ---- */
 #ifndef NGPNG_AUTORUN_MAX_TRIG
 #define NGPNG_AUTORUN_MAX_TRIG 64u
@@ -123,6 +129,25 @@ u8 ngpng_trigger_cond_met(u8 cond, u8 region, u16 value,
     } else if (cond == TRIG_CHOICE_RESULT) {
         /* value 0 = choice 0, value 1 = choice 1. dlg_done carries the raw result. */
         fire = dlg_done ? 1u : 0u;
+#if defined(NGPNG_HAS_GAME_VARS) && (NGPNG_HAS_GAME_VARS)
+    /* Persistent flags/variables. scene_level_gen packs the flag/var index into
+     * the `region` field for these conditions (there is no region to point at)
+     * and `value` carries the comparison operand. Without this block they fell
+     * through to fire = 0 and the trigger never ran — the read side of the same
+     * gap that left set_flag & co inert. */
+    } else if (cond == TRIG_FLAG_SET) {
+        fire = ngpc_gv_get_flag(region) ? 1u : 0u;
+    } else if (cond == TRIG_FLAG_CLEAR) {
+        fire = ngpc_gv_get_flag(region) ? 0u : 1u;
+    } else if (cond == TRIG_VARIABLE_GE) {
+        fire = (ngpc_gv_get_var(region) >= (u8)value) ? 1u : 0u;
+    } else if (cond == TRIG_VARIABLE_LE) {
+        fire = (ngpc_gv_get_var(region) <= (u8)value) ? 1u : 0u;
+    } else if (cond == TRIG_VARIABLE_EQ) {
+        fire = (ngpc_gv_get_var(region) == (u8)value) ? 1u : 0u;
+    } else if (cond == TRIG_VARIABLE_NE) {
+        fire = (ngpc_gv_get_var(region) != (u8)value) ? 1u : 0u;
+#endif
     }
     if (fire && (cond == TRIG_BTN_A || cond == TRIG_BTN_B || cond == TRIG_BTN_A_B ||
                  cond == TRIG_BTN_UP || cond == TRIG_BTN_DOWN ||

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 
 
@@ -27,8 +28,15 @@ _OBJ_REL_RE = re.compile(r"\$\(OBJ_DIR\)/([^\s]+?\.rel)")
 _FLASH_SAVE_ASSIGN_RE = re.compile(r"(?m)^\s*NGP_ENABLE_FLASH_SAVE\s*(?:\?=|:=|=)\s*([0-9]+)\s*$")
 _MAKEFILE_OBJ_ASSIGN_RE = re.compile(r"^\s*(OBJS|NGPNG_EXTRA_OBJS)\s*(?:\+?=|:=|=)")
 
-_MSPR_TILE_BASE_RE = re.compile(r"const\s+u16\s+\w+_tile_base\s*=\s*(\d+)\s*u\s*;")
-_MSPR_TILES_COUNT_RE = re.compile(r"const\s+u16\s+\w+_tiles_count\s*=\s*(\d+)\s*u\s*;")
+# `const` is OPTIONAL here. The sprite exporter emits the tile base as a
+# MUTABLE global (`u16 hero_top_tile_base = 256u;`) so a scene can re-point it.
+# Requiring `const` made _compute_font_tile_base() return None for every
+# project, so FONT_TILE_BASE was never emitted and the dialogue font kept its
+# default of 128 — exactly where tilemaps load their tiles
+# (NGP_TILEMAP_LOAD_TILES_VRAM(bg, 128)). Opening a dialogue overwrote the
+# background tiles. Cf. the VRAM tile-overlap trap.
+_MSPR_TILE_BASE_RE = re.compile(r"(?:const\s+)?u16\s+\w+_tile_base\s*=\s*(\d+)\s*u\s*;")
+_MSPR_TILES_COUNT_RE = re.compile(r"(?:const\s+)?u16\s+\w+_tiles_count\s*=\s*(\d+)\s*u\s*;")
 
 
 def _compute_font_tile_base(export_dir: Path) -> int | None:
@@ -205,8 +213,24 @@ def write_assets_autogen_mk(
         lines.append("# (no .c assets found)\n")
     font_tile_base = _compute_font_tile_base(export_dir)
     if font_tile_base is not None:
-        lines.append(f"# Font tile base: placed after all sprite tiles (first free = {font_tile_base})\n")
-        lines.append(f"CDEFS += -DFONT_TILE_BASE={font_tile_base}\n")
+        # The dialogue font is 73 tiles (FONT_NUM_TILES) and tile RAM holds 512.
+        # Past the end it would wrap onto something else, so say so rather than
+        # emit a base that silently corrupts a different asset.
+        _FONT_TILES, _TILE_MAX = 73, 512
+        if font_tile_base + _FONT_TILES > _TILE_MAX:
+            lines.append(
+                f"# WARNING: sprite tiles end at {font_tile_base}; the {_FONT_TILES}-tile "
+                f"dialogue font does not fit below {_TILE_MAX}. FONT_TILE_BASE left at its\n"
+                f"# default — a dialogue will overwrite tiles. Free sprite tiles or shrink the font.\n"
+            )
+            print(
+                f"  WARN  font tile base {font_tile_base} + {_FONT_TILES} tiles exceeds "
+                f"{_TILE_MAX}: dialogue font would corrupt other tiles",
+                file=sys.stderr,
+            )
+        else:
+            lines.append(f"# Font tile base: placed after all sprite tiles (first free = {font_tile_base})\n")
+            lines.append(f"CDEFS += -DFONT_TILE_BASE={font_tile_base}\n")
     if has_mapstream:
         ms_rel = "optional/ngpc_mapstream/ngpc_mapstream.rel"
         if ms_rel.lower() not in explicit_objs:

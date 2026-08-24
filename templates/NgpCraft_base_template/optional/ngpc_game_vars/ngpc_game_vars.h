@@ -96,7 +96,7 @@ u8   ngpc_gv_get_var(u8 idx);      /* Return current value (0..255).      */
  *   31 = inc_variable  a0=var_idx  a1=cap (0=no cap)
  *   51 = dec_variable  a0=var_idx
  *   58 = toggle_flag   a0=flag_idx
- *   74 = init_game_vars (calls ngpc_gv_init)
+ *  100 = init_game_vars (calls ngpc_gv_init)   [was 74 = set_npc_dialogue]
  *
  * Usage in main.c trigger dispatch:
  *   if (ngpc_gv_dispatch(t->action, t->a0, t->a1)) continue;
